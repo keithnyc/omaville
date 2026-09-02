@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.keithnyc.omaville",
+  "name": "Omaville",
+  "version": "0.1.0",
+  "author": "Keith",
+  "license": "MIT",
+  "description": "A tiny idle city builder that lives in your bar. Zone it, grow it, watch it tick along while you work.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omaville",
+    "description": "A tiny idle city that grows in your bar",
+    "category": "Fun",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
