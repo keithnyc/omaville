@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "Model.js" as Model
 
 BarWidget {
   id: root
@@ -16,7 +17,57 @@ BarWidget {
   readonly property int treasury: serviceReady ? Math.round(cityService.treasury) : 0
   readonly property bool budgetCrisis: serviceReady && cityService.budgetCrisisActive === true
 
-  readonly property string icon: budgetCrisis ? "󰀦" : ""
+  // What the city is currently doing wrong, if anything — the service ranks
+  // these so the widget and the panel never disagree about what is urgent.
+  readonly property string alertKind: serviceReady ? cityService.alertKind : ""
+  readonly property bool alerting: alertKind !== ""
+  // Events logged since the player last opened the panel. The widget is the
+  // only place these are visible without opening anything, which is the whole
+  // point of a city that keeps running while you work.
+  readonly property int unseenCount: serviceReady ? cityService.unseenLog.length : 0
+
+  // Nerd-font glyphs, matching the rest of the bar rather than emoji.
+  readonly property var alertIcons: ({
+    fire: "\uf06d", crime: "\uf132", brownout: "\uf0e7", budget: "\uf071"
+  })
+  readonly property string icon: root.alertIcons[root.alertKind] || ""
+
+  function money(value) {
+    var whole = String(Math.round(Math.abs(value)))
+    var out = ""
+    for (var i = 0; i < whole.length; i++) {
+      if (i > 0 && (whole.length - i) % 3 === 0) out += ","
+      out += whole[i]
+    }
+    return (value < 0 ? "-$" : "$") + out
+  }
+
+  function summaryLine() {
+    if (!root.serviceReady) return "Omaville"
+    var s = root.cityService
+    var cal = Model.calendarFor(s.ageMinutes)
+    var lines = [
+      s.cityName + " · " + cal.monthName + ", Year " + cal.year,
+      "Pop " + root.population + " · " + root.money(root.treasury) + " · " + s.happiness + "% happy"
+    ]
+    // Only the advisors with something to say — a wall of "all good" is not
+    // worth the tooltip space. Severity is a single character on purpose: the
+    // shell centres tooltip text, so a two-character "!!" against a one-
+    // character "!" would leave the lines starting at different offsets.
+    var advice = s.advice
+    var flagged = 0
+    for (var i = 0; i < advice.length && flagged < 3; i++) {
+      if (advice[i].severity <= 0) continue
+      if (flagged === 0) lines.push("")
+      lines.push((advice[i].severity >= 2 ? "\u203c " : "\u00b7 ") + advice[i].headline)
+      flagged++
+    }
+    if (flagged === 0) lines.push("\nThe city is running smoothly.")
+    if (root.unseenCount > 0)
+      lines.push(root.unseenCount === 1 ? "\n1 new event since you looked"
+        : "\n" + root.unseenCount + " new events since you looked")
+    return lines.join("\n")
+  }
 
   // A tiny skyline instead of a static icon — five bars that grow toward
   // their own weighted height as population approaches skylineMaxPop
@@ -129,11 +180,8 @@ BarWidget {
     bar: root.bar
     labelVisible: false
     hasVisualContent: true
-    active: root.budgetCrisis
-    tooltipText: root.serviceReady
-      ? root.cityService.cityName + " · pop " + root.population
-        + " · $" + root.treasury + " · " + root.cityService.happiness + "% happy"
-      : "Omaville"
+    active: root.alerting
+    tooltipText: root.summaryLine()
     fixedWidth: root.vertical ? -1 : Math.round(content.implicitWidth + scaledHorizontalMargin * 2)
     fixedHeight: root.vertical ? Math.round(content.implicitHeight + scaledVerticalPadding * 2) : -1
     onPressed: function(b) { root.toggle() }
@@ -143,8 +191,30 @@ BarWidget {
       anchors.centerIn: parent
       spacing: Style.space(3)
 
+      // The alert glyph replaces the skyline rather than sitting beside it:
+      // bar space is scarce, and when the city is on fire its size is not
+      // the thing worth reporting.
+      Text {
+        visible: root.alerting
+        text: root.icon
+        color: button.activeColor
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.bar.iconFont
+        anchors.verticalCenter: parent.verticalCenter
+
+        // A slow breath, not a blink — noticeable in peripheral vision
+        // without demanding attention the way a flashing icon would.
+        SequentialAnimation on opacity {
+          running: root.alerting
+          loops: Animation.Infinite
+          NumberAnimation { from: 1.0; to: 0.45; duration: 900; easing.type: Easing.InOutSine }
+          NumberAnimation { from: 0.45; to: 1.0; duration: 900; easing.type: Easing.InOutSine }
+        }
+      }
+
       Row {
         id: skyline
+        visible: !root.alerting
         anchors.verticalCenter: parent.verticalCenter
         spacing: 1
 
@@ -165,11 +235,26 @@ BarWidget {
       }
 
       Text {
-        text: root.budgetCrisis ? root.icon : String(root.population)
+        id: populationLabel
+        text: String(root.population)
         color: button.active && button.useActiveColor ? button.activeColor : button.foreground
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.bar.iconFont
         anchors.verticalCenter: parent.verticalCenter
+
+        // Unseen-event badge: rides the population label so it never widens
+        // the widget, and is deliberately absent while an alert is showing —
+        // the alert already says "look at me".
+        Rectangle {
+          visible: root.unseenCount > 0 && !root.alerting
+          width: Style.space(4); height: width
+          radius: width / 2
+          color: button.activeColor
+          anchors.right: parent.right
+          anchors.rightMargin: -Style.space(2)
+          anchors.top: parent.top
+          anchors.topMargin: -Style.space(1)
+        }
       }
     }
   }

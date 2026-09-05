@@ -203,23 +203,10 @@ Item {
   }
   // Advisors run off the figures already computed above rather than rescanning
   // the grid themselves — the panel is only ever as expensive as one summarize.
-  readonly property var cityAdvice: root.serviceReady ? Model.cityAdvice({
-    stats: root.budgetStats,
-    coverage: root.serviceCoverage,
-    demand: root.demand,
-    income: root.budgetIncome,
-    upkeep: root.budgetUpkeep,
-    treasury: root.treasury,
-    funding: root.cityService.funding,
-    loans: root.cityService.loans,
-    fires: root.fires,
-    crimes: root.crimes,
-    neighborsLinked: root.connectedNeighbors.length,
-    neighborsTotal: root.neighbors.length,
-    load: root.utilityLoad,
-    taxRatePercent: root.taxRatePercent
-  }) : []
-  readonly property var topAdvice: root.cityAdvice.length > 0 ? Model.topAdvice(root.cityAdvice) : null
+  // Both live on the service now, so the panel and the bar widget report the
+  // same advice from one computation instead of each rebuilding it.
+  readonly property var cityAdvice: root.serviceReady ? root.cityService.advice : []
+  readonly property var topAdvice: root.serviceReady ? root.cityService.topAdvice : null
   readonly property int attractiveness: Model.computeAttractiveness(root.budgetStats)
   readonly property var decorationSpriteUrls: ({
     T: Qt.resolvedUrl("assets/decorations/tree.png").toString(),

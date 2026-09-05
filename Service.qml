@@ -113,6 +113,34 @@ Item {
     ])
   }
 
+  // --- derived city state -------------------------------------------------
+  // Computed here rather than in each view so the panel and the bar widget
+  // read the same numbers from one pass over the grid, and so anything that
+  // wants the advisors (the widget's tooltip, for one) does not have to
+  // rebuild them.
+  readonly property var cityStats: Model.summarize(root.grid)
+  readonly property var coverage: Model.serviceCoverageStats(root.grid, root.gridSize)
+  readonly property var load: Model.utilityLoad(root.grid, root.cityStats)
+  readonly property real income: Model.computeIncome(root.cityStats.taxablePopulation, root.taxRatePercent)
+  readonly property real upkeep: Model.computeUpkeep(root.cityStats, root.funding)
+  readonly property var linkedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
+  readonly property var advice: root.initialized ? Model.cityAdvice({
+    stats: root.cityStats, coverage: root.coverage,
+    demand: Model.computeDemand(root.cityStats, root.linkedNeighbors.length),
+    income: root.income, upkeep: root.upkeep, treasury: root.treasury,
+    funding: root.funding, loans: root.loans, taxRatePercent: root.taxRatePercent,
+    fires: root.fires, crimes: root.crimes, load: root.load,
+    neighborsLinked: root.linkedNeighbors.length,
+    neighborsTotal: root.neighbors ? root.neighbors.length : 0
+  }) : []
+  readonly property var topAdvice: root.advice.length > 0 ? Model.topAdvice(root.advice) : null
+  // Anything actively going wrong, most urgent first — what the bar widget
+  // swaps its icon for.
+  readonly property string alertKind: root.fires.length > 0 ? "fire"
+    : root.crimes.length > 0 ? "crime"
+    : (root.load && (root.load.power < 1 || root.load.water < 1)) ? "brownout"
+    : root.budgetCrisisActive ? "budget" : ""
+
   // --- zoning actions ------------------------------------------------------
 
   function zoneTile(index, type) {
