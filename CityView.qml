@@ -188,6 +188,9 @@ Item {
   // Active map data overlay ("" = off). The advisors name a problem; this is
   // how the player finds it on a 4096-tile map instead of hunting by hand.
   readonly property var fires: root.serviceReady ? root.cityService.fires : []
+  readonly property var crimes: root.serviceReady ? root.cityService.crimes : []
+  readonly property var neighbors: root.serviceReady ? root.cityService.neighbors : []
+  readonly property var connectedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
   readonly property bool cityBurning: root.fires.length > 0
   property string overlayMode: ""
   readonly property var overlayDef: root.overlayMode !== "" ? Model.overlayDef(root.overlayMode) : null
@@ -210,6 +213,9 @@ Item {
     funding: root.cityService.funding,
     loans: root.cityService.loans,
     fires: root.fires,
+    crimes: root.crimes,
+    neighborsLinked: root.connectedNeighbors.length,
+    neighborsTotal: root.neighbors.length,
     load: root.utilityLoad,
     taxRatePercent: root.taxRatePercent
   }) : []
@@ -474,7 +480,8 @@ Item {
   readonly property var trafficRoadTiles: Traffic.roadTiles(root.grid, root.gridSize)
 
   function updateCars(dt, data, gridSize) {
-    root.cars = Traffic.update(root.cars, dt, data, gridSize, root.carCount, root.trafficRoadTiles, root.carColors)
+    root.cars = Traffic.update(root.cars, dt, data, gridSize, root.carCount, root.trafficRoadTiles,
+      root.carColors, root.cityBurning)
   }
 
   function drawCar(ctx, car, cellSize, offsetX, offsetY, gridSize, viewW, viewH) {
@@ -802,6 +809,84 @@ Item {
 
   // Burning tiles. Drawn on their own animated layer rather than into the
   // tile canvas, so the flicker never drags a full city re-render with it.
+  // Crime waves: a slow pulsing stain over the district they cover, rather
+  // than fire's sharp flicker — it reads as a condition, not an emergency.
+  // Highway stubs at the map edge, one per neighbouring town. Drawn on the
+  // main tile canvas because they are terrain, not an alert — they only
+  // change when the grid does.
+  function drawNeighbors(ctx, cellSize, offsetX, offsetY, width, height) {
+    var connected = root.connectedNeighbors
+    for (var i = 0; i < root.neighbors.length; i++) {
+      var n = root.neighbors[i]
+      var col = n.index % root.gridSize, row = Math.floor(n.index / root.gridSize)
+      var gx = col * cellSize - offsetX, gy = row * cellSize - offsetY
+      if (gx < -cellSize * 3 || gy < -cellSize * 3
+        || gx > width + cellSize * 2 || gy > height + cellSize * 2) continue
+
+      var live = false
+      for (var c = 0; c < connected.length; c++) if (connected[c].index === n.index) live = true
+
+      // A chevron pointing off-map, filled once the road actually reaches it.
+      ctx.save()
+      ctx.translate(gx + cellSize * 0.5, gy + cellSize * 0.5)
+      if (n.edge === "east") ctx.rotate(Math.PI / 2)
+      else if (n.edge === "south") ctx.rotate(Math.PI)
+      else if (n.edge === "west") ctx.rotate(-Math.PI / 2)
+
+      ctx.fillStyle = live ? "rgba(126, 196, 122, 0.92)" : "rgba(180, 176, 160, 0.45)"
+      ctx.beginPath()
+      ctx.moveTo(0, -cellSize * 0.42)
+      ctx.lineTo(cellSize * 0.30, cellSize * 0.10)
+      ctx.lineTo(cellSize * 0.10, cellSize * 0.10)
+      ctx.lineTo(cellSize * 0.10, cellSize * 0.40)
+      ctx.lineTo(-cellSize * 0.10, cellSize * 0.40)
+      ctx.lineTo(-cellSize * 0.10, cellSize * 0.10)
+      ctx.lineTo(-cellSize * 0.30, cellSize * 0.10)
+      ctx.closePath()
+      ctx.fill()
+      ctx.restore()
+
+      // Only worth labelling when there is room to read it.
+      if (cellSize >= 18) {
+        ctx.save()
+        ctx.font = Math.max(8, Math.round(cellSize * 0.34)) + "px sans-serif"
+        ctx.textAlign = "center"
+        var label = n.name + (live ? "" : " ·")
+        var ty = n.edge === "north" ? gy + cellSize * 1.35
+          : n.edge === "south" ? gy - cellSize * 0.5 : gy + cellSize * 1.25
+        var tx = gx + cellSize * 0.5
+        if (n.edge === "east") tx = gx - cellSize * 0.2
+        if (n.edge === "west") tx = gx + cellSize * 1.2
+        ctx.fillStyle = "rgba(12, 20, 16, 0.55)"
+        ctx.fillText(label, tx + 1, ty + 1)
+        ctx.fillStyle = live ? "rgba(150, 214, 145, 0.95)" : "rgba(196, 192, 176, 0.7)"
+        ctx.fillText(label, tx, ty)
+        ctx.restore()
+      }
+    }
+  }
+
+  function drawCrime(ctx, cellSize, offsetX, offsetY, width, height, phase) {
+    var pulse = 0.5 + 0.5 * Math.sin(phase * 0.5)
+    for (var c = 0; c < root.crimes.length; c++) {
+      var index = root.crimes[c].index
+      var cx = index % root.gridSize, cy = Math.floor(index / root.gridSize)
+      for (var dy = -Model.CRIME_RADIUS; dy <= Model.CRIME_RADIUS; dy++) {
+        for (var dx = -Model.CRIME_RADIUS; dx <= Model.CRIME_RADIUS; dx++) {
+          var col = cx + dx, row = cy + dy
+          if (col < 0 || row < 0 || col >= root.gridSize || row >= root.gridSize) continue
+          if (Math.max(Math.abs(dx), Math.abs(dy)) > Model.CRIME_RADIUS) continue
+          var gx = col * cellSize - offsetX, gy = row * cellSize - offsetY
+          if (gx < -cellSize || gy < -cellSize || gx > width || gy > height) continue
+          // Densest at the centre so the source of the wave is readable.
+          var falloff = 1 - Math.max(Math.abs(dx), Math.abs(dy)) / (Model.CRIME_RADIUS + 1)
+          ctx.fillStyle = Qt.rgba(0.36, 0.16, 0.52, (0.12 + 0.20 * falloff) * (0.65 + 0.35 * pulse))
+          ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+        }
+      }
+    }
+  }
+
   function drawFires(ctx, cellSize, offsetX, offsetY, width, height, phase) {
     for (var i = 0; i < root.fires.length; i++) {
       var index = root.fires[i].index
@@ -3726,6 +3811,10 @@ Item {
           property real cellSize: root.effectiveCellSize
           property real offsetX: root.panX
           property real offsetY: root.panY
+          property var neighborTiles: root.neighbors
+          property int neighborLinks: root.connectedNeighbors.length
+          onNeighborTilesChanged: requestPaint()
+          onNeighborLinksChanged: requestPaint()
           onGridDataChanged: requestPaint()
           onCellSizeChanged: requestPaint()
           onOffsetXChanged: requestPaint()
@@ -3772,6 +3861,7 @@ Item {
               }
             }
             root.drawGridOverlay(ctx, startCol, endCol, startRow, endRow, size, offsetX, offsetY, width, height)
+            root.drawNeighbors(ctx, size, offsetX, offsetY, width, height)
             for (var detailRow = startRow; detailRow <= endRow; detailRow++) {
               for (var detailCol = startCol; detailCol <= endCol; detailCol++) {
                 var detailIndex = detailRow * root.gridSize + detailCol
@@ -3987,23 +4077,25 @@ Item {
           anchors.horizontalCenter: parent.horizontalCenter
           width: root.viewportWidth
           height: root.viewportHeight
-          visible: root.cityBurning
+          visible: root.cityBurning || root.crimes.length > 0
 
           property real offsetX: root.panX
           property real offsetY: root.panY
           property real cellSize: root.effectiveCellSize
           property var fireTiles: root.fires
+          property var crimeTiles: root.crimes
           property real phase: 0
           onOffsetXChanged: requestPaint()
           onOffsetYChanged: requestPaint()
           onCellSizeChanged: requestPaint()
           onFireTilesChanged: requestPaint()
+          onCrimeTilesChanged: requestPaint()
           onPhaseChanged: requestPaint()
 
           // Only runs while something is actually burning — an idle city pays
           // nothing for this layer existing.
           NumberAnimation on phase {
-            running: root.active && root.cityBurning
+            running: root.active && (root.cityBurning || root.crimes.length > 0)
             loops: Animation.Infinite
             from: 0; to: Math.PI * 2
             duration: 1100
@@ -4012,8 +4104,9 @@ Item {
           onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
-            if (!root.cityBurning) return
-            root.drawFires(ctx, cellSize, offsetX, offsetY, width, height, phase)
+            root.drawCrime(ctx, cellSize, offsetX, offsetY, width, height, phase)
+            if (root.cityBurning)
+              root.drawFires(ctx, cellSize, offsetX, offsetY, width, height, phase)
           }
         }
 

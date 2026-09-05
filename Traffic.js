@@ -20,6 +20,9 @@ function nearService(data, size, index, type) {
 function nearSchool(data, size, index) { return nearService(data, size, index, "N") }
 
 function emergencyActive(car) {
+  // A fire truck runs hot for as long as anything is actually burning —
+  // cruisers and ambulances only blink on their own routine dispatch cycle.
+  if (car.fireTruck) return !!car.scrambled
   return !!(car.police || car.ambulance) && ((car.age + (car.dispatchOffset || 0)) % 32) < 10
 }
 
@@ -128,6 +131,12 @@ function spawn(data, size, roads, pool, colors) {
       car.color = "#f1eee2"
       car.dispatchOffset = Math.random() * 32
     }
+    car.fireTruck = !car.schoolBus && !car.police && !car.ambulance
+      && nearService(data, size, tile, "F") && Math.random() < 0.3
+    if (car.fireTruck) {
+      car.color = "#c8352a"
+      car.cruise *= 0.92
+    }
     var p = pose(car, size), clear = true
     for (var i = 0; i < pool.length; i++) {
       var other = pose(pool[i], size)
@@ -138,15 +147,17 @@ function spawn(data, size, roads, pool, colors) {
   return null
 }
 
-function update(cars, dtMs, data, size, count, roads, colors) {
+function update(cars, dtMs, data, size, count, roads, colors, burning) {
   var dt = Math.max(0, Math.min(60, dtMs)) / 1000
   var hasPolice = data.some(function(tile) { return tile && tile[0] === "S" })
   var hasMedical = data.some(function(tile) { return tile && tile[0] === "H" })
+  var hasFire = data.some(function(tile) { return tile && tile[0] === "F" })
   // Removed roads invalidate a route immediately, including its entry and exit.
   var pool = cars.filter(function(car) {
-    return (!car.police || hasPolice) && (!car.ambulance || hasMedical)
+    return (!car.police || hasPolice) && (!car.ambulance || hasMedical) && (!car.fireTruck || hasFire)
       && car.age < 90 && isRoad(data, car.tile) && isRoad(data, car.prev) && isRoad(data, car.next)
   }).slice(0, count)
+  for (var t = 0; t < pool.length; t++) if (pool[t].fireTruck) pool[t].scrambled = !!burning
   while (pool.length < count) {
     var added = spawn(data, size, roads, pool, colors)
     if (!added) break

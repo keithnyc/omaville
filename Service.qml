@@ -78,6 +78,15 @@ Item {
   // shell restarts is still burning when it comes back — a disaster the
   // player can dodge by reloading is not a disaster.
   property var fires: []
+  // Active crime waves: [{ index, ticks }]. Where fire destroys, crime
+  // degrades — it bleeds money, drags happiness down and drives residents
+  // out of the blocks it covers until police shut it down.
+  property var crimes: []
+  // The four neighbouring towns, one per map edge. Generated once from the
+  // city's own founding seed so they never shuffle, and persisted so an
+  // existing city keeps the neighbours it already ran roads to.
+  property var neighbors: []
+  property var connectedNeighborNames: []
   // Bounded history for the graphs, and a newest-first event log. Both are
   // capped in Model — they live in the save file, which has a hard read cap.
   property var history: []
@@ -209,6 +218,9 @@ Item {
     root.loans = []
     root.missedLoanTicks = 0
     root.fires = []
+    root.crimes = []
+    root.neighbors = Model.makeNeighbors(root.gridSize, Date.now())
+    root.connectedNeighborNames = []
     root.history = []
     root.cityLog = []
     root.lastSeenMinute = 0
@@ -325,7 +337,9 @@ Item {
     running: root.initialized && !idleMonitor.isIdle
     repeat: true
     onTriggered: {
-      var happinessModifier = 0
+      // A crime wave drags the whole city's mood, not just its own blocks —
+      // folded in here so happiness stays one number the sim agrees on.
+      var happinessModifier = -root.crimes.length * Model.CRIME_HAPPINESS_HIT
       var incomeMultiplier = 1
       var stillActive = []
       for (var i = 0; i < root.activeEffects.length; i++) {
@@ -343,7 +357,7 @@ Item {
       root.activeEffects = stillActive
 
       var result = Model.advanceCity(root.grid, root.gridSize, root.taxRatePercent,
-        happinessModifier, incomeMultiplier, root.funding)
+        happinessModifier, incomeMultiplier, root.funding, root.neighbors)
       root.grid = result.grid
       root.population = result.population
       root.jobs = result.jobs
@@ -383,6 +397,7 @@ Item {
         root.logEvent("brownout", "The grid is back within capacity.")
       }
       root.advanceDisasters()
+      root.checkNeighbors(result.connectedNeighbors)
       root.checkMilestones()
       root.checkBudget()
       root.rollEvent()
@@ -413,6 +428,33 @@ Item {
         root.notify(root.cityName, "The fire is out.")
         root.logEvent("fire", "A fire was put out.")
       }
+    }
+
+    if (root.crimes.length > 0) {
+      var crimeResult = Model.advanceCrime(root.grid, root.gridSize, root.crimes, utilities, root.funding)
+      root.grid = crimeResult.grid
+      var wasRunning = root.crimes.length
+      root.crimes = crimeResult.crimes
+      // Theft is charged before the floor clamp like every other outgoing.
+      var stolen = Model.crimeTheft(root.grid, root.gridSize, root.crimes)
+      if (stolen > 0) root.treasury = Math.max(Model.TREASURY_FLOOR, root.treasury - stolen)
+      if (crimeResult.suppressed > 0 && root.crimes.length === 0 && wasRunning > 0) {
+        root.notify(root.cityName, "Police have broken up the crime wave.")
+        root.logEvent("crime", "A crime wave was broken up.")
+      }
+    }
+
+    var outbreak = Model.rollCrimeStart(root.grid, root.gridSize, root.crimes, utilities, root.funding)
+    if (outbreak >= 0) {
+      root.crimes = root.crimes.concat([{ index: outbreak, ticks: 0 }])
+      var patrolled = Model.isCovered(root.gridSize, utilities.police, outbreak,
+        Model.POLICE_RADIUS * Model.fundingRadiusScale(Model.fundingLevel(root.funding, "S")))
+      var crimeText = patrolled
+        ? "A crime wave has broken out. Police are responding."
+        : "A crime wave has broken out with no police station in range."
+      root.notify(root.cityName + " — crime wave", crimeText)
+      root.logEvent("crime", crimeText)
+      flushState()
     }
 
     var ignition = Model.rollFireStart(root.grid, root.gridSize, root.fires, utilities, root.funding)
@@ -447,6 +489,24 @@ Item {
       minute: root.ageMinutes, population: root.population, treasury: root.treasury,
       happiness: root.happiness, income: income, upkeep: upkeep
     })
+  }
+
+  // A newly-opened highway is worth telling the player about: it is the one
+  // growth lever that comes from outside their own zoning.
+  function checkNeighbors(connected) {
+    var names = []
+    for (var i = 0; i < connected.length; i++) names.push(connected[i].name)
+    var known = root.connectedNeighborNames
+    for (var n = 0; n < names.length; n++) {
+      if (known.indexOf(names[n]) >= 0) continue
+      root.notify(root.cityName, "The highway to " + names[n]
+        + " is open — expect new arrivals and trade.")
+      root.logEvent("neighbor", "Highway to " + names[n] + " opened.")
+    }
+    if (names.length !== known.length || names.join() !== known.join()) {
+      root.connectedNeighborNames = names
+      flushState()
+    }
   }
 
   function checkMilestones() {
@@ -507,6 +567,8 @@ Item {
       loans: root.loans,
       missedLoanTicks: root.missedLoanTicks,
       fires: root.fires,
+      crimes: root.crimes,
+      neighbors: root.neighbors,
       history: Model.packHistory(root.history),
       cityLog: root.cityLog,
       lastSeenMinute: root.lastSeenMinute
@@ -570,6 +632,9 @@ Item {
       loans = Array.isArray(saved.loans) ? saved.loans : []
       missedLoanTicks = Math.max(0, Math.round(num(saved.missedLoanTicks, 0)))
       fires = Array.isArray(saved.fires) ? saved.fires : []
+      crimes = Array.isArray(saved.crimes) ? saved.crimes : []
+      neighbors = Array.isArray(saved.neighbors) && saved.neighbors.length === 4
+        ? saved.neighbors : null
       // Pre-pack saves stored history as an array; both decode the same way.
       history = Array.isArray(saved.history) ? saved.history : Model.unpackHistory(saved.history)
       cityLog = Array.isArray(saved.cityLog) ? saved.cityLog : []
@@ -579,6 +644,10 @@ Item {
       foundedAtMs = 0
       grid = Model.emptyGrid(gridSize)
     }
+
+    // An existing save predates neighbours entirely; seed them off its own
+    // founding time so the same city always gets the same four towns.
+    if (!neighbors) neighbors = Model.makeNeighbors(gridSize, foundedAtMs || Date.now())
 
     var founded = false
     if (foundedAtMs === 0) {

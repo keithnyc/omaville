@@ -114,16 +114,15 @@ var WATER_UPKEEP = 4
 
 // Fire/police are protection, not hookups — unlike power/water they never
 // block growth outright (retrofitting that onto an existing city would stall
-// every zone at once the moment this shipped). Police is a small *extra*
-// chance of an uncovered tile losing a level each tick, a slow tax on
-// skipping it. Fire was the same until it became a real spreading disaster
-// instead (see FIRE_CHANCE_BASE and advanceFires) — FIRE_RADIUS still sets
-// how far a station reaches, it just governs containment now, not a dice roll.
+// every zone at once the moment this shipped). Both used to be an invisible
+// per-tile dice roll; both are now real events instead — a spreading fire
+// (FIRE_CHANCE_BASE, advanceFires) and a crime wave sitting over a district
+// (CRIME_CHANCE_BASE, advanceCrime). These radii still say how far a station
+// reaches, they just govern response now rather than a hidden probability.
 var FIRE_RADIUS = 9
 var POLICE_RADIUS = 9
 var FIRE_UPKEEP = 2
 var POLICE_UPKEEP = 2
-var CRIME_RISK_CHANCE = 0.03
 
 // --- department funding ---------------------------------------------------
 // The treasury stopped being a constraint once a city matured: income scales
@@ -541,12 +540,18 @@ function computeHappiness(taxRatePercent, stats) {
 // housing," not "build more of this specific zone." R demand doesn't need
 // the same treatment — it's already driven by the jobs-vs-residents
 // employment ratio directly, which is the same relationship this mirrors.
-function computeDemand(stats) {
+// `neighbors` is the count of connected neighbouring cities: migration from
+// outside lifts residential demand and their trade lifts commercial, which is
+// the whole point of running a highway to the map edge.
+function computeDemand(stats, neighbors) {
   var jobsTotal = stats.jobsCommercial + stats.jobsIndustrial
   var laborAvailability = clamp(stats.population / (jobsTotal + 10), 0, 1.3)
+  var bonus = neighborBonus(neighbors)
   return {
-    R: 0.5 + 0.5 * clamp(jobsTotal / (stats.population + 10), 0, 1.5) + computeAttractiveness(stats) / 100,
-    C: 0.5 + 0.5 * clamp((stats.population / (stats.jobsCommercial + 10)) * laborAvailability, 0, 1.5),
+    R: (0.5 + 0.5 * clamp(jobsTotal / (stats.population + 10), 0, 1.5)
+      + computeAttractiveness(stats) / 100) * bonus.migration,
+    C: (0.5 + 0.5 * clamp((stats.population / (stats.jobsCommercial + 10)) * laborAvailability, 0, 1.5))
+      * bonus.commerce,
     I: 0.6 + 0.3 * clamp((stats.population / (stats.jobsIndustrial + 50)) * laborAvailability, 0, 1.0)
   }
 }
@@ -605,10 +610,8 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
   // Funding buys reach and safety. Resolved once per tick rather than per
   // tile — these are whole-department settings, and this loop runs over every
   // tile on a 64x64 grid.
-  var policeRadius = POLICE_RADIUS * fundingRadiusScale(fundingLevel(funding, "S"))
   var schoolRadius = SCHOOL_RADIUS * fundingRadiusScale(fundingLevel(funding, "N"))
   var medicalRadius = MEDICAL_RADIUS * fundingRadiusScale(fundingLevel(funding, "H"))
-  var crimeRisk = CRIME_RISK_CHANCE * fundingRiskScale(fundingLevel(funding, "S"))
 
   var next = grid.slice()
   for (var i = 0; i < next.length; i++) {
@@ -645,20 +648,6 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
     }
     if (tile.level > 0 && (!connected || happiness < 25)) {
       if (Math.random() < baseDecayChance) next[i] = makeTile(tile.type, tile.level - 1)
-    }
-
-    // Crime risk: independent of the connected/happiness decay above, and
-    // only ever a small extra chance to slip a level — never a hard block on
-    // growth the way power/water are. Fire used to work the same way, but an
-    // invisible dice roll meant a funded fire station never visibly did
-    // anything; it is now a real spreading fire instead (see advanceFires),
-    // which is why only police is rolled here.
-    var afterTile = parseTile(next[i])
-    if (afterTile.level > 0) {
-      if (!isCovered(gridSize, utilities.police, i, policeRadius) && Math.random() < crimeRisk) {
-        afterTile = parseTile(next[i])
-        if (afterTile.level > 0) next[i] = makeTile(afterTile.type, afterTile.level - 1)
-      }
     }
 
     // Same shape as the fire/crime risk above: a small independent chance
@@ -781,17 +770,19 @@ function computeIncome(population, taxRatePercent) {
 // fully deterministic from tax/parks/industry, and income is the only thing
 // a multiplier touches (upkeep is unaffected, so a bad multiplier really
 // does squeeze the budget rather than just look worse on paper).
-function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMultiplier, funding) {
+function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMultiplier, funding, neighbors) {
   happinessModifier = happinessModifier || 0
   incomeMultiplier = incomeMultiplier === undefined ? 1 : incomeMultiplier
   var stats = summarize(grid)
   var happiness = Math.round(clamp(computeHappiness(taxRatePercent, stats) + happinessModifier, 0, 100))
   var utilities = findUtilities(grid)
-  var demand = computeDemand(stats)
+  var connected = connectedNeighbors(grid, gridSize, neighbors)
+  var demand = computeDemand(stats, connected.length)
   var load = utilityLoad(grid, stats)
   var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load)
   var upkeep = computeUpkeep(stats, funding)
   var income = computeIncome(stats.taxablePopulation, taxRatePercent) * incomeMultiplier
+    * neighborBonus(connected.length).trade
   return {
     grid: nextGrid,
     population: stats.population,
@@ -808,7 +799,8 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
     indCount: stats.indCount,
     powerCount: stats.powerCount,
     waterCount: stats.waterCount,
-    load: load
+    load: load,
+    connectedNeighbors: connected
   }
 }
 
@@ -1515,7 +1507,9 @@ function coverageRow(coverage, key) {
   return { unmet: 0, coverage: 100, residents: 0 }
 }
 
-function planningAdvice(stats, demand) {
+function planningAdvice(stats, demand, neighborsLinked, neighborsTotal) {
+  neighborsLinked = neighborsLinked || 0
+  neighborsTotal = neighborsTotal || 0
   var ceiling = residentialCeiling(stats)
   if (stats.resCount === 0)
     return advice("planning", SEVERITY_URGENT, "Nowhere to live",
@@ -1532,6 +1526,12 @@ function planningAdvice(stats, demand) {
   if (stats.population > Math.max(jobs, 0) * 2 && stats.population > 60)
     return advice("planning", SEVERITY_WATCH, "Not enough work",
       stats.population + " residents and only " + jobs + " jobs. Zone commercial or industrial.")
+  if (neighborsTotal > 0 && neighborsLinked < neighborsTotal)
+    return advice("planning", SEVERITY_WATCH,
+      neighborsLinked === 0 ? "No highways out of town"
+        : (neighborsTotal - neighborsLinked) + " neighbours still unconnected",
+      "Running a road to a marked connector at the map edge opens a highway: "
+      + "new arrivals raise housing demand and their trade lifts commerce and income.")
   if (demand && demand.R > 1.2)
     return advice("planning", SEVERITY_WATCH, "Demand for housing",
       "Residential demand is running high — more R zoning would fill quickly.")
@@ -1569,13 +1569,18 @@ function utilitiesAdvice(coverage, load) {
     "Power and water reach the whole city, with capacity to spare.")
 }
 
-function safetyAdvice(coverage, funding, fires) {
+function safetyAdvice(coverage, funding, fires, crimes) {
   // An active fire outranks everything else this advisor could say.
   if (fires && fires.length > 0)
     return advice("safety", SEVERITY_URGENT,
       fires.length === 1 ? "A building is on fire" : fires.length + " fires burning",
       "Fire crews contain a blaze faster where they have cover and funding. "
       + "Anything still burning is losing a level at a time.", "fire")
+  if (crimes && crimes.length > 0)
+    return advice("safety", SEVERITY_URGENT,
+      crimes.length === 1 ? "A crime wave is running" : crimes.length + " crime waves running",
+      "It is bleeding money, holding happiness down and pushing residents out of the blocks "
+      + "it covers. Police shut one down faster with cover and funding.", "police")
   var fire = coverageRow(coverage, "fire"), police = coverageRow(coverage, "police")
   var worst = fire.unmet >= police.unmet ? fire : police
   var isFire = worst === fire
@@ -1648,9 +1653,9 @@ function financeAdvice(stats, income, upkeep, treasury, loans, taxRatePercent) {
 // rescans the grid.
 function cityAdvice(ctx) {
   return [
-    planningAdvice(ctx.stats, ctx.demand),
+    planningAdvice(ctx.stats, ctx.demand, ctx.neighborsLinked, ctx.neighborsTotal),
     utilitiesAdvice(ctx.coverage, ctx.load),
-    safetyAdvice(ctx.coverage, ctx.funding, ctx.fires),
+    safetyAdvice(ctx.coverage, ctx.funding, ctx.fires, ctx.crimes),
     wellbeingAdvice(ctx.coverage, ctx.stats, ctx.funding),
     financeAdvice(ctx.stats, ctx.income, ctx.upkeep, ctx.treasury, ctx.loans, ctx.taxRatePercent)
   ]
@@ -1816,7 +1821,7 @@ function advanceFires(grid, gridSize, fires, utilities, funding) {
 
     var covered = isCovered(gridSize, utilities.fire, fire.index, radius)
     // Funding buys a faster response, not just a wider one.
-    var containChance = covered ? FIRE_CONTAIN_COVERED * level : FIRE_CONTAIN_UNCOVERED
+    var containChance = fireContainChance(gridSize, utilities, fire.index, funding)
     if (Math.random() < containChance) { contained++; continue }
 
     if (Math.random() < FIRE_DAMAGE_CHANCE) {
@@ -1825,7 +1830,7 @@ function advanceFires(grid, gridSize, fires, utilities, funding) {
       if (damaged.level - 1 <= 0) destroyed++
     }
 
-    var spreadChance = covered ? FIRE_SPREAD_COVERED : FIRE_SPREAD_UNCOVERED
+    var spreadChance = (covered ? FIRE_SPREAD_COVERED : FIRE_SPREAD_UNCOVERED) * fireFuel(tile)
     if (Math.random() < spreadChance && fires.length + spread.length < FIRE_MAX_ACTIVE) {
       var neighbors = neighborIndices(gridSize, fire.index)
       var options = []
@@ -1973,5 +1978,253 @@ function unpackHistory(packed) {
 
 var LOG_KIND_LABELS = {
   fire: "Fire", loss: "Destroyed", milestone: "Milestone",
-  loan: "Borrowed", brownout: "Brownout", dilemma: "Decision", budget: "Budget"
+  loan: "Borrowed", brownout: "Brownout", dilemma: "Decision", budget: "Budget",
+  crime: "Crime", neighbor: "Highway"
+}
+
+// --- firefighting depth ---------------------------------------------------
+// Containment used to be binary: inside a station's radius or not. Distance
+// is what actually decides a response, so a blaze on a station's doorstep is
+// now put out markedly faster than one at the far edge of the same radius —
+// which makes *where* a station sits matter, not just how many there are.
+function nearestPlantDistance(gridSize, plants, index) {
+  var best = Infinity
+  var x = index % gridSize, y = Math.floor(index / gridSize)
+  for (var i = 0; i < plants.length; i++) {
+    var px = plants[i].index % gridSize, py = Math.floor(plants[i].index / gridSize)
+    var d = Math.max(Math.abs(px - x), Math.abs(py - y))
+    if (d < best) best = d
+  }
+  return best
+}
+
+// Industry burns hotter than housing: more to catch, and it spreads further.
+var FIRE_FUEL = { R: 1.0, C: 1.15, I: 1.45 }
+
+function fireFuel(tile) {
+  return FIRE_FUEL[tile.type] || 1
+}
+
+// Full containment speed at the station's doorstep, tapering to the base rate
+// at the edge of its reach, and a token effort beyond it.
+function fireContainChance(gridSize, utilities, index, funding) {
+  var radius = FIRE_RADIUS * fundingRadiusScale(fundingLevel(funding, "F"))
+  var distance = nearestPlantDistance(gridSize, utilities.fire || [], index)
+  if (!isFinite(distance) || distance > radius) return FIRE_CONTAIN_UNCOVERED
+  var proximity = 1 - (distance / radius) * 0.55
+  return FIRE_CONTAIN_COVERED * fundingLevel(funding, "F") * proximity
+}
+
+// --- crime waves ----------------------------------------------------------
+// Crime was the same invisible dice roll fire used to be. It is now a visible
+// wave sitting over a district: unlike fire it does not level buildings —
+// fire destroys, crime degrades. While one runs it bleeds money, drags
+// happiness down city-wide, and slowly drives residents out of the blocks it
+// covers, until police suppress it.
+var CRIME_CHANCE_BASE = 0.03
+var CRIME_MAX_ACTIVE = 6
+var CRIME_SUPPRESS_COVERED = 0.32
+var CRIME_SUPPRESS_UNCOVERED = 0.045
+var CRIME_RADIUS = 3
+// Tuned against the densest block of a real save: one wave sitting on it
+// costs ~13% of monthly income, so ignoring it is expensive without being
+// ruinous — and a wave over sparse edge-of-town blocks barely registers,
+// which is the intended difference.
+var CRIME_THEFT_PER_LEVEL = 1.2
+var CRIME_HAPPINESS_HIT = 5
+var CRIME_DECAY_CHANCE = 0.05
+
+function crimeSurvey(grid, gridSize, utilities, funding) {
+  var radius = POLICE_RADIUS * fundingRadiusScale(fundingLevel(funding, "S"))
+  var policed = [], unpoliced = []
+  for (var i = 0; i < grid.length; i++) {
+    var tile = parseTile(grid[i])
+    if (!isBurnable(tile)) continue
+    if (isCovered(gridSize, utilities.police, i, radius)) policed.push(i)
+    else unpoliced.push(i)
+  }
+  return { policed: policed, unpoliced: unpoliced, built: policed.length + unpoliced.length }
+}
+
+function crimeStartChance(survey) {
+  if (survey.built === 0) return 0
+  return CRIME_CHANCE_BASE * (0.2 + 0.8 * (survey.unpoliced.length / survey.built))
+}
+
+function rollCrimeStart(grid, gridSize, crimes, utilities, funding) {
+  if (crimes.length >= CRIME_MAX_ACTIVE) return -1
+  var survey = crimeSurvey(grid, gridSize, utilities, funding)
+  if (Math.random() >= crimeStartChance(survey)) return -1
+  var pool = survey.unpoliced.length > 0
+    && (survey.policed.length === 0 || Math.random() < 0.85) ? survey.unpoliced : survey.policed
+  if (pool.length === 0) return -1
+  for (var attempt = 0; attempt < 6; attempt++) {
+    var candidate = pool[Math.floor(Math.random() * pool.length)]
+    var clash = false
+    for (var i = 0; i < crimes.length; i++)
+      if (withinRadius(gridSize, crimes[i].index, candidate, CRIME_RADIUS * 2)) clash = true
+    if (!clash) return candidate
+  }
+  return -1
+}
+
+// What a wave costs the city this month: proportional to the value sitting
+// inside it, so crime in a dense downtown hurts more than crime on the edge.
+function crimeTheft(grid, gridSize, crimes) {
+  var total = 0
+  for (var c = 0; c < (crimes || []).length; c++) {
+    for (var i = 0; i < grid.length; i++) {
+      if (!withinRadius(gridSize, crimes[c].index, i, CRIME_RADIUS)) continue
+      var tile = parseTile(grid[i])
+      if (isBurnable(tile)) total += tile.level * CRIME_THEFT_PER_LEVEL
+    }
+  }
+  return total
+}
+
+function advanceCrime(grid, gridSize, crimes, utilities, funding) {
+  var next = grid.slice()
+  var stillRunning = [], suppressed = 0, drivenOut = 0
+  var radius = POLICE_RADIUS * fundingRadiusScale(fundingLevel(funding, "S"))
+  var level = fundingLevel(funding, "S")
+
+  for (var c = 0; c < crimes.length; c++) {
+    var wave = crimes[c]
+    var covered = isCovered(gridSize, utilities.police, wave.index, radius)
+    var suppressChance = covered ? CRIME_SUPPRESS_COVERED * level : CRIME_SUPPRESS_UNCOVERED
+    if (Math.random() < suppressChance) { suppressed++; continue }
+
+    // Residents give up on a block long before a building falls down.
+    for (var i = 0; i < next.length; i++) {
+      if (!withinRadius(gridSize, wave.index, i, CRIME_RADIUS)) continue
+      var tile = parseTile(next[i])
+      // Stops at level 1: crime thins a block out, it does not clear the lot.
+      // Emptying a tile is fire's job, and keeping that line sharp is what
+      // makes the two disasters feel like different problems.
+      if (tile.type !== TILE_RES || tile.level <= 1) continue
+      if (Math.random() < CRIME_DECAY_CHANCE) {
+        next[i] = makeTile(tile.type, tile.level - 1)
+        drivenOut++
+      }
+    }
+    stillRunning.push({ index: wave.index, ticks: (wave.ticks || 0) + 1 })
+  }
+
+  return { grid: next, crimes: stillRunning, suppressed: suppressed, drivenOut: drivenOut }
+}
+
+// --- neighbouring cities --------------------------------------------------
+// Four highway stubs, one per map edge, each belonging to a neighbouring
+// town. Run a road out to one and the connection opens: people and trade
+// start arriving from outside, which is the only source of growth that does
+// not come from the player's own zoning. On a 64x64 grid with the city
+// starting in the middle, reaching an edge is a genuine investment of road
+// (and road upkeep), which is what makes it a decision rather than a freebie.
+var NEIGHBOR_NAMES = [
+  "Ashford", "Bellhaven", "Crestwood", "Dunmore", "Eastvale", "Fairbrook",
+  "Glenmoor", "Harrowfield", "Ironvale", "Kestrel Bay", "Larkspur", "Marchmont",
+  "Northgate", "Oakhurst", "Pinecrest", "Quarry Hill", "Ravenswood", "Stonefall",
+  "Thornbury", "Westmere", "Yarrow", "Aldermill", "Brightwater", "Copperfield"
+]
+var NEIGHBOR_EDGES = ["north", "east", "south", "west"]
+// Bounded so four connections are a strong tailwind, never a substitute for
+// actually running the city.
+var NEIGHBOR_MIGRATION_BONUS = 0.18
+var NEIGHBOR_COMMERCE_BONUS = 0.12
+var NEIGHBOR_TRADE_BONUS = 0.05
+
+// Where on its edge a connector sits. Offset from centre by a stable amount
+// derived from the city's own seed, so every city's highways sit differently
+// but never move once founded.
+function neighborConnectorIndex(gridSize, edge, seed) {
+  var spread = Math.floor(gridSize * 0.3)
+  var offset = spread === 0 ? 0 : (seed % (spread * 2 + 1)) - spread
+  var mid = clamp(Math.floor(gridSize / 2) + offset, 1, gridSize - 2)
+  if (edge === "north") return mid
+  if (edge === "south") return (gridSize - 1) * gridSize + mid
+  if (edge === "west") return mid * gridSize
+  return mid * gridSize + (gridSize - 1)
+}
+
+// A small deterministic generator (MINSTD). Multiplying the seed by a large
+// constant inline would overflow past 2^53 and make the modulo meaningless —
+// which it did: four edges kept drawing duplicate names and only two thirds
+// of the pool was ever reachable. The first few draws are discarded because
+// consecutive seeds otherwise start with near-identical values.
+function neighborRandom(seed) {
+  var state = Math.abs(Math.floor(seed)) % 2147483647
+  if (state === 0) state = 1
+  function next() {
+    state = (state * 48271) % 2147483647
+    return state / 2147483647
+  }
+  next(); next(); next()
+  return next
+}
+
+function makeNeighbors(gridSize, seed) {
+  var random = neighborRandom(seed)
+  // Drawn without replacement, so no two neighbours share a name.
+  var pool = NEIGHBOR_NAMES.slice()
+  var out = []
+  for (var i = 0; i < NEIGHBOR_EDGES.length; i++) {
+    var pick = Math.floor(random() * pool.length)
+    out.push({
+      edge: NEIGHBOR_EDGES[i],
+      name: pool.splice(pick, 1)[0],
+      index: neighborConnectorIndex(gridSize, NEIGHBOR_EDGES[i],
+        Math.floor(random() * 100000))
+    })
+  }
+  return out
+}
+
+// Roads that actually reach the city, flood-filled from every road touching a
+// built zone. A lone road out at the map edge is not "connected" to anything,
+// so a connector only counts once there is a continuous route home.
+function cityRoadNetwork(grid, gridSize) {
+  var reached = new Array(grid.length)
+  var queue = []
+  for (var i = 0; i < grid.length; i++) {
+    var tile = parseTile(grid[i])
+    if (tile.type !== TILE_ROAD) continue
+    var neighbors = neighborIndices(gridSize, i)
+    for (var n = 0; n < neighbors.length; n++) {
+      var near = parseTile(grid[neighbors[n]])
+      if ((near.type === TILE_RES || near.type === TILE_COM || near.type === TILE_IND)
+          && near.level > 0) {
+        if (!reached[i]) { reached[i] = true; queue.push(i) }
+        break
+      }
+    }
+  }
+  while (queue.length > 0) {
+    var current = queue.pop()
+    var around = neighborIndices(gridSize, current)
+    for (var a = 0; a < around.length; a++) {
+      var next = around[a]
+      if (reached[next]) continue
+      if (parseTile(grid[next]).type !== TILE_ROAD) continue
+      reached[next] = true
+      queue.push(next)
+    }
+  }
+  return reached
+}
+
+function connectedNeighbors(grid, gridSize, neighbors) {
+  var network = cityRoadNetwork(grid, gridSize)
+  var out = []
+  for (var i = 0; i < (neighbors || []).length; i++)
+    if (network[neighbors[i].index]) out.push(neighbors[i])
+  return out
+}
+
+function neighborBonus(connectedCount) {
+  var n = Math.max(0, connectedCount || 0)
+  return {
+    migration: 1 + NEIGHBOR_MIGRATION_BONUS * n,
+    commerce: 1 + NEIGHBOR_COMMERCE_BONUS * n,
+    trade: 1 + NEIGHBOR_TRADE_BONUS * n
+  }
 }
