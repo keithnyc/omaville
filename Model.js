@@ -543,16 +543,18 @@ function computeHappiness(taxRatePercent, stats) {
 // `neighbors` is the count of connected neighbouring cities: migration from
 // outside lifts residential demand and their trade lifts commercial, which is
 // the whole point of running a highway to the map edge.
-function computeDemand(stats, neighbors) {
+function computeDemand(stats, neighbors, effects) {
   var jobsTotal = stats.jobsCommercial + stats.jobsIndustrial
   var laborAvailability = clamp(stats.population / (jobsTotal + 10), 0, 1.3)
   var bonus = neighborBonus(neighbors)
+  var policy = effects || ordinanceEffects([])
   return {
     R: (0.5 + 0.5 * clamp(jobsTotal / (stats.population + 10), 0, 1.5)
-      + computeAttractiveness(stats) / 100) * bonus.migration,
+      + computeAttractiveness(stats) / 100) * bonus.migration * policy.residentialDemand,
     C: (0.5 + 0.5 * clamp((stats.population / (stats.jobsCommercial + 10)) * laborAvailability, 0, 1.5))
-      * bonus.commerce,
-    I: 0.6 + 0.3 * clamp((stats.population / (stats.jobsIndustrial + 50)) * laborAvailability, 0, 1.0)
+      * bonus.commerce * policy.commercialDemand,
+    I: (0.6 + 0.3 * clamp((stats.population / (stats.jobsIndustrial + 50)) * laborAvailability, 0, 1.0))
+      * policy.industrialDemand
   }
 }
 
@@ -600,7 +602,8 @@ function nearbyZoneEffect(grid, gridSize, index) {
 // and a water plant's coverage — served, not just zoned. Losing any one
 // of the three (plant bulldozed, road cut) puts it at decay risk exactly
 // like a road disconnect always has.
-function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load) {
+function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load, effects) {
+  var policy = effects || ordinanceEffects([])
   var powerSatisfaction = load ? load.power : 1
   var waterSatisfaction = load ? load.water : 1
   var happinessFactor = clamp(happiness / 70, 0.3, 1.5)
@@ -638,7 +641,8 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
         var healthcare = isCovered(gridSize, utilities.medical || [], i, medicalRadius)
         growthChance *= healthcare ? 1.10 : stats.population >= 100 ? 0.85 : 1
         growthChance *= 1 + propertyValueBonus(grid, gridSize, i) / 100
-        if (zoneEffect.nearIndustrial) growthChance *= INDUSTRIAL_GROWTH_PENALTY
+        if (zoneEffect.nearIndustrial)
+          growthChance *= 1 - (1 - INDUSTRIAL_GROWTH_PENALTY) * policy.industrialNuisance
         if (zoneEffect.nearCommercial) growthChance *= COMMERCIAL_GROWTH_BONUS
       }
       if (Math.random() < growthChance) {
@@ -715,8 +719,8 @@ var PARK_UPKEEP = 0.3
 // zoned tile costs nothing until something grows on it. `funding` is the
 // player's department budget (see departmentSpend); omitting it prices the
 // city at default funding.
-function computeUpkeep(stats, funding) {
-  var bill = upkeepBreakdown(stats, funding)
+function computeUpkeep(stats, funding, ordinances) {
+  var bill = upkeepBreakdown(stats, funding, ordinances)
   var total = 0
   for (var i = 0; i < bill.length; i++) total += bill[i].amount
   return total
@@ -724,7 +728,7 @@ function computeUpkeep(stats, funding) {
 
 // The monthly bill, itemised. computeUpkeep is just the sum of this, so what
 // the player is shown can never drift from what they are actually charged.
-function upkeepBreakdown(stats, funding) {
+function upkeepBreakdown(stats, funding, ordinances) {
   var densityRate = DENSITY_UPKEEP_RATE * (1 + stats.builtDensity / DENSITY_UPKEEP_SOFTCAP)
   var rows = [
     { key: "roads", label: "Roads", amount: stats.roadCount * ROAD_UPKEEP },
@@ -732,7 +736,8 @@ function upkeepBreakdown(stats, funding) {
     { key: "water", label: "Water", amount: stats.waterUpkeep },
     { key: "parks", label: "Parks", amount: stats.parkCount * PARK_UPKEEP },
     { key: "decorations", label: "Landscaping", amount: stats.decorationUpkeep },
-    { key: "services", label: "City services", amount: stats.builtDensity * densityRate }
+    { key: "services", label: "City services", amount: stats.builtDensity * densityRate },
+    { key: "ordinances", label: "Ordinances", amount: ordinanceCost(ordinances, stats.population) }
   ]
   for (var i = 0; i < FUNDABLE_SERVICES.length; i++) {
     var type = FUNDABLE_SERVICES[i]
@@ -770,17 +775,19 @@ function computeIncome(population, taxRatePercent) {
 // fully deterministic from tax/parks/industry, and income is the only thing
 // a multiplier touches (upkeep is unaffected, so a bad multiplier really
 // does squeeze the budget rather than just look worse on paper).
-function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMultiplier, funding, neighbors) {
+function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMultiplier, funding, neighbors, ordinances) {
   happinessModifier = happinessModifier || 0
+  var policy = ordinanceEffects(ordinances)
   incomeMultiplier = incomeMultiplier === undefined ? 1 : incomeMultiplier
   var stats = summarize(grid)
-  var happiness = Math.round(clamp(computeHappiness(taxRatePercent, stats) + happinessModifier, 0, 100))
+  var happiness = Math.round(clamp(
+    computeHappiness(taxRatePercent, stats) + happinessModifier + policy.happiness, 0, 100))
   var utilities = findUtilities(grid)
   var connected = connectedNeighbors(grid, gridSize, neighbors)
-  var demand = computeDemand(stats, connected.length)
-  var load = utilityLoad(grid, stats)
-  var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load)
-  var upkeep = computeUpkeep(stats, funding)
+  var demand = computeDemand(stats, connected.length, policy)
+  var load = utilityLoad(grid, stats, policy)
+  var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load, policy)
+  var upkeep = computeUpkeep(stats, funding, ordinances)
   var income = computeIncome(stats.taxablePopulation, taxRatePercent) * incomeMultiplier
     * neighborBonus(connected.length).trade
   return {
@@ -1776,9 +1783,10 @@ function fireSurvey(grid, gridSize, utilities, funding) {
 
 // A well-covered city still burns occasionally — just far less often. The
 // floor is deliberate: perfect coverage should make fire rare, not abolish it.
-function fireStartChance(survey) {
+function fireStartChance(survey, effects) {
   if (survey.built === 0) return 0
   return FIRE_CHANCE_BASE * (0.25 + 0.75 * (survey.exposed.length / survey.built))
+    * ((effects || ordinanceEffects([])).fireChance)
 }
 
 // Fires overwhelmingly start where nobody is watching, which is what makes a
@@ -1794,10 +1802,10 @@ function pickFireSite(survey, activeIndices) {
   return -1
 }
 
-function rollFireStart(grid, gridSize, fires, utilities, funding) {
+function rollFireStart(grid, gridSize, fires, utilities, funding, effects) {
   if (fires.length >= FIRE_MAX_ACTIVE) return -1
   var survey = fireSurvey(grid, gridSize, utilities, funding)
-  if (Math.random() >= fireStartChance(survey)) return -1
+  if (Math.random() >= fireStartChance(survey, effects)) return -1
   var active = []
   for (var i = 0; i < fires.length; i++) active.push(fires[i].index)
   return pickFireSite(survey, active)
@@ -1880,14 +1888,17 @@ function utilityCapacity(grid) {
 // network can actually meet, applied per tile per tick as a rolling blackout
 // rather than a citywide cliff, so an overloaded city degrades instead of
 // stopping dead.
-function utilityLoad(grid, stats) {
+function utilityLoad(grid, stats, effects) {
   var capacity = utilityCapacity(grid)
   var demand = stats.builtDensity
+  // Water conservation cuts draw rather than adding capacity, which is why it
+  // is cheaper than another treatment plant.
+  var waterDraw = demand * ((effects || ordinanceEffects([])).waterDemand)
   return {
     powerDemand: demand, powerCapacity: capacity.power,
-    waterDemand: demand, waterCapacity: capacity.water,
+    waterDemand: waterDraw, waterCapacity: capacity.water,
     power: demand === 0 ? 1 : clamp(capacity.power / demand, 0, 1),
-    water: demand === 0 ? 1 : clamp(capacity.water / demand, 0, 1)
+    water: waterDraw === 0 ? 1 : clamp(capacity.water / waterDraw, 0, 1)
   }
 }
 
@@ -1979,7 +1990,8 @@ function unpackHistory(packed) {
 var LOG_KIND_LABELS = {
   fire: "Fire", loss: "Destroyed", milestone: "Milestone",
   loan: "Borrowed", brownout: "Brownout", dilemma: "Decision", budget: "Budget",
-  crime: "Crime", neighbor: "Highway"
+  crime: "Crime", neighbor: "Highway",
+  ordinance: "Policy", election: "Election"
 }
 
 // --- firefighting depth ---------------------------------------------------
@@ -2046,15 +2058,16 @@ function crimeSurvey(grid, gridSize, utilities, funding) {
   return { policed: policed, unpoliced: unpoliced, built: policed.length + unpoliced.length }
 }
 
-function crimeStartChance(survey) {
+function crimeStartChance(survey, effects) {
   if (survey.built === 0) return 0
   return CRIME_CHANCE_BASE * (0.2 + 0.8 * (survey.unpoliced.length / survey.built))
+    * ((effects || ordinanceEffects([])).crimeChance)
 }
 
-function rollCrimeStart(grid, gridSize, crimes, utilities, funding) {
+function rollCrimeStart(grid, gridSize, crimes, utilities, funding, effects) {
   if (crimes.length >= CRIME_MAX_ACTIVE) return -1
   var survey = crimeSurvey(grid, gridSize, utilities, funding)
-  if (Math.random() >= crimeStartChance(survey)) return -1
+  if (Math.random() >= crimeStartChance(survey, effects)) return -1
   var pool = survey.unpoliced.length > 0
     && (survey.policed.length === 0 || Math.random() < 0.85) ? survey.unpoliced : survey.policed
   if (pool.length === 0) return -1
@@ -2082,7 +2095,8 @@ function crimeTheft(grid, gridSize, crimes) {
   return total
 }
 
-function advanceCrime(grid, gridSize, crimes, utilities, funding) {
+function advanceCrime(grid, gridSize, crimes, utilities, funding, effects) {
+  var policy = effects || ordinanceEffects([])
   var next = grid.slice()
   var stillRunning = [], suppressed = 0, drivenOut = 0
   var radius = POLICE_RADIUS * fundingRadiusScale(fundingLevel(funding, "S"))
@@ -2091,7 +2105,8 @@ function advanceCrime(grid, gridSize, crimes, utilities, funding) {
   for (var c = 0; c < crimes.length; c++) {
     var wave = crimes[c]
     var covered = isCovered(gridSize, utilities.police, wave.index, radius)
-    var suppressChance = covered ? CRIME_SUPPRESS_COVERED * level : CRIME_SUPPRESS_UNCOVERED
+    var suppressChance = (covered ? CRIME_SUPPRESS_COVERED * level : CRIME_SUPPRESS_UNCOVERED)
+      * policy.crimeSuppress
     if (Math.random() < suppressChance) { suppressed++; continue }
 
     // Residents give up on a block long before a building falls down.
@@ -2227,4 +2242,110 @@ function neighborBonus(connectedCount) {
     commerce: 1 + NEIGHBOR_COMMERCE_BONUS * n,
     trade: 1 + NEIGHBOR_TRADE_BONUS * n
   }
+}
+
+// --- ordinances -----------------------------------------------------------
+// Standing city-wide policies. Each one is a permanent cost with a real
+// tradeoff attached, so the interesting ones are never free wins — a curfew
+// buys quiet at the price of a city that resents it. Costs are per resident
+// like department funding, which keeps a policy meaningful at every size
+// instead of becoming rounding error once the city is big.
+var ORDINANCES = [
+  { id: "smoke", name: "Smoke detector code", rate: 1.0,
+    blurb: "Fires start less often.", effects: { fireChance: 0.65 } },
+  { id: "watch", name: "Neighbourhood watch", rate: 0.9,
+    blurb: "Fewer crime waves, and people like being asked to help.",
+    effects: { crimeChance: 0.7, happiness: 1 } },
+  { id: "curfew", name: "Night curfew", rate: 1.6,
+    blurb: "Police shut crime down far faster. Nobody enjoys living under it.",
+    effects: { crimeSuppress: 1.6, crimeChance: 0.75, happiness: -6 } },
+  { id: "recycling", name: "Recycling programme", rate: 2.0,
+    blurb: "Cleaner streets, and industry is a worse neighbour than it was.",
+    effects: { happiness: 4, industrialNuisance: 0.7 } },
+  { id: "conservation", name: "Water conservation", rate: 0.8,
+    blurb: "Cuts water draw by a fifth — cheaper than another treatment plant.",
+    effects: { waterDemand: 0.8, happiness: -2 } },
+  { id: "tourism", name: "Tourism campaign", rate: 2.3,
+    blurb: "Visitors lift commerce. They also bring opportunists.",
+    effects: { commercialDemand: 1.25, crimeChance: 1.35 } },
+  { id: "homestead", name: "Homestead grant", rate: 2.7,
+    blurb: "Helps people buy in. Housing demand rises.",
+    effects: { residentialDemand: 1.3 } },
+  { id: "subsidy", name: "Industrial subsidy", rate: 2.2,
+    blurb: "Factories expand faster. The air is worse for it.",
+    effects: { industrialDemand: 1.35, happiness: -4 } },
+  { id: "gambling", name: "Legalised gambling", rate: -3.2,
+    blurb: "Pays for itself several times over. Brings the trouble you'd expect.",
+    effects: { crimeChance: 1.5, happiness: -3 } }
+]
+
+function ordinance(id) {
+  for (var i = 0; i < ORDINANCES.length; i++) if (ORDINANCES[i].id === id) return ORDINANCES[i]
+  return null
+}
+
+// Negative rates (gambling) are revenue, so this can come out below zero —
+// which is the point of putting it in the same line as every other policy.
+function ordinanceCost(active, population) {
+  var total = 0
+  for (var i = 0; i < (active || []).length; i++) {
+    var o = ordinance(active[i])
+    if (o) total += o.rate * (population / 100)
+  }
+  return total
+}
+
+// One bundle of modifiers for everything the policies touch, so callers apply
+// them without knowing which ordinance produced what.
+function ordinanceEffects(active) {
+  var out = {
+    happiness: 0, fireChance: 1, crimeChance: 1, crimeSuppress: 1,
+    waterDemand: 1, residentialDemand: 1, commercialDemand: 1,
+    industrialDemand: 1, industrialNuisance: 1
+  }
+  for (var i = 0; i < (active || []).length; i++) {
+    var o = ordinance(active[i])
+    if (!o) continue
+    for (var key in o.effects) {
+      if (key === "happiness") out.happiness += o.effects[key]
+      else out[key] *= o.effects[key]
+    }
+  }
+  return out
+}
+
+// --- elections ------------------------------------------------------------
+// Every four years the city decides whether to keep you. Approval is a
+// summary judgement rather than raw happiness: it is what the city has
+// actually been like to live in — how content, how safe, how solvent, how
+// well served. Losing does not delete the city; it puts you out of office for
+// a year, which is a real sting in a game you leave running without deleting
+// the thing the player spent hours building.
+var ELECTION_INTERVAL_TICKS = 48
+var ELECTION_THRESHOLD = 50
+var TERM_OUT_TICKS = 12
+
+function computeApproval(happiness, coverage, fires, crimes, netIncome, population) {
+  var approval = happiness
+  // Being unable to pay for the city reads as mismanagement.
+  if (netIncome < 0) approval -= Math.min(18, Math.abs(netIncome) / 12)
+  // Anything actively on fire or being robbed dominates the mood.
+  approval -= (fires || 0) * 6
+  approval -= (crimes || 0) * 8
+  // Unserved residents, weighted across every service the city offers.
+  if (population > 0) {
+    var unmet = 0
+    for (var i = 0; i < (coverage || []).length; i++)
+      unmet += (coverage[i].unmet || 0) / Math.max(1, coverage[i].residents || 1)
+    approval -= (unmet / Math.max(1, (coverage || []).length)) * 25
+  }
+  return Math.round(clamp(approval, 0, 100))
+}
+
+function nextElectionTick(ageMinutes) {
+  return (Math.floor(ageMinutes / ELECTION_INTERVAL_TICKS) + 1) * ELECTION_INTERVAL_TICKS
+}
+
+function electionDue(ageMinutes, lastElectionTick) {
+  return ageMinutes - lastElectionTick >= ELECTION_INTERVAL_TICKS
 }

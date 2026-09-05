@@ -85,6 +85,15 @@ Item {
   // The four neighbouring towns, one per map edge. Generated once from the
   // city's own founding seed so they never shuffle, and persisted so an
   // existing city keeps the neighbours it already ran roads to.
+  // Standing policies, by id (Model.ORDINANCES). City state, not a
+  // preference — a new administration starts with a clean slate.
+  property var ordinances: []
+  // Elections: the tick of the last one, and how long the player is out of
+  // office after losing one.
+  property real lastElectionTick: 0
+  property real outOfOfficeUntil: 0
+  readonly property bool outOfOffice: root.ageMinutes < root.outOfOfficeUntil
+  property int lastApproval: 0
   property var neighbors: []
   property var connectedNeighborNames: []
   // Bounded history for the graphs, and a newest-first event log. Both are
@@ -120,13 +129,14 @@ Item {
   // rebuild them.
   readonly property var cityStats: Model.summarize(root.grid)
   readonly property var coverage: Model.serviceCoverageStats(root.grid, root.gridSize)
-  readonly property var load: Model.utilityLoad(root.grid, root.cityStats)
+  readonly property var policy: Model.ordinanceEffects(root.ordinances)
+  readonly property var load: Model.utilityLoad(root.grid, root.cityStats, root.policy)
   readonly property real income: Model.computeIncome(root.cityStats.taxablePopulation, root.taxRatePercent)
-  readonly property real upkeep: Model.computeUpkeep(root.cityStats, root.funding)
+  readonly property real upkeep: Model.computeUpkeep(root.cityStats, root.funding, root.ordinances)
   readonly property var linkedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
   readonly property var advice: root.initialized ? Model.cityAdvice({
     stats: root.cityStats, coverage: root.coverage,
-    demand: Model.computeDemand(root.cityStats, root.linkedNeighbors.length),
+    demand: Model.computeDemand(root.cityStats, root.linkedNeighbors.length, root.policy),
     income: root.income, upkeep: root.upkeep, treasury: root.treasury,
     funding: root.funding, loans: root.loans, taxRatePercent: root.taxRatePercent,
     fires: root.fires, crimes: root.crimes, load: root.load,
@@ -144,6 +154,7 @@ Item {
   // --- zoning actions ------------------------------------------------------
 
   function zoneTile(index, type) {
+    if (root.outOfOffice) return false
     if (!Model.canPlace(root.grid, index, type, root.treasury)) return false
     root.treasury -= Model.placementCost(root.grid, index, type)
     root.grid = Model.placeTile(root.grid, index, type)
@@ -152,7 +163,7 @@ Item {
   }
 
   function buildTier(index, type, level) {
-    if (!root.initialized) return false
+    if (!root.initialized || root.outOfOffice) return false
     var check = Model.canBuildTier(root.grid, index, type, level, root.population, root.treasury)
     if (!check.ok) return false
     var next = root.grid.slice()
@@ -164,6 +175,7 @@ Item {
   }
 
   function bulldozeTile(index) {
+    if (root.outOfOffice) return
     if (index < 0 || index >= root.grid.length) return
     var tile = Model.parseTile(root.grid[index])
     var refund = Model.totalInvestment(tile.type, tile.level)
@@ -179,6 +191,7 @@ Item {
   // for eligibility so the flyout's "locked"/"can't afford" state can
   // never drift from what actually happens when clicked.
   function upgradeTile(index) {
+    if (root.outOfOffice) return false
     if (index < 0 || index >= root.grid.length) return false
     var tile = Model.parseTile(root.grid[index])
     var check = Model.canUpgrade(tile.type, tile.level, root.population, root.treasury)
@@ -193,7 +206,7 @@ Item {
   // Model.canBorrow), so a loan is a lever for a mayor with a plan rather
   // than an infinite hole for one without.
   function borrow(offerId) {
-    if (!root.initialized) return false
+    if (!root.initialized || root.outOfOffice) return false
     var offer = Model.loanOffer(offerId)
     if (!offer) return false
     var stats = Model.summarize(root.grid)
@@ -209,7 +222,53 @@ Item {
     return true
   }
 
+  // Ordinances are locked while out of office: an interim administration is
+  // running the city, not the player.
+  function toggleOrdinance(id) {
+    if (!root.initialized || root.outOfOffice) return false
+    if (!Model.ordinance(id)) return false
+    var next = []
+    var had = false
+    for (var i = 0; i < root.ordinances.length; i++) {
+      if (root.ordinances[i] === id) { had = true; continue }
+      next.push(root.ordinances[i])
+    }
+    if (!had) next.push(id)
+    root.ordinances = next
+    root.logEvent("ordinance", (had ? "Repealed " : "Passed ") + Model.ordinance(id).name + ".")
+    flushState()
+    return true
+  }
+
+  readonly property int approval: root.initialized
+    ? Model.computeApproval(root.happiness, root.coverage, root.fires.length,
+        root.crimes.length, root.income - root.upkeep, root.population)
+    : 0
+  readonly property real nextElectionAt: root.lastElectionTick + Model.ELECTION_INTERVAL_TICKS
+
+  // Losing does not delete the city — it puts the player out of office for a
+  // year. A game left running for hours should never be able to throw that
+  // away on one bad quarter, but an election with no consequence is not an
+  // election.
+  function runElection() {
+    var score = root.approval
+    root.lastApproval = score
+    root.lastElectionTick = root.ageMinutes
+    if (score >= Model.ELECTION_THRESHOLD) {
+      root.notify(root.cityName + " — re-elected",
+        "You keep the mayor's office with " + score + "% approval.")
+      root.logEvent("election", "Re-elected with " + score + "% approval.")
+    } else {
+      root.outOfOfficeUntil = root.ageMinutes + Model.TERM_OUT_TICKS
+      root.notify(root.cityName + " — voted out",
+        score + "% approval. An interim administration runs the city for a year.")
+      root.logEvent("election", "Voted out with " + score + "% approval.")
+    }
+    flushState()
+  }
+
   function setTaxRate(percent) {
+    if (root.outOfOffice) return
     var clamped = Math.max(0, Math.min(30, Math.round(percent)))
     if (clamped === root.taxRatePercent) return
     root.taxRatePercent = clamped
@@ -247,6 +306,10 @@ Item {
     root.missedLoanTicks = 0
     root.fires = []
     root.crimes = []
+    root.ordinances = []
+    root.lastElectionTick = 0
+    root.outOfOfficeUntil = 0
+    root.lastApproval = 0
     root.neighbors = Model.makeNeighbors(root.gridSize, Date.now())
     root.connectedNeighborNames = []
     root.history = []
@@ -282,6 +345,7 @@ Item {
   // a real cost. Assigning a fresh object rather than mutating in place so
   // QML property bindings on `funding` actually re-evaluate.
   function setFunding(type, value) {
+    if (root.outOfOffice) return false
     if (Model.FUNDABLE_SERVICES.indexOf(type) < 0) return false
     var level = Number(value)
     if (!isFinite(level)) return false
@@ -385,7 +449,7 @@ Item {
       root.activeEffects = stillActive
 
       var result = Model.advanceCity(root.grid, root.gridSize, root.taxRatePercent,
-        happinessModifier, incomeMultiplier, root.funding, root.neighbors)
+        happinessModifier, incomeMultiplier, root.funding, root.neighbors, root.ordinances)
       root.grid = result.grid
       root.population = result.population
       root.jobs = result.jobs
@@ -425,6 +489,12 @@ Item {
         root.logEvent("brownout", "The grid is back within capacity.")
       }
       root.advanceDisasters()
+      if (root.outOfOfficeUntil > 0 && root.ageMinutes >= root.outOfOfficeUntil) {
+        root.outOfOfficeUntil = 0
+        root.notify(root.cityName, "Your term begins. The city is yours again.")
+        root.logEvent("election", "Returned to office.")
+      }
+      if (Model.electionDue(root.ageMinutes, root.lastElectionTick)) root.runElection()
       root.checkNeighbors(result.connectedNeighbors)
       root.checkMilestones()
       root.checkBudget()
@@ -459,7 +529,7 @@ Item {
     }
 
     if (root.crimes.length > 0) {
-      var crimeResult = Model.advanceCrime(root.grid, root.gridSize, root.crimes, utilities, root.funding)
+      var crimeResult = Model.advanceCrime(root.grid, root.gridSize, root.crimes, utilities, root.funding, root.policy)
       root.grid = crimeResult.grid
       var wasRunning = root.crimes.length
       root.crimes = crimeResult.crimes
@@ -472,7 +542,7 @@ Item {
       }
     }
 
-    var outbreak = Model.rollCrimeStart(root.grid, root.gridSize, root.crimes, utilities, root.funding)
+    var outbreak = Model.rollCrimeStart(root.grid, root.gridSize, root.crimes, utilities, root.funding, root.policy)
     if (outbreak >= 0) {
       root.crimes = root.crimes.concat([{ index: outbreak, ticks: 0 }])
       var patrolled = Model.isCovered(root.gridSize, utilities.police, outbreak,
@@ -485,7 +555,7 @@ Item {
       flushState()
     }
 
-    var ignition = Model.rollFireStart(root.grid, root.gridSize, root.fires, utilities, root.funding)
+    var ignition = Model.rollFireStart(root.grid, root.gridSize, root.fires, utilities, root.funding, root.policy)
     if (ignition >= 0) {
       root.fires = root.fires.concat([{ index: ignition, ticks: 0 }])
       var covered = Model.isCovered(root.gridSize, utilities.fire, ignition,
@@ -596,6 +666,10 @@ Item {
       missedLoanTicks: root.missedLoanTicks,
       fires: root.fires,
       crimes: root.crimes,
+      ordinances: root.ordinances,
+      lastElectionTick: root.lastElectionTick,
+      outOfOfficeUntil: root.outOfOfficeUntil,
+      lastApproval: root.lastApproval,
       neighbors: root.neighbors,
       history: Model.packHistory(root.history),
       cityLog: root.cityLog,
@@ -661,6 +735,10 @@ Item {
       missedLoanTicks = Math.max(0, Math.round(num(saved.missedLoanTicks, 0)))
       fires = Array.isArray(saved.fires) ? saved.fires : []
       crimes = Array.isArray(saved.crimes) ? saved.crimes : []
+      ordinances = Array.isArray(saved.ordinances) ? saved.ordinances : []
+      lastElectionTick = Math.max(0, num(saved.lastElectionTick, 0))
+      outOfOfficeUntil = Math.max(0, num(saved.outOfOfficeUntil, 0))
+      lastApproval = Math.max(0, Math.round(num(saved.lastApproval, 0)))
       neighbors = Array.isArray(saved.neighbors) && saved.neighbors.length === 4
         ? saved.neighbors : null
       // Pre-pack saves stored history as an array; both decode the same way.

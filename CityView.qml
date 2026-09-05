@@ -190,6 +190,9 @@ Item {
   readonly property var fires: root.serviceReady ? root.cityService.fires : []
   readonly property var crimes: root.serviceReady ? root.cityService.crimes : []
   readonly property var neighbors: root.serviceReady ? root.cityService.neighbors : []
+  readonly property var ordinances: root.serviceReady ? root.cityService.ordinances : []
+  readonly property int approval: root.serviceReady ? root.cityService.approval : 0
+  readonly property bool outOfOffice: root.serviceReady && root.cityService.outOfOffice
   readonly property var connectedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
   readonly property bool cityBurning: root.fires.length > 0
   property string overlayMode: ""
@@ -5064,6 +5067,29 @@ Item {
 
         Text {
           width: parent.width
+          visible: root.serviceReady
+          // The election is the one deadline in the game, so it sits above
+          // the money rather than buried in a menu.
+          text: {
+            if (!root.serviceReady) return ""
+            var s = root.cityService
+            if (root.outOfOffice)
+              return "Out of office — an interim administration is running the city for "
+                + Math.max(1, Math.ceil(s.outOfOfficeUntil - s.ageMinutes)) + " more months."
+            var due = Math.max(0, Math.ceil(s.nextElectionAt - s.ageMinutes))
+            return "Approval " + root.approval + "% · election in " + due
+              + (due === 1 ? " month" : " months")
+              + (root.approval < Model.ELECTION_THRESHOLD ? " · you would lose today" : "")
+          }
+          wrapMode: Text.WordWrap
+          color: root.outOfOffice || root.approval < Model.ELECTION_THRESHOLD
+            ? "#e0806a" : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.75)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          width: parent.width
           text: root.serviceReady
             ? "Income $" + Math.round(root.budgetIncome) + " · Upkeep $" + Math.round(root.budgetUpkeep)
               + " · " + (root.budgetNet >= 0 ? "+" : "−") + "$" + Math.abs(Math.round(root.budgetNet)) + " a month"
@@ -5210,6 +5236,97 @@ Item {
           color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
+        }
+
+        Rectangle {
+          width: parent.width; height: 1
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.15)
+        }
+
+        // Ordinances sit in the budget rather than a screen of their own:
+        // every one of them is a standing line on the same monthly bill.
+        Row {
+          width: parent.width
+          Text {
+            text: "Ordinances"
+            color: Color.menu.text
+            font.bold: true
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+          Item { width: budgetColumn.width - 200; height: 1 }
+          Text {
+            text: root.serviceReady
+              ? (Model.ordinanceCost(root.ordinances, root.population) < 0 ? "+$" : "$")
+                + Math.abs(Math.round(Model.ordinanceCost(root.ordinances, root.population))) + " a month"
+              : ""
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        Repeater {
+          model: root.serviceReady ? Model.ORDINANCES : []
+
+          Rectangle {
+            id: policyRow
+            required property var modelData
+            readonly property bool enacted: root.ordinances.indexOf(policyRow.modelData.id) >= 0
+            readonly property real cost: Model.ordinanceCost([policyRow.modelData.id], root.population)
+            width: budgetColumn.width
+            height: policyText.implicitHeight + Style.space(12)
+            radius: Style.space(4)
+            color: enacted ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16) : "transparent"
+            border.width: 1
+            border.color: enacted ? Color.accent
+              : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.18)
+            opacity: root.outOfOffice ? 0.45 : 1
+
+            Column {
+              id: policyText
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.margins: Style.space(7)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(1)
+
+              Row {
+                width: parent.width
+                Text {
+                  text: policyRow.modelData.name
+                  color: policyRow.enacted ? Color.accent : Color.menu.text
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Item { width: policyText.width - 210; height: 1 }
+                Text {
+                  // A negative rate is revenue, which is exactly how the
+                  // devil's-bargain policies should read.
+                  text: (policyRow.cost < 0 ? "+$" : "$") + Math.abs(Math.round(policyRow.cost))
+                  color: policyRow.cost < 0 ? "#7fbf7f"
+                    : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+              Text {
+                width: policyText.width
+                text: policyRow.modelData.blurb
+                wrapMode: Text.WordWrap
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.55)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              enabled: !root.outOfOffice
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.cityService.toggleOrdinance(policyRow.modelData.id)
+            }
+          }
         }
 
         Button { text: "Done"; onClicked: root.budgetOpen = false }

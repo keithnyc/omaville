@@ -50,6 +50,9 @@ BarWidget {
       s.cityName + " · " + cal.monthName + ", Year " + cal.year,
       "Pop " + root.population + " · " + root.money(root.treasury) + " · " + s.happiness + "% happy"
     ]
+    if (s.outOfOffice)
+      lines.push("\nOut of office · " + Math.max(1, Math.ceil(s.outOfOfficeUntil - s.ageMinutes))
+        + " months left")
     // Only the advisors with something to say — a wall of "all good" is not
     // worth the tooltip space. Severity is a single character on purpose: the
     // shell centres tooltip text, so a two-character "!!" against a one-
