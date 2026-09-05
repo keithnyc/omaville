@@ -20,6 +20,19 @@ Item {
   // Gates the car/blink animation timer — false while hidden so a closed
   // panel or an unfocused/minimized detached window costs nothing.
   property bool active: true
+  // A banner of what happened since the player last looked, shown when the
+  // panel opens and dismissed by acknowledging it. The mark-as-seen is
+  // deliberately *not* automatic on open: a fire that burned three buildings
+  // while the panel was shut should not vanish because the panel was
+  // briefly opened and closed again.
+  property bool awaySummaryOpen: false
+  onActiveChanged: {
+    if (active && root.serviceReady && root.unseenEvents.length > 0) root.awaySummaryOpen = true
+  }
+  function acknowledgeAway() {
+    root.awaySummaryOpen = false
+    if (root.cityService) root.cityService.markSeen()
+  }
   // Only used to pick which icon (detach vs. dock) the button in the
   // header shows — the actual window management lives in whichever host
   // (Panel.qml / DetachedWindow.qml / BarWidget.qml) is listening.
@@ -164,6 +177,12 @@ Item {
   readonly property real budgetUpkeep: root.serviceReady
     ? Model.computeUpkeep(root.budgetStats, root.cityService.funding) : 0
   readonly property real budgetNet: root.budgetIncome - root.budgetUpkeep
+  readonly property var cityHistory: root.serviceReady ? root.cityService.history : []
+  readonly property var cityLog: root.serviceReady ? root.cityService.cityLog : []
+  // Logged after the player last looked — drives the "while you were away"
+  // summary and the unseen dots beside each entry.
+  readonly property var unseenEvents: root.serviceReady ? root.cityService.unseenLog : []
+  readonly property var utilityLoad: Model.utilityLoad(root.grid, root.budgetStats)
   readonly property var upkeepBill: root.serviceReady
     ? Model.upkeepBreakdown(root.budgetStats, root.cityService.funding) : []
   // Active map data overlay ("" = off). The advisors name a problem; this is
@@ -191,6 +210,7 @@ Item {
     funding: root.cityService.funding,
     loans: root.cityService.loans,
     fires: root.fires,
+    load: root.utilityLoad,
     taxRatePercent: root.taxRatePercent
   }) : []
   readonly property var topAdvice: root.cityAdvice.length > 0 ? Model.topAdvice(root.cityAdvice) : null
@@ -308,6 +328,7 @@ Item {
   property bool budgetOpen: false
   property bool advisorsOpen: false
   property bool overlayMenuOpen: false
+  property bool historyOpen: false
   readonly property bool editingTownName: root.settingsOpen && townNameInput.activeFocus
   Shortcut {
     sequence: "F2"
@@ -321,6 +342,7 @@ Item {
     { action: "new", label: "New Game", enabled: true },
     { action: "name", label: "Name Town", enabled: root.serviceReady },
     { action: "advisors", label: "Advisors", enabled: root.serviceReady },
+    { action: "history", label: "History", enabled: root.serviceReady },
     { action: "budget", label: "Budget", enabled: root.serviceReady },
     { action: "settings", label: "Settings", enabled: true },
     { action: "save", label: "Save Game", enabled: false }
@@ -330,6 +352,7 @@ Item {
     if (action === "new") root.confirmNewGameOpen = true
     else if (action === "budget") root.budgetOpen = true
     else if (action === "advisors") root.advisorsOpen = true
+    else if (action === "history") root.historyOpen = true
     else if (action === "settings") root.settingsOpen = true
     else if (action === "name") {
       root.settingsOpen = true
@@ -424,7 +447,11 @@ Item {
     root.centerOnGrid()
   }
 
-  Component.onCompleted: initPanIfReady()
+  Component.onCompleted: {
+    initPanIfReady()
+    if (root.active && root.serviceReady && root.unseenEvents.length > 0)
+      root.awaySummaryOpen = true
+  }
   onServiceReadyChanged: initPanIfReady()
 
   // --- traffic: small cosmetic cars wandering the road network. Purely
@@ -803,6 +830,34 @@ Item {
       ctx.quadraticCurveTo(cx - cellSize * 0.12, base - h * 0.24, cx, base - h * 0.62)
       ctx.fill()
     }
+  }
+
+  // A sparkline over one history field. Deliberately plain — the point is
+  // the shape of the trend, not readable values, which the labels carry.
+  function drawSparkline(ctx, history, field, w, h, stroke, fill) {
+    if (!history || history.length < 2) return
+    var range = Model.historyRange(history, field)
+    var span = range.max - range.min
+    var stepX = w / (history.length - 1)
+    function yFor(i) { return h - ((history[i][field] - range.min) / span) * (h - 2) - 1 }
+
+    if (fill !== "") {
+      ctx.fillStyle = fill
+      ctx.beginPath()
+      ctx.moveTo(0, h)
+      for (var f = 0; f < history.length; f++) ctx.lineTo(f * stepX, yFor(f))
+      ctx.lineTo((history.length - 1) * stepX, h)
+      ctx.closePath()
+      ctx.fill()
+    }
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = 1.5
+    ctx.beginPath()
+    for (var i = 0; i < history.length; i++) {
+      if (i === 0) ctx.moveTo(0, yFor(0))
+      else ctx.lineTo(i * stepX, yFor(i))
+    }
+    ctx.stroke()
   }
 
   function drawSpriteLot(ctx, gx, gy, cellSize, type, index) {
@@ -4205,12 +4260,12 @@ Item {
   // useless the moment the map pushed it out of view.
   Item {
     anchors.fill: parent
-    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen
+    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
 
     MouseArea {
       anchors.fill: parent
-      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen
-      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false }
+      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen
+      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false }
     }
 
     Rectangle {
@@ -4404,6 +4459,243 @@ Item {
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
           }
+        }
+      }
+    }
+
+    // "While you were away": the city keeps running with the panel shut, and
+    // since fires can destroy buildings unattended, coming back to a silently
+    // changed city was the gap this closes.
+    Rectangle {
+      id: awayCard
+      visible: root.awaySummaryOpen && root.unseenEvents.length > 0
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(360))
+      height: awayColumn.implicitHeight + Style.space(28)
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.accent
+
+      MouseArea { anchors.fill: parent }
+
+      Column {
+        id: awayColumn
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        spacing: Style.space(8)
+
+        Text {
+          text: "While you were away"
+          color: Color.menu.text
+          font.bold: true
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        Repeater {
+          model: root.unseenEvents
+
+          Row {
+            id: awayRow
+            required property var modelData
+            width: awayColumn.width
+            spacing: Style.space(6)
+
+            Rectangle {
+              width: Style.space(5); height: Style.space(5)
+              radius: width / 2
+              anchors.verticalCenter: parent.verticalCenter
+              color: awayRow.modelData.kind === "loss" || awayRow.modelData.kind === "brownout"
+                ? "#e0806a" : awayRow.modelData.kind === "milestone" ? "#7fbf7f" : Color.accent
+            }
+            Text {
+              text: Model.calendarFor(awayRow.modelData.m).monthName.substring(0, 3)
+                + " " + Model.calendarFor(awayRow.modelData.m).year
+              color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.4)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+            Text {
+              width: awayRow.width - Style.space(120)
+              text: awayRow.modelData.text
+              wrapMode: Text.WordWrap
+              color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.85)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+
+        Row {
+          spacing: Style.space(8)
+          Button { text: "Got it"; onClicked: root.acknowledgeAway() }
+          Button {
+            text: "Open history"
+            onClicked: { root.acknowledgeAway(); root.historyOpen = true }
+          }
+        }
+      }
+    }
+
+    // History: what the city has actually done over time, and what happened
+    // while nobody was looking. The city has real tradeoffs now — funding
+    // against safety, tax against happiness — and a snapshot cannot tell you
+    // whether one of them paid off.
+    Rectangle {
+      id: historyCard
+      visible: root.historyOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(400))
+      height: Math.min(parent.height - Style.space(32), historyColumn.implicitHeight + Style.space(28))
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      MouseArea { anchors.fill: parent }
+
+      Flickable {
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        contentHeight: historyColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+
+        Column {
+          id: historyColumn
+          width: parent.width
+          spacing: Style.space(10)
+
+          Text {
+            text: "History"
+            color: Color.menu.text
+            font.bold: true
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            width: parent.width
+            visible: root.cityHistory.length < 2
+            text: "Not enough history yet — the city is sampled every few months."
+            wrapMode: Text.WordWrap
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Repeater {
+            model: root.cityHistory.length >= 2 ? [
+              { field: "p", label: "Population", stroke: "#7fbf7f", fill: "rgba(127,191,127,0.16)" },
+              { field: "t", label: "Treasury", stroke: "#e0b45a", fill: "rgba(224,180,90,0.16)" },
+              { field: "h", label: "Happiness", stroke: "#6fa8dc", fill: "rgba(111,168,220,0.16)" }
+            ] : []
+
+            Column {
+              id: graphRow
+              required property var modelData
+              width: historyColumn.width
+              spacing: Style.space(2)
+
+              Row {
+                width: parent.width
+                Text {
+                  text: graphRow.modelData.label
+                  color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.65)
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Item { width: graphRow.width - 220; height: 1 }
+                Text {
+                  // Where it started against where it is now: the whole
+                  // question a graph like this is asked to answer.
+                  text: {
+                    var h = root.cityHistory
+                    if (h.length < 2) return ""
+                    var first = h[0][graphRow.modelData.field]
+                    var last = h[h.length - 1][graphRow.modelData.field]
+                    var delta = last - first
+                    return first + " → " + last
+                      + "  (" + (delta >= 0 ? "+" : "−") + Math.abs(delta) + ")"
+                  }
+                  color: Color.menu.text
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              Canvas {
+                width: historyColumn.width
+                height: Style.space(44)
+                property var series: root.cityHistory
+                onSeriesChanged: requestPaint()
+                onWidthChanged: requestPaint()
+                onPaint: {
+                  var ctx = getContext("2d")
+                  ctx.clearRect(0, 0, width, height)
+                  root.drawSparkline(ctx, root.cityHistory, graphRow.modelData.field,
+                    width, height, graphRow.modelData.stroke, graphRow.modelData.fill)
+                }
+              }
+            }
+          }
+
+          Rectangle {
+            width: parent.width; height: 1
+            visible: root.cityLog.length > 0
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.15)
+          }
+
+          Text {
+            visible: root.cityLog.length > 0
+            text: "City log"
+            color: Color.menu.text
+            font.bold: true
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Repeater {
+            model: root.cityLog
+
+            Row {
+              id: logRow
+              required property var modelData
+              required property int index
+              width: historyColumn.width
+              spacing: Style.space(6)
+
+              // Anything logged after the player last looked is still news.
+              readonly property bool unseen: root.serviceReady
+                && logRow.modelData.m > root.cityService.lastSeenMinute
+
+              Rectangle {
+                width: Style.space(5); height: Style.space(5)
+                radius: width / 2
+                anchors.verticalCenter: parent.verticalCenter
+                color: logRow.unseen ? Color.accent : "transparent"
+              }
+              Text {
+                text: Model.calendarFor(logRow.modelData.m).monthName.substring(0, 3)
+                  + " " + Model.calendarFor(logRow.modelData.m).year
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.4)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+              Text {
+                width: logRow.width - Style.space(120)
+                text: logRow.modelData.text
+                elide: Text.ElideRight
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b,
+                  logRow.unseen ? 0.95 : 0.6)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+
+          Button { text: "Done"; onClicked: root.historyOpen = false }
         }
       }
     }

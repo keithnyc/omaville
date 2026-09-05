@@ -78,6 +78,14 @@ Item {
   // shell restarts is still burning when it comes back — a disaster the
   // player can dodge by reloading is not a disaster.
   property var fires: []
+  // Bounded history for the graphs, and a newest-first event log. Both are
+  // capped in Model — they live in the save file, which has a hard read cap.
+  property var history: []
+  property var cityLog: []
+  // The last minute the player actually looked, so the panel can say what
+  // happened while they were away rather than replaying the whole log.
+  property real lastSeenMinute: 0
+  property bool brownoutActive: false
 
   property bool initialized: false
   readonly property int maxStateBytes: 65536
@@ -159,6 +167,7 @@ Item {
     root.notify(root.cityName, "Took out a " + offer.label + " — $" + offer.principal
       + " now, $" + Math.round(Model.loanPaymentFor(offer)) + " a month for "
       + offer.ticks + " months.")
+    root.logEvent("loan", "Took out a " + offer.label + " for $" + offer.principal + ".")
     flushState()
     return true
   }
@@ -200,6 +209,10 @@ Item {
     root.loans = []
     root.missedLoanTicks = 0
     root.fires = []
+    root.history = []
+    root.cityLog = []
+    root.lastSeenMinute = 0
+    root.brownoutActive = false
     root.ageMinutes = 0
     root.foundedAtMs = Date.now()
     flushState()
@@ -285,6 +298,7 @@ Item {
       }])
     }
     root.notify(root.cityName, choice.outcome)
+    root.logEvent("dilemma", event.title + ": " + choice.outcome)
     flushState()
   }
 
@@ -355,11 +369,27 @@ Item {
       }
       root.treasury = Math.max(Model.TREASURY_FLOOR, balance)
       root.ageMinutes += 1
+      // Log a brownout only when the grid crosses into overload, not every
+      // tick it stays there — otherwise one shortage floods the whole log.
+      var strained = result.load && (result.load.power < 1 || result.load.water < 1)
+      if (strained && !root.brownoutActive) {
+        root.brownoutActive = true
+        var which = result.load.power <= result.load.water ? "power" : "water"
+        root.notify(root.cityName + " — brownouts",
+          "The " + which + " grid is over capacity. Growth has stalled until you add another plant.")
+        root.logEvent("brownout", "The " + which + " grid went over capacity.")
+      } else if (!strained && root.brownoutActive) {
+        root.brownoutActive = false
+        root.logEvent("brownout", "The grid is back within capacity.")
+      }
       root.advanceDisasters()
       root.checkMilestones()
       root.checkBudget()
       root.rollEvent()
-      if (Math.round(root.ageMinutes) % 5 === 0) root.flushState()
+      if (Math.round(root.ageMinutes) % Model.HISTORY_EVERY_TICKS === 0) {
+        root.sampleHistory(result.income, result.upkeep)
+        root.flushState()
+      }
     }
   }
 
@@ -374,12 +404,15 @@ Item {
       root.grid = result.grid
       var wasBurning = root.fires.length
       root.fires = result.fires
-      if (result.destroyed > 0)
-        root.notify(root.cityName + " — fire",
-          result.destroyed === 1 ? "A building has been lost to the fire."
-            : result.destroyed + " buildings have been lost to the fire.")
-      else if (result.fires.length === 0 && wasBurning > 0)
+      if (result.destroyed > 0) {
+        var lost = result.destroyed === 1 ? "A building has been lost to the fire."
+          : result.destroyed + " buildings have been lost to the fire."
+        root.notify(root.cityName + " — fire", lost)
+        root.logEvent("loss", lost)
+      } else if (result.fires.length === 0 && wasBurning > 0) {
         root.notify(root.cityName, "The fire is out.")
+        root.logEvent("fire", "A fire was put out.")
+      }
     }
 
     var ignition = Model.rollFireStart(root.grid, root.gridSize, root.fires, utilities, root.funding)
@@ -387,19 +420,43 @@ Item {
       root.fires = root.fires.concat([{ index: ignition, ticks: 0 }])
       var covered = Model.isCovered(root.gridSize, utilities.fire, ignition,
         Model.FIRE_RADIUS * Model.fundingRadiusScale(Model.fundingLevel(root.funding, "F")))
-      root.notify(root.cityName + " — fire!",
-        covered ? "A fire has broken out. Crews are on the scene."
-          : "A fire has broken out with no fire station in range.")
+      var opening = covered ? "A fire broke out. Crews are on the scene."
+        : "A fire broke out with no fire station in range."
+      root.notify(root.cityName + " — fire!", opening)
+      root.logEvent("fire", opening)
       flushState()
     }
+  }
+
+  function logEvent(kind, text) {
+    root.cityLog = Model.pushLogEntry(root.cityLog, root.ageMinutes, kind, text)
+  }
+
+  // Called when the player opens the panel: everything logged after this
+  // point is "new" until they look again.
+  function markSeen() {
+    if (root.ageMinutes === root.lastSeenMinute) return
+    root.lastSeenMinute = root.ageMinutes
+    flushState()
+  }
+
+  readonly property var unseenLog: Model.logSince(root.cityLog, root.lastSeenMinute)
+
+  function sampleHistory(income, upkeep) {
+    root.history = Model.recordHistory(root.history, {
+      minute: root.ageMinutes, population: root.population, treasury: root.treasury,
+      happiness: root.happiness, income: income, upkeep: upkeep
+    })
   }
 
   function checkMilestones() {
     var fresh = Model.newMilestones(root.population, root.reachedMilestones)
     if (fresh.length === 0) return
     root.reachedMilestones = root.reachedMilestones.concat(fresh)
-    for (var i = 0; i < fresh.length; i++)
+    for (var i = 0; i < fresh.length; i++) {
       root.notify(root.cityName, "Population reached " + fresh[i] + "!")
+      root.logEvent("milestone", "Population reached " + fresh[i] + ".")
+    }
     flushState()
   }
 
@@ -408,6 +465,7 @@ Item {
       root.budgetCrisisActive = true
       root.notify(root.cityName + " — budget crisis",
         "The treasury has gone negative. Raise taxes or ease off building.")
+      root.logEvent("budget", "The treasury went negative.")
       flushState()
     } else if (root.treasury >= 0 && root.budgetCrisisActive) {
       root.budgetCrisisActive = false
@@ -448,7 +506,10 @@ Item {
       funding: root.funding,
       loans: root.loans,
       missedLoanTicks: root.missedLoanTicks,
-      fires: root.fires
+      fires: root.fires,
+      history: Model.packHistory(root.history),
+      cityLog: root.cityLog,
+      lastSeenMinute: root.lastSeenMinute
     }, null, 2) + "\n")
   }
 
@@ -509,6 +570,10 @@ Item {
       loans = Array.isArray(saved.loans) ? saved.loans : []
       missedLoanTicks = Math.max(0, Math.round(num(saved.missedLoanTicks, 0)))
       fires = Array.isArray(saved.fires) ? saved.fires : []
+      // Pre-pack saves stored history as an array; both decode the same way.
+      history = Array.isArray(saved.history) ? saved.history : Model.unpackHistory(saved.history)
+      cityLog = Array.isArray(saved.cityLog) ? saved.cityLog : []
+      lastSeenMinute = Math.max(0, num(saved.lastSeenMinute, 0))
     } catch (error) {
       saveProblem = "not valid JSON (" + error + ")"
       foundedAtMs = 0

@@ -595,7 +595,9 @@ function nearbyZoneEffect(grid, gridSize, index) {
 // and a water plant's coverage — served, not just zoned. Losing any one
 // of the three (plant bulldozed, road cut) puts it at decay risk exactly
 // like a road disconnect always has.
-function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding) {
+function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load) {
+  var powerSatisfaction = load ? load.power : 1
+  var waterSatisfaction = load ? load.water : 1
   var happinessFactor = clamp(happiness / 70, 0.3, 1.5)
   var baseGrowthChance = 0.15
   var baseDecayChance = 0.08
@@ -615,9 +617,14 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding) 
 
     var zoneEffect = tile.type === TILE_RES ? nearbyZoneEffect(grid, gridSize, i) : null
 
+    // Coverage says a plant reaches this tile; load says whether the network
+    // can actually serve it this month. An overloaded grid browns out tile by
+    // tile rather than failing citywide, so growth slows before it stops.
     var connected = isRoadAdjacent(grid, gridSize, i)
       && isCovered(gridSize, utilities.power, i, POWER_RADIUS)
+      && (powerSatisfaction >= 1 || Math.random() < powerSatisfaction)
       && isCovered(gridSize, utilities.water, i, WATER_RADIUS)
+      && (waterSatisfaction >= 1 || Math.random() < waterSatisfaction)
     if (connected && tile.level < 3 && happiness >= 20) {
       var growthChance = baseGrowthChance * demand[tile.type] * happinessFactor
       if (zoneEffect) {
@@ -781,7 +788,8 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
   var happiness = Math.round(clamp(computeHappiness(taxRatePercent, stats) + happinessModifier, 0, 100))
   var utilities = findUtilities(grid)
   var demand = computeDemand(stats)
-  var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding)
+  var load = utilityLoad(grid, stats)
+  var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load)
   var upkeep = computeUpkeep(stats, funding)
   var income = computeIncome(stats.taxablePopulation, taxRatePercent) * incomeMultiplier
   return {
@@ -799,7 +807,8 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
     comCount: stats.comCount,
     indCount: stats.indCount,
     powerCount: stats.powerCount,
-    waterCount: stats.waterCount
+    waterCount: stats.waterCount,
+    load: load
   }
 }
 
@@ -1530,17 +1539,34 @@ function planningAdvice(stats, demand) {
     stats.resCount + " residential, " + stats.comCount + " commercial, " + stats.indCount + " industrial.")
 }
 
-function utilitiesAdvice(coverage) {
+function utilitiesAdvice(coverage, load) {
   var power = coverageRow(coverage, "power"), water = coverageRow(coverage, "water")
   var worst = power.unmet >= water.unmet ? power : water
   var label = worst === power ? "Power" : "Water"
+  // A coverage gap is a hard blocker, so it outranks a capacity problem.
   if (worst.unmet > 0)
     return advice("utilities", SEVERITY_URGENT, label + " is not reaching everyone",
       worst.unmet + " residents have no " + label.toLowerCase() + " (" + worst.coverage
       + "% covered). Uncovered zones cannot grow at all until this is fixed.",
       worst === power ? "power" : "water")
+
+  if (load) {
+    var powerPct = loadPercent(load.powerDemand, load.powerCapacity)
+    var waterPct = loadPercent(load.waterDemand, load.waterCapacity)
+    var strained = powerPct >= waterPct
+    var pct = strained ? powerPct : waterPct
+    var which = strained ? "power" : "water"
+    if (pct > 100)
+      return advice("utilities", SEVERITY_URGENT, "The " + which + " grid is overloaded",
+        "Draw is at " + pct + "% of capacity, so buildings are browning out and growth has "
+        + "stalled across the city. Build another plant, or upgrade an existing one.", which)
+    if (pct >= 85)
+      return advice("utilities", SEVERITY_WATCH, "The " + which + " grid is near capacity",
+        "At " + pct + "% of capacity. A little more growth and it starts browning out.", which)
+  }
+
   return advice("utilities", SEVERITY_OK, "Everyone is connected",
-    "Power and water both reach the whole city.")
+    "Power and water reach the whole city, with capacity to spare.")
 }
 
 function safetyAdvice(coverage, funding, fires) {
@@ -1623,7 +1649,7 @@ function financeAdvice(stats, income, upkeep, treasury, loans, taxRatePercent) {
 function cityAdvice(ctx) {
   return [
     planningAdvice(ctx.stats, ctx.demand),
-    utilitiesAdvice(ctx.coverage),
+    utilitiesAdvice(ctx.coverage, ctx.load),
     safetyAdvice(ctx.coverage, ctx.funding, ctx.fires),
     wellbeingAdvice(ctx.coverage, ctx.stats, ctx.funding),
     financeAdvice(ctx.stats, ctx.income, ctx.upkeep, ctx.treasury, ctx.loans, ctx.taxRatePercent)
@@ -1823,4 +1849,129 @@ function advanceFires(grid, gridSize, fires, utilities, funding) {
     grid: next, fires: stillBurning, contained: contained,
     destroyed: destroyed, spread: spread.length
   }
+}
+
+// --- utility capacity -----------------------------------------------------
+// Plants used to serve unlimited buildings inside their radius: only reach
+// mattered, never load, so one generator could power a metropolis and utility
+// planning was a one-time puzzle rather than an ongoing problem. Capacity is
+// measured in building-levels served, the same unit as builtDensity, so a
+// district that grows denser draws more without spreading any wider.
+var POWER_CAPACITY_PER_TIER = [40, 90, 200]
+var WATER_CAPACITY_PER_TIER = [30, 70, 160]
+
+function utilityCapacity(grid) {
+  var power = 0, water = 0
+  for (var i = 0; i < grid.length; i++) {
+    var tile = parseTile(grid[i])
+    if (tile.type === TILE_POWER) power += POWER_CAPACITY_PER_TIER[tile.level]
+    else if (tile.type === TILE_WATER) water += WATER_CAPACITY_PER_TIER[tile.level]
+  }
+  return { power: power, water: water }
+}
+
+// Demand is builtDensity — every level of every R/C/I building draws. An
+// over-subscribed grid browns out: satisfaction is the share of draw the
+// network can actually meet, applied per tile per tick as a rolling blackout
+// rather than a citywide cliff, so an overloaded city degrades instead of
+// stopping dead.
+function utilityLoad(grid, stats) {
+  var capacity = utilityCapacity(grid)
+  var demand = stats.builtDensity
+  return {
+    powerDemand: demand, powerCapacity: capacity.power,
+    waterDemand: demand, waterCapacity: capacity.water,
+    power: demand === 0 ? 1 : clamp(capacity.power / demand, 0, 1),
+    water: demand === 0 ? 1 : clamp(capacity.water / demand, 0, 1)
+  }
+}
+
+function loadPercent(demand, capacity) {
+  if (capacity <= 0) return demand > 0 ? 999 : 0
+  return Math.round(demand / capacity * 100)
+}
+
+// --- history and the city log ---------------------------------------------
+// The city has real tradeoffs now — funding against safety, tax against
+// happiness, capacity against cost — but no instrument to judge them by. A
+// snapshot cannot answer "did cutting fire funding cost me more than it
+// saved". Both series are capped ring buffers: this all lives in the save
+// file, which has a hard read cap (see packGrid), so history is deliberately
+// bounded rather than allowed to grow forever.
+var HISTORY_MAX = 72
+var HISTORY_EVERY_TICKS = 5
+var LOG_MAX = 24
+
+function recordHistory(history, sample) {
+  var next = (history || []).slice()
+  next.push({
+    m: Math.round(sample.minute), p: Math.round(sample.population),
+    t: Math.round(sample.treasury), h: Math.round(sample.happiness),
+    i: Math.round(sample.income), u: Math.round(sample.upkeep)
+  })
+  while (next.length > HISTORY_MAX) next.shift()
+  return next
+}
+
+// Newest first, so "what happened while I was away" reads top-down and the
+// cap drops the oldest entry rather than the most recent one.
+function pushLogEntry(log, minute, kind, text) {
+  var next = [{ m: Math.round(minute), kind: kind, text: text }].concat(log || [])
+  while (next.length > LOG_MAX) next.pop()
+  return next
+}
+
+function logSince(log, minute) {
+  var out = []
+  for (var i = 0; i < (log || []).length; i++) {
+    if (log[i].m <= minute) break
+    out.push(log[i])
+  }
+  return out
+}
+
+// Min/max across one history field, for scaling a sparkline. Returns a flat
+// band around a constant series so a city that never changed still draws a
+// sensible line instead of dividing by zero.
+function historyRange(history, field) {
+  if (!history || history.length === 0) return { min: 0, max: 1 }
+  var min = history[0][field], max = history[0][field]
+  for (var i = 1; i < history.length; i++) {
+    if (history[i][field] < min) min = history[i][field]
+    if (history[i][field] > max) max = history[i][field]
+  }
+  if (max - min < 1) { min = min - 1; max = max + 1 }
+  return { min: min, max: max }
+}
+
+// History is by far the chattiest thing in the save: pretty-printed, each
+// sample costs ~100 bytes of braces and indentation for six small integers.
+// Packed as delimited text it costs about a quarter of that, which matters
+// because overflowing the read cap destroys the city (see packGrid).
+function packHistory(history) {
+  var out = []
+  for (var i = 0; i < (history || []).length; i++) {
+    var h = history[i]
+    out.push([h.m, h.p, h.t, h.h, h.i, h.u].join(","))
+  }
+  return out.join(";")
+}
+
+function unpackHistory(packed) {
+  if (typeof packed !== "string" || packed === "") return []
+  var rows = packed.split(";"), out = []
+  for (var i = 0; i < rows.length; i++) {
+    var f = rows[i].split(",")
+    if (f.length !== 6) continue
+    var sample = { m: +f[0], p: +f[1], t: +f[2], h: +f[3], i: +f[4], u: +f[5] }
+    var ok = true
+    for (var k in sample) if (!isFinite(sample[k])) ok = false
+    if (ok) out.push(sample)
+  }
+  return out
+}
+
+var LOG_KIND_LABELS = {
+  fire: "Fire", loss: "Destroyed", milestone: "Milestone",
+  loan: "Borrowed", brownout: "Brownout", dilemma: "Decision", budget: "Budget"
 }
