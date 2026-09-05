@@ -74,6 +74,10 @@ Item {
   // stalls repayment rather than pushing the treasury below its floor.
   property var loans: []
   property int missedLoanTicks: 0
+  // Active fires: [{ index, ticks }]. Persisted so a fire burning when the
+  // shell restarts is still burning when it comes back — a disaster the
+  // player can dodge by reloading is not a disaster.
+  property var fires: []
 
   property bool initialized: false
   readonly property int maxStateBytes: 65536
@@ -195,6 +199,7 @@ Item {
     root.funding = Model.defaultFunding()
     root.loans = []
     root.missedLoanTicks = 0
+    root.fires = []
     root.ageMinutes = 0
     root.foundedAtMs = Date.now()
     flushState()
@@ -350,10 +355,42 @@ Item {
       }
       root.treasury = Math.max(Model.TREASURY_FLOOR, balance)
       root.ageMinutes += 1
+      root.advanceDisasters()
       root.checkMilestones()
       root.checkBudget()
       root.rollEvent()
       if (Math.round(root.ageMinutes) % 5 === 0) root.flushState()
+    }
+  }
+
+  // Fires burn, spread and are put out here rather than inside tickGrid,
+  // because unlike growth they are events with a beginning and an end that
+  // the player should be told about — the whole reason fire stopped being an
+  // invisible dice roll.
+  function advanceDisasters() {
+    var utilities = Model.findUtilities(root.grid)
+    if (root.fires.length > 0) {
+      var result = Model.advanceFires(root.grid, root.gridSize, root.fires, utilities, root.funding)
+      root.grid = result.grid
+      var wasBurning = root.fires.length
+      root.fires = result.fires
+      if (result.destroyed > 0)
+        root.notify(root.cityName + " — fire",
+          result.destroyed === 1 ? "A building has been lost to the fire."
+            : result.destroyed + " buildings have been lost to the fire.")
+      else if (result.fires.length === 0 && wasBurning > 0)
+        root.notify(root.cityName, "The fire is out.")
+    }
+
+    var ignition = Model.rollFireStart(root.grid, root.gridSize, root.fires, utilities, root.funding)
+    if (ignition >= 0) {
+      root.fires = root.fires.concat([{ index: ignition, ticks: 0 }])
+      var covered = Model.isCovered(root.gridSize, utilities.fire, ignition,
+        Model.FIRE_RADIUS * Model.fundingRadiusScale(Model.fundingLevel(root.funding, "F")))
+      root.notify(root.cityName + " — fire!",
+        covered ? "A fire has broken out. Crews are on the scene."
+          : "A fire has broken out with no fire station in range.")
+      flushState()
     }
   }
 
@@ -410,7 +447,8 @@ Item {
       eventFrequency: root.eventFrequency,
       funding: root.funding,
       loans: root.loans,
-      missedLoanTicks: root.missedLoanTicks
+      missedLoanTicks: root.missedLoanTicks,
+      fires: root.fires
     }, null, 2) + "\n")
   }
 
@@ -470,6 +508,7 @@ Item {
       funding = loadedFunding
       loans = Array.isArray(saved.loans) ? saved.loans : []
       missedLoanTicks = Math.max(0, Math.round(num(saved.missedLoanTicks, 0)))
+      fires = Array.isArray(saved.fires) ? saved.fires : []
     } catch (error) {
       saveProblem = "not valid JSON (" + error + ")"
       foundedAtMs = 0

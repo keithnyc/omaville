@@ -114,15 +114,15 @@ var WATER_UPKEEP = 4
 
 // Fire/police are protection, not hookups — unlike power/water they never
 // block growth outright (retrofitting that onto an existing city would stall
-// every zone at once the moment this shipped). Instead an uncovered built
-// tile carries a small *extra* chance of losing a level each tick, on top of
-// whatever the normal connected/happiness decay already rolls — a slow tax
-// on skipping them rather than a hard requirement.
+// every zone at once the moment this shipped). Police is a small *extra*
+// chance of an uncovered tile losing a level each tick, a slow tax on
+// skipping it. Fire was the same until it became a real spreading disaster
+// instead (see FIRE_CHANCE_BASE and advanceFires) — FIRE_RADIUS still sets
+// how far a station reaches, it just governs containment now, not a dice roll.
 var FIRE_RADIUS = 9
 var POLICE_RADIUS = 9
 var FIRE_UPKEEP = 2
 var POLICE_UPKEEP = 2
-var FIRE_RISK_CHANCE = 0.03
 var CRIME_RISK_CHANCE = 0.03
 
 // --- department funding ---------------------------------------------------
@@ -603,11 +603,9 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding) 
   // Funding buys reach and safety. Resolved once per tick rather than per
   // tile — these are whole-department settings, and this loop runs over every
   // tile on a 64x64 grid.
-  var fireRadius = FIRE_RADIUS * fundingRadiusScale(fundingLevel(funding, "F"))
   var policeRadius = POLICE_RADIUS * fundingRadiusScale(fundingLevel(funding, "S"))
   var schoolRadius = SCHOOL_RADIUS * fundingRadiusScale(fundingLevel(funding, "N"))
   var medicalRadius = MEDICAL_RADIUS * fundingRadiusScale(fundingLevel(funding, "H"))
-  var fireRisk = FIRE_RISK_CHANCE * fundingRiskScale(fundingLevel(funding, "F"))
   var crimeRisk = CRIME_RISK_CHANCE * fundingRiskScale(fundingLevel(funding, "S"))
 
   var next = grid.slice()
@@ -642,15 +640,14 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding) 
       if (Math.random() < baseDecayChance) next[i] = makeTile(tile.type, tile.level - 1)
     }
 
-    // Fire/crime risk: independent of the connected/happiness decay above,
-    // and only ever a small extra chance to slip a level — never a hard
-    // block on growth the way power/water are.
+    // Crime risk: independent of the connected/happiness decay above, and
+    // only ever a small extra chance to slip a level — never a hard block on
+    // growth the way power/water are. Fire used to work the same way, but an
+    // invisible dice roll meant a funded fire station never visibly did
+    // anything; it is now a real spreading fire instead (see advanceFires),
+    // which is why only police is rolled here.
     var afterTile = parseTile(next[i])
     if (afterTile.level > 0) {
-      if (!isCovered(gridSize, utilities.fire, i, fireRadius) && Math.random() < fireRisk) {
-        afterTile = parseTile(next[i])
-        if (afterTile.level > 0) next[i] = makeTile(afterTile.type, afterTile.level - 1)
-      }
       if (!isCovered(gridSize, utilities.police, i, policeRadius) && Math.random() < crimeRisk) {
         afterTile = parseTile(next[i])
         if (afterTile.level > 0) next[i] = makeTile(afterTile.type, afterTile.level - 1)
@@ -1546,7 +1543,13 @@ function utilitiesAdvice(coverage) {
     "Power and water both reach the whole city.")
 }
 
-function safetyAdvice(coverage, funding) {
+function safetyAdvice(coverage, funding, fires) {
+  // An active fire outranks everything else this advisor could say.
+  if (fires && fires.length > 0)
+    return advice("safety", SEVERITY_URGENT,
+      fires.length === 1 ? "A building is on fire" : fires.length + " fires burning",
+      "Fire crews contain a blaze faster where they have cover and funding. "
+      + "Anything still burning is losing a level at a time.", "fire")
   var fire = coverageRow(coverage, "fire"), police = coverageRow(coverage, "police")
   var worst = fire.unmet >= police.unmet ? fire : police
   var isFire = worst === fire
@@ -1621,7 +1624,7 @@ function cityAdvice(ctx) {
   return [
     planningAdvice(ctx.stats, ctx.demand),
     utilitiesAdvice(ctx.coverage),
-    safetyAdvice(ctx.coverage, ctx.funding),
+    safetyAdvice(ctx.coverage, ctx.funding, ctx.fires),
     wellbeingAdvice(ctx.coverage, ctx.stats, ctx.funding),
     financeAdvice(ctx.stats, ctx.income, ctx.upkeep, ctx.treasury, ctx.loans, ctx.taxRatePercent)
   ]
@@ -1701,4 +1704,123 @@ function growthBlocker(grid, gridSize, index, utilities, happiness) {
 // 0..1 for the land-value heatmap, against the bonus cap a tile can reach.
 function landValueFraction(grid, gridSize, index) {
   return clamp(propertyValueBonus(grid, gridSize, index) / (MAX_PROPERTY_BONUS + 12), 0, 1)
+}
+
+// --- disasters ------------------------------------------------------------
+// Fire used to be an invisible dice roll that quietly shaved a level off an
+// uncovered building, which meant the fire station a player funded never
+// visibly earned its money. A real fire starts somewhere, spreads if nobody
+// puts it out, and is contained faster by coverage and by how well that
+// department is funded — so protection becomes something you watch work
+// rather than a number you take on faith.
+var FIRE_CHANCE_BASE = 0.035
+// Hard cap on simultaneous fires. An idle game that can be left alone for an
+// hour must not be able to cascade into a razed city while nobody is looking.
+var FIRE_MAX_ACTIVE = 10
+var FIRE_CONTAIN_COVERED = 0.45
+var FIRE_CONTAIN_UNCOVERED = 0.08
+var FIRE_SPREAD_COVERED = 0.07
+var FIRE_SPREAD_UNCOVERED = 0.18
+var FIRE_DAMAGE_CHANCE = 0.4
+
+function isBurnable(tile) {
+  return (tile.type === TILE_RES || tile.type === TILE_COM || tile.type === TILE_IND)
+    && tile.level > 0
+}
+
+// One pass splitting everything that can burn into what the fire service can
+// reach and what it can't. Computed once per tick and reused for both the
+// start chance and the choice of site.
+function fireSurvey(grid, gridSize, utilities, funding) {
+  var radius = FIRE_RADIUS * fundingRadiusScale(fundingLevel(funding, "F"))
+  var covered = [], exposed = []
+  for (var i = 0; i < grid.length; i++) {
+    var tile = parseTile(grid[i])
+    if (!isBurnable(tile)) continue
+    if (isCovered(gridSize, utilities.fire, i, radius)) covered.push(i)
+    else exposed.push(i)
+  }
+  return { covered: covered, exposed: exposed, built: covered.length + exposed.length }
+}
+
+// A well-covered city still burns occasionally — just far less often. The
+// floor is deliberate: perfect coverage should make fire rare, not abolish it.
+function fireStartChance(survey) {
+  if (survey.built === 0) return 0
+  return FIRE_CHANCE_BASE * (0.25 + 0.75 * (survey.exposed.length / survey.built))
+}
+
+// Fires overwhelmingly start where nobody is watching, which is what makes a
+// coverage gap feel like a gap rather than a statistic.
+function pickFireSite(survey, activeIndices) {
+  var pool = survey.exposed.length > 0
+    && (survey.covered.length === 0 || Math.random() < 0.8) ? survey.exposed : survey.covered
+  if (pool.length === 0) return -1
+  for (var attempt = 0; attempt < 6; attempt++) {
+    var candidate = pool[Math.floor(Math.random() * pool.length)]
+    if (activeIndices.indexOf(candidate) < 0) return candidate
+  }
+  return -1
+}
+
+function rollFireStart(grid, gridSize, fires, utilities, funding) {
+  if (fires.length >= FIRE_MAX_ACTIVE) return -1
+  var survey = fireSurvey(grid, gridSize, utilities, funding)
+  if (Math.random() >= fireStartChance(survey)) return -1
+  var active = []
+  for (var i = 0; i < fires.length; i++) active.push(fires[i].index)
+  return pickFireSite(survey, active)
+}
+
+// One tick of every active fire: contain, damage, spread. Returns the new
+// grid and fire list plus what happened, so the caller can notify without
+// re-deriving it.
+function advanceFires(grid, gridSize, fires, utilities, funding) {
+  var next = grid.slice()
+  var stillBurning = []
+  var contained = 0, destroyed = 0, spread = []
+  var radius = FIRE_RADIUS * fundingRadiusScale(fundingLevel(funding, "F"))
+  var level = fundingLevel(funding, "F")
+
+  for (var i = 0; i < fires.length; i++) {
+    var fire = fires[i]
+    var tile = parseTile(next[fire.index])
+    // Bulldozed, burnt out, or otherwise no longer a building: nothing to burn.
+    if (!isBurnable(tile)) { contained++; continue }
+
+    var covered = isCovered(gridSize, utilities.fire, fire.index, radius)
+    // Funding buys a faster response, not just a wider one.
+    var containChance = covered ? FIRE_CONTAIN_COVERED * level : FIRE_CONTAIN_UNCOVERED
+    if (Math.random() < containChance) { contained++; continue }
+
+    if (Math.random() < FIRE_DAMAGE_CHANCE) {
+      var damaged = parseTile(next[fire.index])
+      next[fire.index] = makeTile(damaged.type, damaged.level - 1)
+      if (damaged.level - 1 <= 0) destroyed++
+    }
+
+    var spreadChance = covered ? FIRE_SPREAD_COVERED : FIRE_SPREAD_UNCOVERED
+    if (Math.random() < spreadChance && fires.length + spread.length < FIRE_MAX_ACTIVE) {
+      var neighbors = neighborIndices(gridSize, fire.index)
+      var options = []
+      for (var n = 0; n < neighbors.length; n++) {
+        if (!isBurnable(parseTile(next[neighbors[n]]))) continue
+        var already = false
+        for (var f = 0; f < fires.length; f++) if (fires[f].index === neighbors[n]) already = true
+        for (var g = 0; g < spread.length; g++) if (spread[g] === neighbors[n]) already = true
+        if (!already) options.push(neighbors[n])
+      }
+      if (options.length > 0) spread.push(options[Math.floor(Math.random() * options.length)])
+    }
+
+    if (isBurnable(parseTile(next[fire.index])))
+      stillBurning.push({ index: fire.index, ticks: (fire.ticks || 0) + 1 })
+    else contained++
+  }
+
+  for (var s = 0; s < spread.length; s++) stillBurning.push({ index: spread[s], ticks: 0 })
+  return {
+    grid: next, fires: stillBurning, contained: contained,
+    destroyed: destroyed, spread: spread.length
+  }
 }

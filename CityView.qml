@@ -168,6 +168,8 @@ Item {
     ? Model.upkeepBreakdown(root.budgetStats, root.cityService.funding) : []
   // Active map data overlay ("" = off). The advisors name a problem; this is
   // how the player finds it on a 4096-tile map instead of hunting by hand.
+  readonly property var fires: root.serviceReady ? root.cityService.fires : []
+  readonly property bool cityBurning: root.fires.length > 0
   property string overlayMode: ""
   readonly property var overlayDef: root.overlayMode !== "" ? Model.overlayDef(root.overlayMode) : null
   function setOverlay(mode) { root.overlayMode = root.overlayMode === mode ? "" : mode }
@@ -188,6 +190,7 @@ Item {
     treasury: root.treasury,
     funding: root.cityService.funding,
     loans: root.cityService.loans,
+    fires: root.fires,
     taxRatePercent: root.taxRatePercent
   }) : []
   readonly property var topAdvice: root.cityAdvice.length > 0 ? Model.topAdvice(root.cityAdvice) : null
@@ -767,6 +770,38 @@ Item {
         ctx.strokeRect(pcol * cellSize - offsetX + 1, prow * cellSize - offsetY + 1,
           cellSize - 2, cellSize - 2)
       }
+    }
+  }
+
+  // Burning tiles. Drawn on their own animated layer rather than into the
+  // tile canvas, so the flicker never drags a full city re-render with it.
+  function drawFires(ctx, cellSize, offsetX, offsetY, width, height, phase) {
+    for (var i = 0; i < root.fires.length; i++) {
+      var index = root.fires[i].index
+      var col = index % root.gridSize, row = Math.floor(index / root.gridSize)
+      var gx = col * cellSize - offsetX, gy = row * cellSize - offsetY
+      if (gx < -cellSize || gy < -cellSize || gx > width || gy > height) continue
+
+      // Two out-of-step flickers so neighbouring fires don't pulse in unison.
+      var flicker = 0.55 + 0.45 * Math.abs(Math.sin(phase + index * 0.7))
+      ctx.fillStyle = Qt.rgba(0.95, 0.35, 0.12, 0.30 + 0.25 * flicker)
+      ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+      var cx = gx + cellSize * 0.5, base = gy + cellSize * 0.82
+      var h = cellSize * (0.42 + 0.16 * flicker)
+      ctx.fillStyle = Qt.rgba(0.98, 0.55, 0.12, 0.92)
+      ctx.beginPath()
+      ctx.moveTo(cx, base - h)
+      ctx.quadraticCurveTo(cx + cellSize * 0.26, base - h * 0.45, cx + cellSize * 0.16, base)
+      ctx.lineTo(cx - cellSize * 0.16, base)
+      ctx.quadraticCurveTo(cx - cellSize * 0.26, base - h * 0.45, cx, base - h)
+      ctx.fill()
+      ctx.fillStyle = Qt.rgba(1.0, 0.88, 0.42, 0.95)
+      ctx.beginPath()
+      ctx.moveTo(cx, base - h * 0.62)
+      ctx.quadraticCurveTo(cx + cellSize * 0.12, base - h * 0.24, cx, base - cellSize * 0.04)
+      ctx.quadraticCurveTo(cx - cellSize * 0.12, base - h * 0.24, cx, base - h * 0.62)
+      ctx.fill()
     }
   }
 
@@ -3890,6 +3925,43 @@ Item {
         // gets one: the blink needs to redraw often, and that shouldn't
         // mean redrawing every tile in the viewport just to animate a
         // few small icons.
+        // Fires: the one thing on the map that is actively going wrong, so it
+        // sits above every other layer and animates regardless of overlay mode.
+        Canvas {
+          id: fireCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.viewportWidth
+          height: root.viewportHeight
+          visible: root.cityBurning
+
+          property real offsetX: root.panX
+          property real offsetY: root.panY
+          property real cellSize: root.effectiveCellSize
+          property var fireTiles: root.fires
+          property real phase: 0
+          onOffsetXChanged: requestPaint()
+          onOffsetYChanged: requestPaint()
+          onCellSizeChanged: requestPaint()
+          onFireTilesChanged: requestPaint()
+          onPhaseChanged: requestPaint()
+
+          // Only runs while something is actually burning — an idle city pays
+          // nothing for this layer existing.
+          NumberAnimation on phase {
+            running: root.active && root.cityBurning
+            loops: Animation.Infinite
+            from: 0; to: Math.PI * 2
+            duration: 1100
+          }
+
+          onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            if (!root.cityBurning) return
+            root.drawFires(ctx, cellSize, offsetX, offsetY, width, height, phase)
+          }
+        }
+
         Canvas {
           id: utilityWarningCanvas
           anchors.horizontalCenter: parent.horizontalCenter
