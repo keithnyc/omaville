@@ -66,6 +66,14 @@ Item {
   // deliberately leaves this alone (see resetCity) so picking "Off" once
   // doesn't mean re-picking it for every fresh city after.
   property real eventFrequency: 1.0
+  // Per-department budget levels (0.5-1.5, see Model.FUNDABLE_SERVICES). City
+  // state, not a preference — a new city starts every department at 100%.
+  property var funding: Model.defaultFunding()
+  // Outstanding municipal loans (Model.LOAN_OFFERS). Repaid a slice per
+  // tick; a tick the city cannot afford the payment is a missed one, which
+  // stalls repayment rather than pushing the treasury below its floor.
+  property var loans: []
+  property int missedLoanTicks: 0
 
   property bool initialized: false
   readonly property int maxStateBytes: 65536
@@ -132,6 +140,25 @@ Item {
     return true
   }
 
+  // Borrowing is gated on the city being able to service the debt (see
+  // Model.canBorrow), so a loan is a lever for a mayor with a plan rather
+  // than an infinite hole for one without.
+  function borrow(offerId) {
+    if (!root.initialized) return false
+    var offer = Model.loanOffer(offerId)
+    if (!offer) return false
+    var stats = Model.summarize(root.grid)
+    var income = Model.computeIncome(stats.taxablePopulation, root.taxRatePercent)
+    if (!Model.canBorrow(offer, root.loans, root.population, income).ok) return false
+    root.loans = Model.takeLoan(root.loans, offer, root.ageMinutes)
+    root.treasury += offer.principal
+    root.notify(root.cityName, "Took out a " + offer.label + " — $" + offer.principal
+      + " now, $" + Math.round(Model.loanPaymentFor(offer)) + " a month for "
+      + offer.ticks + " months.")
+    flushState()
+    return true
+  }
+
   function setTaxRate(percent) {
     var clamped = Math.max(0, Math.min(30, Math.round(percent)))
     if (clamped === root.taxRatePercent) return
@@ -165,6 +192,9 @@ Item {
     root.pendingEvents = []
     root.activeEffects = []
     root.eventChance = Model.EVENT_CHANCE_MAX
+    root.funding = Model.defaultFunding()
+    root.loans = []
+    root.missedLoanTicks = 0
     root.ageMinutes = 0
     root.foundedAtMs = Date.now()
     flushState()
@@ -185,6 +215,28 @@ Item {
     if (n === root.eventFrequency) return
     root.eventFrequency = n
     flushState()
+  }
+
+  // Funding is charged per resident served every tick, so this is the one
+  // spending decision that keeps scaling with the city instead of being a
+  // one-off purchase — raising a department buys coverage radius and (for
+  // fire/police) lower incident risk, and starving one is a real saving with
+  // a real cost. Assigning a fresh object rather than mutating in place so
+  // QML property bindings on `funding` actually re-evaluate.
+  function setFunding(type, value) {
+    if (Model.FUNDABLE_SERVICES.indexOf(type) < 0) return false
+    var level = Number(value)
+    if (!isFinite(level)) return false
+    level = Model.clamp(level, Model.FUNDING_MIN, Model.FUNDING_MAX)
+    if (level === Model.fundingLevel(root.funding, type)) return false
+    var next = {}
+    for (var i = 0; i < Model.FUNDABLE_SERVICES.length; i++) {
+      var key = Model.FUNDABLE_SERVICES[i]
+      next[key] = key === type ? level : Model.fundingLevel(root.funding, key)
+    }
+    root.funding = next
+    flushState()
+    return true
   }
 
   function rollEvent() {
@@ -272,13 +324,31 @@ Item {
       root.activeEffects = stillActive
 
       var result = Model.advanceCity(root.grid, root.gridSize, root.taxRatePercent,
-        happinessModifier, incomeMultiplier)
+        happinessModifier, incomeMultiplier, root.funding)
       root.grid = result.grid
       root.population = result.population
       root.jobs = result.jobs
       root.happiness = result.happiness
       root.demand = result.demand
-      root.treasury = Math.max(Model.TREASURY_FLOOR, root.treasury + result.incomeDelta)
+      var balance = root.treasury + result.incomeDelta
+      // Debt service comes out after the month's income. A payment the city
+      // genuinely cannot make is missed rather than forced: the loan simply
+      // doesn't advance, so a struggling mayor stalls their repayment instead
+      // of being shoved under the treasury floor by it.
+      var due = Model.totalLoanPayment(root.loans)
+      if (due > 0) {
+        if (balance - due >= Model.TREASURY_FLOOR) {
+          balance -= due
+          root.loans = Model.advanceLoans(root.loans)
+          if (root.missedLoanTicks !== 0) root.missedLoanTicks = 0
+        } else {
+          root.missedLoanTicks += 1
+          if (root.missedLoanTicks === 3)
+            root.notify(root.cityName + " — missed payment",
+              "The city cannot cover its loan repayments. Cut spending or raise taxes.")
+        }
+      }
+      root.treasury = Math.max(Model.TREASURY_FLOOR, balance)
       root.ageMinutes += 1
       root.checkMilestones()
       root.checkBudget()
@@ -337,7 +407,10 @@ Item {
       pendingEvents: root.pendingEvents,
       activeEffects: root.activeEffects,
       eventChance: root.eventChance,
-      eventFrequency: root.eventFrequency
+      eventFrequency: root.eventFrequency,
+      funding: root.funding,
+      loans: root.loans,
+      missedLoanTicks: root.missedLoanTicks
     }, null, 2) + "\n")
   }
 
@@ -387,6 +460,16 @@ Item {
       eventChance = Model.clamp(num(saved.eventChance, Model.EVENT_CHANCE_MAX),
         Model.EVENT_CHANCE_BASE, Model.EVENT_CHANCE_MAX)
       eventFrequency = Math.max(0, num(saved.eventFrequency, 1))
+      // Any department missing from an older save falls back to 100%.
+      var loadedFunding = Model.defaultFunding()
+      if (saved.funding && typeof saved.funding === "object")
+        for (var f = 0; f < Model.FUNDABLE_SERVICES.length; f++) {
+          var key = Model.FUNDABLE_SERVICES[f]
+          loadedFunding[key] = Model.fundingLevel(saved.funding, key)
+        }
+      funding = loadedFunding
+      loans = Array.isArray(saved.loans) ? saved.loans : []
+      missedLoanTicks = Math.max(0, Math.round(num(saved.missedLoanTicks, 0)))
     } catch (error) {
       saveProblem = "not valid JSON (" + error + ")"
       foundedAtMs = 0

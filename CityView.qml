@@ -156,7 +156,29 @@ Item {
   property int selectedTier: 0
   property string flyoutType: ""
   property string decorationTool: Model.TILE_TREE
-  readonly property int attractiveness: Model.computeAttractiveness(Model.summarize(root.grid))
+  // One shared summarize for everything that needs whole-city figures — the
+  // Budget card's rows would otherwise each rescan the grid on every change.
+  readonly property var budgetStats: Model.summarize(root.grid)
+  readonly property real budgetIncome: root.serviceReady
+    ? Model.computeIncome(root.budgetStats.taxablePopulation, root.taxRatePercent) : 0
+  readonly property real budgetUpkeep: root.serviceReady
+    ? Model.computeUpkeep(root.budgetStats, root.cityService.funding) : 0
+  readonly property real budgetNet: root.budgetIncome - root.budgetUpkeep
+  // Advisors run off the figures already computed above rather than rescanning
+  // the grid themselves — the panel is only ever as expensive as one summarize.
+  readonly property var cityAdvice: root.serviceReady ? Model.cityAdvice({
+    stats: root.budgetStats,
+    coverage: root.serviceCoverage,
+    demand: root.demand,
+    income: root.budgetIncome,
+    upkeep: root.budgetUpkeep,
+    treasury: root.treasury,
+    funding: root.cityService.funding,
+    loans: root.cityService.loans,
+    taxRatePercent: root.taxRatePercent
+  }) : []
+  readonly property var topAdvice: root.cityAdvice.length > 0 ? Model.topAdvice(root.cityAdvice) : null
+  readonly property int attractiveness: Model.computeAttractiveness(root.budgetStats)
   readonly property var decorationSpriteUrls: ({
     T: Qt.resolvedUrl("assets/decorations/tree.png").toString(),
     B: Qt.resolvedUrl("assets/decorations/flowers.png").toString()
@@ -267,6 +289,8 @@ Item {
   property bool gameMenuOpen: false
   property bool confirmNewGameOpen: false
   property bool settingsOpen: false
+  property bool budgetOpen: false
+  property bool advisorsOpen: false
   readonly property bool editingTownName: root.settingsOpen && townNameInput.activeFocus
   Shortcut {
     sequence: "F2"
@@ -279,12 +303,16 @@ Item {
   readonly property var gameMenuItems: [
     { action: "new", label: "New Game", enabled: true },
     { action: "name", label: "Name Town", enabled: root.serviceReady },
+    { action: "advisors", label: "Advisors", enabled: root.serviceReady },
+    { action: "budget", label: "Budget", enabled: root.serviceReady },
     { action: "settings", label: "Settings", enabled: true },
     { action: "save", label: "Save Game", enabled: false }
   ]
   function activateGameMenuItem(action) {
     root.gameMenuOpen = false
     if (action === "new") root.confirmNewGameOpen = true
+    else if (action === "budget") root.budgetOpen = true
+    else if (action === "advisors") root.advisorsOpen = true
     else if (action === "settings") root.settingsOpen = true
     else if (action === "name") {
       root.settingsOpen = true
@@ -3969,12 +3997,12 @@ Item {
   // useless the moment the map pushed it out of view.
   Item {
     anchors.fill: parent
-    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen
+    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen
 
     MouseArea {
       anchors.fill: parent
-      visible: root.gameMenuOpen || root.settingsOpen
-      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false }
+      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen
+      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false }
     }
 
     Rectangle {
@@ -4169,6 +4197,300 @@ Item {
             font.pixelSize: Style.font.caption
           }
         }
+      }
+    }
+
+    // Advisors: five department heads, each reporting on what they can
+    // actually see in the simulation. The Treasurer is also where loans are
+    // taken, since "you are short of money" and "here is how to borrow some"
+    // belong in the same breath.
+    Rectangle {
+      id: advisorsCard
+      visible: root.advisorsOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(400))
+      height: Math.min(parent.height - Style.space(32), advisorsColumn.implicitHeight + Style.space(28))
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      MouseArea { anchors.fill: parent }
+
+      Flickable {
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        contentHeight: advisorsColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+
+        Column {
+          id: advisorsColumn
+          width: parent.width
+          spacing: Style.space(10)
+
+          Text {
+            text: "Advisors"
+            color: Color.menu.text
+            font.bold: true
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+          }
+
+          Repeater {
+            model: root.cityAdvice
+
+            Column {
+              id: adviceRow
+              required property var modelData
+              width: advisorsColumn.width
+              spacing: Style.space(2)
+
+              Row {
+                spacing: Style.space(6)
+                // Severity dot: green settled, amber worth a look, red acting on.
+                Rectangle {
+                  width: Style.space(8); height: Style.space(8)
+                  radius: width / 2
+                  anchors.verticalCenter: parent.verticalCenter
+                  color: adviceRow.modelData.severity >= 2 ? "#e0806a"
+                    : adviceRow.modelData.severity === 1 ? "#e0b45a" : "#7fbf7f"
+                }
+                Text {
+                  text: adviceRow.modelData.name
+                  color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  text: adviceRow.modelData.headline
+                  color: Color.menu.text
+                  font.bold: true
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              Text {
+                width: adviceRow.width - Style.space(14)
+                x: Style.space(14)
+                text: adviceRow.modelData.detail
+                wrapMode: Text.WordWrap
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.65)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+
+          Rectangle {
+            width: parent.width; height: 1
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.15)
+          }
+
+          Text {
+            text: root.serviceReady && root.cityService.loans.length > 0
+              ? "Borrowing — $" + Math.round(Model.totalLoanDebt(root.cityService.loans))
+                + " outstanding, $" + Math.round(Model.totalLoanPayment(root.cityService.loans)) + " a month"
+              : "Borrowing"
+            color: Color.menu.text
+            font.bold: true
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Repeater {
+            model: root.serviceReady ? Model.LOAN_OFFERS : []
+
+            Rectangle {
+              id: loanRow
+              required property var modelData
+              readonly property var check: root.serviceReady
+                ? Model.canBorrow(loanRow.modelData, root.cityService.loans,
+                    root.population, root.budgetIncome)
+                : ({ ok: false, reason: "" })
+              width: advisorsColumn.width
+              height: loanText.implicitHeight + Style.space(14)
+              radius: Style.space(4)
+              color: check.ok ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.12) : "transparent"
+              border.width: 1
+              border.color: check.ok ? Color.accent
+                : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.2)
+              opacity: check.ok ? 1 : 0.5
+
+              Column {
+                id: loanText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Style.space(7)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(1)
+
+                Text {
+                  text: loanRow.modelData.label + " — $" + loanRow.modelData.principal
+                  color: Color.menu.text
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  width: loanText.width
+                  wrapMode: Text.WordWrap
+                  text: "$" + Math.round(Model.loanPaymentFor(loanRow.modelData)) + " a month for "
+                    + loanRow.modelData.ticks + " months · "
+                    + Math.round(loanRow.modelData.interest * 100) + "% interest"
+                    + (loanRow.check.ok ? ""
+                      : loanRow.check.reason === "too-small" ? " · needs " + loanRow.check.need + " residents"
+                      : loanRow.check.reason === "too-many-loans" ? " · already carrying the maximum"
+                      : " · the city could not service this")
+                  color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                enabled: loanRow.check.ok
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.cityService.borrow(loanRow.modelData.id)
+              }
+            }
+          }
+
+          Button { text: "Done"; onClicked: root.advisorsOpen = false }
+        }
+      }
+    }
+
+    // Budget: the department funding sliders. Its own card rather than a
+    // Settings row because it's a gameplay screen the mayor comes back to,
+    // not a preference set once — and it shows the live income/upkeep split
+    // so the cost of a change is visible while making it.
+    Rectangle {
+      id: budgetCard
+      visible: root.budgetOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(360))
+      height: budgetColumn.implicitHeight + Style.space(28)
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      MouseArea { anchors.fill: parent }
+
+      Column {
+        id: budgetColumn
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        spacing: Style.space(10)
+
+        Text {
+          text: "Budget"
+          color: Color.menu.text
+          font.bold: true
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          width: parent.width
+          text: root.serviceReady
+            ? "Income $" + Math.round(root.budgetIncome) + " · Upkeep $" + Math.round(root.budgetUpkeep)
+              + " · " + (root.budgetNet >= 0 ? "+" : "−") + "$" + Math.abs(Math.round(root.budgetNet)) + " a month"
+            : ""
+          wrapMode: Text.WordWrap
+          color: root.budgetNet >= 0 ? Color.menu.text : "#e0806a"
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        Repeater {
+          model: root.serviceReady ? Model.FUNDABLE_SERVICES : []
+
+          Column {
+            id: deptRow
+            required property var modelData
+            readonly property string dept: modelData
+            readonly property bool present: root.serviceReady
+              && root.budgetStats.departmentPresent[deptRow.dept] === true
+            readonly property real level: root.serviceReady
+              ? Model.fundingLevel(root.cityService.funding, deptRow.dept) : 1
+            width: parent.width
+            spacing: Style.space(4)
+            opacity: present ? 1 : 0.45
+
+            Row {
+              width: parent.width
+              Text {
+                text: Model.DEPARTMENT_NAMES[deptRow.dept]
+                color: Color.menu.text
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+              Item { width: deptRow.width - 200; height: 1 }
+              Text {
+                text: deptRow.present
+                  ? Math.round(deptRow.level * 100) + "% · $"
+                    + Math.round(Model.departmentSpend(root.budgetStats,
+                        root.cityService.funding, deptRow.dept))
+                  : "not built"
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.7)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(5)
+
+              Repeater {
+                model: [0.5, 0.75, 1.0, 1.25, 1.5]
+
+                Rectangle {
+                  id: levelOption
+                  required property var modelData
+                  readonly property bool active: Math.abs(deptRow.level - modelData) < 0.01
+                  width: (budgetColumn.width - Style.space(20)) / 5
+                  height: Style.space(26)
+                  radius: Style.space(4)
+                  color: active ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35) : "transparent"
+                  border.width: 1
+                  border.color: active ? Color.accent : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.3)
+
+                  Text {
+                    anchors.centerIn: parent
+                    text: Math.round(levelOption.modelData * 100) + "%"
+                    color: levelOption.active ? Color.accent : Color.menu.text
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    enabled: deptRow.present
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.cityService.setFunding(deptRow.dept, levelOption.modelData)
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          text: "Departments are paid per resident served, so their cost grows with the city. "
+            + "Funding buys coverage range; fire and police also see fewer incidents. "
+            + "Starve one to save money and you'll feel it."
+          wrapMode: Text.WordWrap
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Button { text: "Done"; onClicked: root.budgetOpen = false }
       }
     }
 

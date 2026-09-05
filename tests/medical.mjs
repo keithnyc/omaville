@@ -17,7 +17,9 @@ assert.equal(M.tickGrid(grid,20,{population:100},70,u,{R:1})[home],'R1');
 for(let tier=0;tier<3;tier++) {
   const g=Array(400).fill('_0');g[home]='H'+tier;
   assert.equal(M.findUtilities(g).medical[0].level,tier);
-  assert.equal(M.summarize(g).serviceUpkeep,1.5*M.INFRA_UPKEEP_SCALE[tier]);
+  // Billed through the department budget now, not flat per-building upkeep.
+  assert.equal(M.summarize(g).departmentPresent.H,true);
+  assert.equal(M.summarize(M.bulldozeTile(g,home)).departmentPresent.H,false);
   assert.equal(M.totalInvestment('H',tier),[110,310,760][tier]);
   assert.equal(JSON.parse(JSON.stringify(g))[home],'H'+tier);
   assert.equal(M.findUtilities(M.bulldozeTile(g,home)).medical.length,0);

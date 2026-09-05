@@ -25,7 +25,10 @@ for (let tier = 0; tier < 3; tier++) {
   assert.equal(stats.served, M.RES_CAP_PER_LEVEL * 2);
   assert.equal(stats.unmet, M.RES_CAP_PER_LEVEL);
   assert.equal(stats.coverage, 67);
-  assert.equal(M.summarize(grid).serviceUpkeep, M.SCHOOL_UPKEEP * M.INFRA_UPKEEP_SCALE[tier]);
+  // Schools are billed through the department budget (per resident served),
+  // not as flat per-building upkeep, so building one only opts the city in.
+  assert.equal(M.summarize(grid).departmentPresent.N, true);
+  assert.equal(M.summarize(M.bulldozeTile(grid, school)).departmentPresent.N, false);
   const removed = M.bulldozeTile(grid, school);
   assert.equal(M.educationStats(removed, size).coverage, 0);
   assert.equal(JSON.parse(JSON.stringify(grid))[school], 'N' + tier);

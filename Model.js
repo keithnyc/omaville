@@ -120,6 +120,56 @@ var POLICE_UPKEEP = 2
 var FIRE_RISK_CHANCE = 0.03
 var CRIME_RISK_CHANCE = 0.03
 
+// --- department funding ---------------------------------------------------
+// The treasury stopped being a constraint once a city matured: income scales
+// with population, but upkeep only scaled with tile count, so a grown city
+// just accumulated money with nothing left to spend it on. Funding is the
+// permanent sink. Each department runs at a player-set level, and its cost is
+// charged per resident served rather than per building — so unlike a one-off
+// purchase it keeps scaling for as long as the city grows. Modelled on
+// SimCity's department budget rather than invented, since that is the game
+// this one is chasing.
+var FUNDABLE_SERVICES = ["F", "S", "N", "H"]
+var FUNDING_MIN = 0.5
+var FUNDING_MAX = 1.5
+var FUNDING_DEFAULT = 1
+
+// Cost per 100 residents per tick at 100% funding. Tuned (see
+// tests/funding.mjs) so a mature city at default funding runs a modest
+// surplus, while the 50%-150% range swings the budget by enough to matter.
+var DEPARTMENT_RATE = { F: 2.7, S: 2.7, N: 3.4, H: 3.7 }
+var DEPARTMENT_NAMES = { F: "Fire", S: "Police", N: "Education", H: "Health" }
+
+function defaultFunding() {
+  return { F: FUNDING_DEFAULT, S: FUNDING_DEFAULT, N: FUNDING_DEFAULT, H: FUNDING_DEFAULT }
+}
+
+function fundingLevel(funding, type) {
+  if (!funding) return FUNDING_DEFAULT
+  var value = Number(funding[type])
+  return isFinite(value) ? clamp(value, FUNDING_MIN, FUNDING_MAX) : FUNDING_DEFAULT
+}
+
+// A department only costs anything once the city has built one, so a mayor
+// who has not opened a firehouse yet is not billed for a fire department.
+function departmentSpend(stats, funding, type) {
+  if (!stats.departmentPresent[type]) return 0
+  return DEPARTMENT_RATE[type] * (stats.population / 100) * fundingLevel(funding, type)
+}
+
+// Money buys reach, with the baseline at 100%: a starved department is
+// degraded rather than useless (50% still keeps 80% of its radius), and
+// overfunding buys a real but bounded extension.
+function fundingRadiusScale(level) {
+  return 0.6 + 0.4 * level
+}
+
+// Underfunding fire/police makes incidents likelier and overfunding suppresses
+// them — the inverse of funding, so 50% doubles the risk and 150% cuts a third.
+function fundingRiskScale(level) {
+  return 1 / level
+}
+
 // --- infrastructure upgrade tiers ---------------------------------------
 // Park/Power/Water/Fire/Police all place at tier 1 and can be manually
 // upgraded in place, one tier at a time, once the city's population
@@ -127,7 +177,12 @@ var CRIME_RISK_CHANCE = 0.03
 // (automatic, demand-driven) this is a deliberate spend — meant to read as
 // a real decision, not another thing that just happens on its own.
 var UPGRADE_TIER2_POP = 400
-var UPGRADE_TIER3_POP = 2500
+// Was 2500, which no real playthrough had ever reached — a Year-22 city sat at
+// 855 with every tier-3 building still locked, so the whole top tier of the
+// art was content the player had paid for and could not see. 1000 is the next
+// milestone up from where a mature starter city plateaus, which makes it a
+// near-term goal instead of a distant grind.
+var UPGRADE_TIER3_POP = 1000
 var UPGRADE_THRESHOLDS = [0, UPGRADE_TIER2_POP, UPGRADE_TIER3_POP]
 
 var UPGRADE_TIER_NAMES = {
@@ -384,6 +439,7 @@ function summarize(grid) {
     // Level-weighted, not flat counts — a Garden or a Power Station costs
     // (and gives) more than a tier-1 Playground or Generator.
     parkHappinessBonus: 0, serviceUpkeep: 0,
+    departmentPresent: { F: false, S: false, N: false, H: false },
     treeCount: 0, flowerCount: 0, decorationPoints: 0, taxablePopulation: 0
   }
   for (var i = 0; i < grid.length; i++) {
@@ -408,19 +464,24 @@ function summarize(grid) {
       stats.waterCount++
       stats.serviceUpkeep += WATER_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
       break
+    // Staffed departments are billed per resident served through the funding
+    // budget (departmentSpend), not per building like the power and water
+    // utilities above — a firehouse in a town of 200 and the same firehouse in
+    // a city of 5000 are not the same running cost. Building one only opts the
+    // city into paying for that department at all.
     case TILE_FIRE:
       stats.fireCount++
-      stats.serviceUpkeep += FIRE_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
+      stats.departmentPresent.F = true
       break
     case TILE_POLICE:
       stats.policeCount++
-      stats.serviceUpkeep += POLICE_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
+      stats.departmentPresent.S = true
       break
     case TILE_SCHOOL:
-      stats.serviceUpkeep += SCHOOL_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
+      stats.departmentPresent.N = true
       break
     case TILE_MEDICAL:
-      stats.serviceUpkeep += MEDICAL_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
+      stats.departmentPresent.H = true
       break
     case TILE_RES:
       stats.resCount++
@@ -526,10 +587,20 @@ function nearbyZoneEffect(grid, gridSize, index) {
 // and a water plant's coverage — served, not just zoned. Losing any one
 // of the three (plant bulldozed, road cut) puts it at decay risk exactly
 // like a road disconnect always has.
-function tickGrid(grid, gridSize, stats, happiness, utilities, demand) {
+function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding) {
   var happinessFactor = clamp(happiness / 70, 0.3, 1.5)
   var baseGrowthChance = 0.15
   var baseDecayChance = 0.08
+
+  // Funding buys reach and safety. Resolved once per tick rather than per
+  // tile — these are whole-department settings, and this loop runs over every
+  // tile on a 64x64 grid.
+  var fireRadius = FIRE_RADIUS * fundingRadiusScale(fundingLevel(funding, "F"))
+  var policeRadius = POLICE_RADIUS * fundingRadiusScale(fundingLevel(funding, "S"))
+  var schoolRadius = SCHOOL_RADIUS * fundingRadiusScale(fundingLevel(funding, "N"))
+  var medicalRadius = MEDICAL_RADIUS * fundingRadiusScale(fundingLevel(funding, "H"))
+  var fireRisk = FIRE_RISK_CHANCE * fundingRiskScale(fundingLevel(funding, "F"))
+  var crimeRisk = CRIME_RISK_CHANCE * fundingRiskScale(fundingLevel(funding, "S"))
 
   var next = grid.slice()
   for (var i = 0; i < next.length; i++) {
@@ -546,9 +617,9 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand) {
       if (zoneEffect) {
         // Education rewards coverage; unmet need slows growth after the
         // starter-town phase, without causing abandonment in existing saves.
-        var educated = isCovered(gridSize, utilities.schools || [], i, SCHOOL_RADIUS)
+        var educated = isCovered(gridSize, utilities.schools || [], i, schoolRadius)
         growthChance *= educated ? 1.15 : stats.population >= 100 ? 0.75 : 1
-        var healthcare = isCovered(gridSize, utilities.medical || [], i, MEDICAL_RADIUS)
+        var healthcare = isCovered(gridSize, utilities.medical || [], i, medicalRadius)
         growthChance *= healthcare ? 1.10 : stats.population >= 100 ? 0.85 : 1
         growthChance *= 1 + propertyValueBonus(grid, gridSize, i) / 100
         if (zoneEffect.nearIndustrial) growthChance *= INDUSTRIAL_GROWTH_PENALTY
@@ -568,11 +639,11 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand) {
     // block on growth the way power/water are.
     var afterTile = parseTile(next[i])
     if (afterTile.level > 0) {
-      if (!isCovered(gridSize, utilities.fire, i, FIRE_RADIUS) && Math.random() < FIRE_RISK_CHANCE) {
+      if (!isCovered(gridSize, utilities.fire, i, fireRadius) && Math.random() < fireRisk) {
         afterTile = parseTile(next[i])
         if (afterTile.level > 0) next[i] = makeTile(afterTile.type, afterTile.level - 1)
       }
-      if (!isCovered(gridSize, utilities.police, i, POLICE_RADIUS) && Math.random() < CRIME_RISK_CHANCE) {
+      if (!isCovered(gridSize, utilities.police, i, policeRadius) && Math.random() < crimeRisk) {
         afterTile = parseTile(next[i])
         if (afterTile.level > 0) next[i] = makeTile(afterTile.type, afterTile.level - 1)
       }
@@ -624,11 +695,24 @@ function inspectTile(grid, gridSize, index, utilities, demand, population, treas
   return info
 }
 
+// A denser city costs more per building to run, not the same — roads carry
+// more traffic, utilities run nearer capacity. Without this the flat 0.3 per
+// level meant upkeep grew linearly while income grew linearly too, and since
+// income per resident far exceeded upkeep per resident the gap only ever
+// widened, which is how a mature city ended up with a runaway treasury.
+var DENSITY_UPKEEP_SOFTCAP = 420
+
 // Upkeep scales with what's actually built, not just zoned — an empty
-// zoned tile costs nothing until something grows on it.
-function computeUpkeep(stats) {
-  return stats.roadCount * 0.2 + stats.parkCount * 0.1 + stats.builtDensity * 0.3
-    + stats.serviceUpkeep
+// zoned tile costs nothing until something grows on it. `funding` is the
+// player's department budget (see departmentSpend); omitting it prices the
+// city at default funding.
+function computeUpkeep(stats, funding) {
+  var densityRate = 0.3 * (1 + stats.builtDensity / DENSITY_UPKEEP_SOFTCAP)
+  var departments = 0
+  for (var i = 0; i < FUNDABLE_SERVICES.length; i++)
+    departments += departmentSpend(stats, funding, FUNDABLE_SERVICES[i])
+  return stats.roadCount * 0.2 + stats.parkCount * 0.1
+    + stats.builtDensity * densityRate + stats.serviceUpkeep + departments
 }
 
 function computeIncome(population, taxRatePercent) {
@@ -642,15 +726,15 @@ function computeIncome(population, taxRatePercent) {
 // fully deterministic from tax/parks/industry, and income is the only thing
 // a multiplier touches (upkeep is unaffected, so a bad multiplier really
 // does squeeze the budget rather than just look worse on paper).
-function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMultiplier) {
+function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMultiplier, funding) {
   happinessModifier = happinessModifier || 0
   incomeMultiplier = incomeMultiplier === undefined ? 1 : incomeMultiplier
   var stats = summarize(grid)
   var happiness = Math.round(clamp(computeHappiness(taxRatePercent, stats) + happinessModifier, 0, 100))
   var utilities = findUtilities(grid)
   var demand = computeDemand(stats)
-  var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand)
-  var upkeep = computeUpkeep(stats)
+  var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding)
+  var upkeep = computeUpkeep(stats, funding)
   var income = computeIncome(stats.taxablePopulation, taxRatePercent) * incomeMultiplier
   return {
     grid: nextGrid,
@@ -1251,4 +1335,246 @@ function applyPopulationShock(grid, deltaPop) {
     }
   }
   return next
+}
+
+// --- municipal loans ------------------------------------------------------
+// A city that over-built before its power plant landed used to be genuinely
+// stuck: TREASURY_FLOOR stops the debt spiral, but nothing lets a broke mayor
+// actually fix the problem that caused it. Borrowing is that way out, and it
+// costs something real — repayments are taken every tick, so a loan trades a
+// lump sum now for a tighter budget for a long time afterwards. That tension
+// is the point; this is not free money.
+var LOAN_OFFERS = [
+  { id: "seed", label: "Seed bond", principal: 2000, ticks: 60, interest: 0.12, minPopulation: 0 },
+  { id: "works", label: "Public works bond", principal: 6000, ticks: 90, interest: 0.16, minPopulation: 300 },
+  { id: "growth", label: "Growth bond", principal: 15000, ticks: 120, interest: 0.22, minPopulation: 900 }
+]
+var MAX_ACTIVE_LOANS = 2
+// Debt service is capped as a share of income, which is what stops borrowing
+// from becoming an infinite hole — a city can only carry what it can service.
+var LOAN_BURDEN_LIMIT = 0.4
+
+function loanOffer(id) {
+  for (var i = 0; i < LOAN_OFFERS.length; i++) if (LOAN_OFFERS[i].id === id) return LOAN_OFFERS[i]
+  return null
+}
+
+function loanPaymentFor(offer) {
+  return offer.principal * (1 + offer.interest) / offer.ticks
+}
+
+function totalLoanPayment(loans) {
+  var total = 0
+  if (!loans) return 0
+  for (var i = 0; i < loans.length; i++) total += loans[i].perTick || 0
+  return total
+}
+
+function totalLoanDebt(loans) {
+  var total = 0
+  if (!loans) return 0
+  for (var i = 0; i < loans.length; i++) total += Math.max(0, loans[i].remaining || 0)
+  return total
+}
+
+function canBorrow(offer, loans, population, income) {
+  if (!offer) return { ok: false, reason: "no-such-loan" }
+  var active = loans ? loans.length : 0
+  if (active >= MAX_ACTIVE_LOANS) return { ok: false, reason: "too-many-loans" }
+  if (population < offer.minPopulation) return { ok: false, reason: "too-small", need: offer.minPopulation }
+  var burden = totalLoanPayment(loans) + loanPaymentFor(offer)
+  if (burden > Math.max(0, income) * LOAN_BURDEN_LIMIT)
+    return { ok: false, reason: "cant-service", burden: burden }
+  return { ok: true, reason: "", burden: burden }
+}
+
+function takeLoan(loans, offer, ageMinutes) {
+  var next = loans ? loans.slice() : []
+  next.push({
+    id: offer.id,
+    label: offer.label,
+    principal: offer.principal,
+    remaining: offer.principal * (1 + offer.interest),
+    perTick: loanPaymentFor(offer),
+    takenAt: ageMinutes || 0
+  })
+  return next
+}
+
+// One tick of repayment. Loans that reach zero drop off the list.
+function advanceLoans(loans) {
+  var next = []
+  if (!loans) return next
+  for (var i = 0; i < loans.length; i++) {
+    var remaining = loans[i].remaining - loans[i].perTick
+    if (remaining > 0.01) {
+      next.push({
+        id: loans[i].id, label: loans[i].label, principal: loans[i].principal,
+        remaining: remaining, perTick: loans[i].perTick, takenAt: loans[i].takenAt
+      })
+    }
+  }
+  return next
+}
+
+// --- city advisors --------------------------------------------------------
+// Every advisor reads the same helpers the tick itself uses — summarize,
+// serviceCoverageStats, computeDemand, computeUpkeep — rather than its own
+// parallel heuristics. Same reasoning as inspectTile: advice derived from
+// different numbers than the simulation will eventually contradict it, and an
+// advisor that lies is worse than no advisor at all.
+var ADVISOR_ORDER = ["planning", "utilities", "safety", "wellbeing", "finance"]
+var ADVISOR_NAMES = {
+  planning: "City Planner",
+  utilities: "Utilities",
+  safety: "Public Safety",
+  wellbeing: "Health & Education",
+  finance: "Treasurer"
+}
+var SEVERITY_OK = 0
+var SEVERITY_WATCH = 1
+var SEVERITY_URGENT = 2
+
+// How many residents the current residential zoning could ever hold, if every
+// zoned tile grew to level 3. A city sitting near this is not "stalled" — it
+// is full, and no amount of waiting will change that.
+function residentialCeiling(stats) {
+  return stats.resCount * 3 * RES_CAP_PER_LEVEL
+}
+
+function advice(advisor, severity, headline, detail) {
+  return {
+    advisor: advisor, name: ADVISOR_NAMES[advisor],
+    severity: severity, headline: headline, detail: detail
+  }
+}
+
+function coverageRow(coverage, key) {
+  for (var i = 0; i < coverage.length; i++) if (coverage[i].key === key) return coverage[i]
+  return { unmet: 0, coverage: 100, residents: 0 }
+}
+
+function planningAdvice(stats, demand) {
+  var ceiling = residentialCeiling(stats)
+  if (stats.resCount === 0)
+    return advice("planning", SEVERITY_URGENT, "Nowhere to live",
+      "Zone some residential land — nothing else matters until people can move in.")
+  if (ceiling > 0 && stats.population >= ceiling * 0.85)
+    return advice("planning", SEVERITY_URGENT, "Housing is full",
+      "Residential is at " + Math.round(stats.population / ceiling * 100) + "% of its zoned ceiling ("
+      + stats.population + " of " + ceiling + "). Growth has stopped because there is nowhere left to "
+      + "build up — zone more residential land.")
+  var jobs = stats.jobsCommercial + stats.jobsIndustrial
+  if (jobs > stats.population * 1.6 && stats.population > 0)
+    return advice("planning", SEVERITY_WATCH, "More jobs than workers",
+      jobs + " jobs for " + stats.population + " residents. Zone housing to fill them.")
+  if (stats.population > Math.max(jobs, 0) * 2 && stats.population > 60)
+    return advice("planning", SEVERITY_WATCH, "Not enough work",
+      stats.population + " residents and only " + jobs + " jobs. Zone commercial or industrial.")
+  if (demand && demand.R > 1.2)
+    return advice("planning", SEVERITY_WATCH, "Demand for housing",
+      "Residential demand is running high — more R zoning would fill quickly.")
+  return advice("planning", SEVERITY_OK, "Zoning looks balanced",
+    stats.resCount + " residential, " + stats.comCount + " commercial, " + stats.indCount + " industrial.")
+}
+
+function utilitiesAdvice(coverage) {
+  var power = coverageRow(coverage, "power"), water = coverageRow(coverage, "water")
+  var worst = power.unmet >= water.unmet ? power : water
+  var label = worst === power ? "Power" : "Water"
+  if (worst.unmet > 0)
+    return advice("utilities", SEVERITY_URGENT, label + " is not reaching everyone",
+      worst.unmet + " residents have no " + label.toLowerCase() + " (" + worst.coverage
+      + "% covered). Uncovered zones cannot grow at all until this is fixed.")
+  return advice("utilities", SEVERITY_OK, "Everyone is connected",
+    "Power and water both reach the whole city.")
+}
+
+function safetyAdvice(coverage, funding) {
+  var fire = coverageRow(coverage, "fire"), police = coverageRow(coverage, "police")
+  var worst = fire.unmet >= police.unmet ? fire : police
+  var isFire = worst === fire
+  var label = isFire ? "Fire protection" : "Police"
+  var level = fundingLevel(funding, isFire ? "F" : "S")
+  if (worst.unmet > 0) {
+    var starved = level < 1
+      ? " Its budget is at " + Math.round(level * 100) + "%, which is shrinking its range — raising it would help before building anything."
+      : ""
+    return advice("safety", SEVERITY_WATCH, label + " has gaps",
+      worst.unmet + " residents are outside cover (" + worst.coverage
+      + "%). Uncovered buildings risk losing a level." + starved)
+  }
+  if (fundingLevel(funding, "F") < 1 || fundingLevel(funding, "S") < 1)
+    return advice("safety", SEVERITY_WATCH, "Running lean",
+      "Everyone is covered, but a department is underfunded — incidents are likelier than they need to be.")
+  return advice("safety", SEVERITY_OK, "The city is covered",
+    "Fire and police both reach every resident.")
+}
+
+function wellbeingAdvice(coverage, stats, funding) {
+  var schools = coverageRow(coverage, "schools"), medical = coverageRow(coverage, "medical")
+  var worst = schools.unmet >= medical.unmet ? schools : medical
+  var isSchool = worst === schools
+  var label = isSchool ? "Education" : "Healthcare"
+  if (worst.unmet > 0 && stats.population >= 100)
+    return advice("wellbeing", SEVERITY_WATCH, label + " is short",
+      worst.unmet + " residents are not served (" + worst.coverage
+      + "%). Homes without it grow more slowly.")
+  if (worst.unmet > 0)
+    return advice("wellbeing", SEVERITY_OK, "Not needed yet",
+      "A town this small grows fine without full " + label.toLowerCase()
+      + " — it starts to matter past 100 residents.")
+  if (fundingLevel(funding, "N") < 1 || fundingLevel(funding, "H") < 1)
+    return advice("wellbeing", SEVERITY_WATCH, "Underfunded",
+      "Coverage is complete but a budget is below 100%, which narrows its reach.")
+  return advice("wellbeing", SEVERITY_OK, "Well served",
+    "Schools and clinics reach everyone.")
+}
+
+function financeAdvice(stats, income, upkeep, treasury, loans, taxRatePercent) {
+  var debt = totalLoanPayment(loans)
+  var net = income - upkeep - debt
+  if (treasury <= TREASURY_FLOOR + 1)
+    return advice("finance", SEVERITY_URGENT, "The city is insolvent",
+      "The treasury has bottomed out. Bulldoze what you can spare for a refund, cut department "
+      + "funding, or take a loan to get moving again.")
+  if (net < 0)
+    return advice("finance", SEVERITY_URGENT, "Spending more than we earn",
+      "Running $" + Math.round(-net) + " a month short. Raise taxes, cut department funding, or grow "
+      + "the tax base." + (debt > 0 ? " Debt service is $" + Math.round(debt) + " of that." : ""))
+  if (debt > 0)
+    return advice("finance", SEVERITY_WATCH, "Carrying debt",
+      "$" + Math.round(totalLoanDebt(loans)) + " outstanding at $" + Math.round(debt)
+      + " a month. Still $" + Math.round(net) + " a month clear.")
+  if (taxRatePercent > 15)
+    return advice("finance", SEVERITY_WATCH, "Taxes are steep",
+      taxRatePercent + "% is holding happiness down, which slows growth. Lower it if the budget allows.")
+  if (treasury > 8000 && net > 0)
+    return advice("finance", SEVERITY_WATCH, "Money sitting idle",
+      "$" + Math.round(treasury) + " in the bank earning nothing. Upgrade infrastructure, raise "
+      + "department funding, or expand — a treasury this size is not doing any work.")
+  return advice("finance", SEVERITY_OK, "Books are healthy",
+    "$" + Math.round(net) + " a month clear on $" + Math.round(income) + " of income.")
+}
+
+// ctx: { stats, coverage, demand, income, upkeep, treasury, funding, loans,
+// taxRatePercent } — all already computed by the caller so nothing here
+// rescans the grid.
+function cityAdvice(ctx) {
+  return [
+    planningAdvice(ctx.stats, ctx.demand),
+    utilitiesAdvice(ctx.coverage),
+    safetyAdvice(ctx.coverage, ctx.funding),
+    wellbeingAdvice(ctx.coverage, ctx.stats, ctx.funding),
+    financeAdvice(ctx.stats, ctx.income, ctx.upkeep, ctx.treasury, ctx.loans, ctx.taxRatePercent)
+  ]
+}
+
+// The single thing most worth telling the mayor right now, for the one-line
+// summary — highest severity wins, ties broken by ADVISOR_ORDER.
+function topAdvice(list) {
+  var best = null
+  for (var i = 0; i < list.length; i++)
+    if (!best || list[i].severity > best.severity) best = list[i]
+  return best
 }
