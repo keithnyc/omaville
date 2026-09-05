@@ -164,6 +164,8 @@ Item {
   readonly property real budgetUpkeep: root.serviceReady
     ? Model.computeUpkeep(root.budgetStats, root.cityService.funding) : 0
   readonly property real budgetNet: root.budgetIncome - root.budgetUpkeep
+  readonly property var upkeepBill: root.serviceReady
+    ? Model.upkeepBreakdown(root.budgetStats, root.cityService.funding) : []
   // Advisors run off the figures already computed above rather than rescanning
   // the grid themselves — the panel is only ever as expensive as one summarize.
   readonly property var cityAdvice: root.serviceReady ? Model.cityAdvice({
@@ -321,11 +323,18 @@ Item {
     }
   }
 
+  // A build cost is only half the story — every one of these arrives again
+  // every month, which is easy to miss until the treasury stops growing.
+  function monthlyNote(type, level) {
+    var monthly = Model.monthlyCostOf(type, level || 0)
+    return monthly > 0 ? " · $" + (monthly < 1 ? monthly.toFixed(2) : Math.round(monthly)) + "/mo" : ""
+  }
+
   function toolStatusText() {
     var t = root.hoveredToolType !== "" ? root.hoveredToolType : root.activeTool
-    if (t === Model.TILE_ROAD) return "Road — $10 on land · $35 bridge over water"
+    if (t === Model.TILE_ROAD) return "Road — $10 on land · $35 bridge over water" + root.monthlyNote(t, 0)
     if (t === Model.TILE_LAKE) return "Water — $4 · paint empty land · waterfront homes gain up to 12%"
-    if (t === Model.TILE_WATERFRONT_PARK) return "Waterfront Park — $30 · requires empty land beside water"
+    if (t === Model.TILE_WATERFRONT_PARK) return "Waterfront Park — $30 · requires empty land beside water" + root.monthlyNote(t, 0)
     if (t === "decorations") return "Decorations — hover to choose a tree or flowerbed"
     if (t === Model.TILE_TREE || t === Model.TILE_FLOWERS) return Model.TILE_LABELS[t] + " — $" + Model.COSTS[t] + " · improves nearby home values"
     var item = null
@@ -337,9 +346,10 @@ Item {
     if (root.upgradeTarget !== "" && root.upgradeTarget === t)
       return Model.UPGRADE_TIER_NAMES[t][root.selectedTier] + " — $"
         + Model.totalInvestment(t, root.selectedTier) + " new · existing buildings pay only the difference"
+        + root.monthlyNote(t, root.selectedTier)
     var cost = t === "bulldoze" ? "free" : ("$" + Model.COSTS[t])
     var holdHint = root.upgradeableTypes.indexOf(t) >= 0 ? " · hover for upgrades" : ""
-    return item.label + " — " + cost + holdHint
+    return item.label + " — " + cost + root.monthlyNote(t, 0) + holdHint
   }
 
   // --- viewport: the canvas is a fixed-size window onto a much bigger
@@ -4403,6 +4413,59 @@ Item {
           color: root.budgetNet >= 0 ? Color.menu.text : "#e0806a"
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.bodySmall
+        }
+
+        // The itemised bill. computeUpkeep is literally the sum of these rows,
+        // so what's shown here can't drift from what's actually charged.
+        Column {
+          width: parent.width
+          spacing: Style.space(1)
+
+          Repeater {
+            model: root.upkeepBill
+
+            Item {
+              id: billRow
+              required property var modelData
+              visible: modelData.amount > 0.01
+              width: budgetColumn.width
+              height: visible ? billLabel.implicitHeight + Style.space(2) : 0
+
+              Text {
+                id: billLabel
+                anchors.left: parent.left
+                text: billRow.modelData.label
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.55)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+              // A bar makes the big line items obvious at a glance — the point
+              // is noticing what dominates, not reading exact figures.
+              Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: billAmount.left
+                anchors.rightMargin: Style.space(6)
+                width: root.budgetUpkeep > 0
+                  ? Math.max(1, (billRow.width * 0.32) * (billRow.modelData.amount / root.budgetUpkeep)) : 0
+                height: Style.space(4)
+                radius: height / 2
+                color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.45)
+              }
+              Text {
+                id: billAmount
+                anchors.right: parent.right
+                text: "$" + Math.round(billRow.modelData.amount)
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.75)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+        }
+
+        Rectangle {
+          width: parent.width; height: 1
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.15)
         }
 
         Repeater {

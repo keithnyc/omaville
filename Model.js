@@ -104,8 +104,13 @@ var IND_JOBS_PER_LEVEL = 12
 // area is just a square around the plant, not a fiddly falloff curve.
 var POWER_RADIUS = 9
 var WATER_RADIUS = 9
-var POWER_UPKEEP = 3
-var WATER_UPKEEP = 2
+// Recurring monthly cost per plant. Deliberately a real number: building
+// infrastructure used to be a one-off purchase whose $1.65/month tail was
+// small enough to ignore entirely, so a mayor could carpet the map with
+// plants and never feel it. Every one of these is now a bill that arrives
+// every month for as long as the building stands.
+var POWER_UPKEEP = 6
+var WATER_UPKEEP = 4
 
 // Fire/police are protection, not hookups — unlike power/water they never
 // block growth outright (retrofitting that onto an existing city would stall
@@ -439,6 +444,8 @@ function summarize(grid) {
     // Level-weighted, not flat counts — a Garden or a Power Station costs
     // (and gives) more than a tier-1 Playground or Generator.
     parkHappinessBonus: 0, serviceUpkeep: 0,
+    // Split out so the monthly bill can itemise where the money goes.
+    powerUpkeep: 0, waterUpkeep: 0, decorationUpkeep: 0,
     departmentPresent: { F: false, S: false, N: false, H: false },
     treeCount: 0, flowerCount: 0, decorationPoints: 0, taxablePopulation: 0
   }
@@ -446,8 +453,8 @@ function summarize(grid) {
     var tile = parseTile(grid[i])
     switch (tile.type) {
     case TILE_ROAD: stats.roadCount++; break
-    case TILE_TREE: stats.treeCount++; stats.decorationPoints += 2; stats.serviceUpkeep += 0.03; break
-    case TILE_FLOWERS: stats.flowerCount++; stats.decorationPoints += 3; stats.serviceUpkeep += 0.06; break
+    case TILE_TREE: stats.treeCount++; stats.decorationPoints += 2; stats.decorationUpkeep += 0.03; break
+    case TILE_FLOWERS: stats.flowerCount++; stats.decorationPoints += 3; stats.decorationUpkeep += 0.06; break
     case TILE_PARK:
       stats.parkCount++
       stats.parkHappinessBonus += PARK_BONUS_PER_LEVEL[tile.level]
@@ -458,11 +465,11 @@ function summarize(grid) {
       break
     case TILE_POWER:
       stats.powerCount++
-      stats.serviceUpkeep += POWER_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
+      stats.powerUpkeep += POWER_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
       break
     case TILE_WATER:
       stats.waterCount++
-      stats.serviceUpkeep += WATER_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
+      stats.waterUpkeep += WATER_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
       break
     // Staffed departments are billed per resident served through the funding
     // budget (departmentSpend), not per building like the power and water
@@ -502,6 +509,7 @@ function summarize(grid) {
       break
     }
   }
+  stats.serviceUpkeep = stats.powerUpkeep + stats.waterUpkeep + stats.decorationUpkeep
   return stats
 }
 
@@ -701,18 +709,61 @@ function inspectTile(grid, gridSize, index, utilities, demand, population, treas
 // income per resident far exceeded upkeep per resident the gap only ever
 // widened, which is how a mature city ended up with a runaway treasury.
 var DENSITY_UPKEEP_SOFTCAP = 420
+// Lowered from 0.3 alongside raising the infrastructure rates above. This
+// line is general city services — real, but not attributable to anything the
+// player chose, and it was 40% of the bill. Shifting weight out of it and
+// into roads/plants/parks leaves the total about the same while making the
+// budget answer "what am I paying for?" instead of just "how much?".
+var DENSITY_UPKEEP_RATE = 0.22
+var ROAD_UPKEEP = 0.25
+var PARK_UPKEEP = 0.3
 
 // Upkeep scales with what's actually built, not just zoned — an empty
 // zoned tile costs nothing until something grows on it. `funding` is the
 // player's department budget (see departmentSpend); omitting it prices the
 // city at default funding.
 function computeUpkeep(stats, funding) {
-  var densityRate = 0.3 * (1 + stats.builtDensity / DENSITY_UPKEEP_SOFTCAP)
-  var departments = 0
-  for (var i = 0; i < FUNDABLE_SERVICES.length; i++)
-    departments += departmentSpend(stats, funding, FUNDABLE_SERVICES[i])
-  return stats.roadCount * 0.2 + stats.parkCount * 0.1
-    + stats.builtDensity * densityRate + stats.serviceUpkeep + departments
+  var bill = upkeepBreakdown(stats, funding)
+  var total = 0
+  for (var i = 0; i < bill.length; i++) total += bill[i].amount
+  return total
+}
+
+// The monthly bill, itemised. computeUpkeep is just the sum of this, so what
+// the player is shown can never drift from what they are actually charged.
+function upkeepBreakdown(stats, funding) {
+  var densityRate = DENSITY_UPKEEP_RATE * (1 + stats.builtDensity / DENSITY_UPKEEP_SOFTCAP)
+  var rows = [
+    { key: "roads", label: "Roads", amount: stats.roadCount * ROAD_UPKEEP },
+    { key: "power", label: "Power plants", amount: stats.powerUpkeep },
+    { key: "water", label: "Water", amount: stats.waterUpkeep },
+    { key: "parks", label: "Parks", amount: stats.parkCount * PARK_UPKEEP },
+    { key: "decorations", label: "Landscaping", amount: stats.decorationUpkeep },
+    { key: "services", label: "City services", amount: stats.builtDensity * densityRate }
+  ]
+  for (var i = 0; i < FUNDABLE_SERVICES.length; i++) {
+    var type = FUNDABLE_SERVICES[i]
+    rows.push({
+      key: type, label: DEPARTMENT_NAMES[type],
+      amount: departmentSpend(stats, funding, type)
+    })
+  }
+  return rows
+}
+
+// What one more of this building would add to every future monthly bill —
+// shown at the point of purchase so a recurring cost is never a surprise.
+// Departments are excluded on purpose: they are billed per resident, so an
+// extra firehouse widens coverage without adding a second bill.
+function monthlyCostOf(type, level) {
+  var tier = INFRA_UPKEEP_SCALE[level || 0]
+  if (type === TILE_ROAD) return ROAD_UPKEEP
+  if (type === TILE_PARK || type === TILE_WATERFRONT_PARK) return PARK_UPKEEP
+  if (type === TILE_POWER) return POWER_UPKEEP * tier
+  if (type === TILE_WATER) return WATER_UPKEEP * tier
+  if (type === TILE_TREE) return 0.03
+  if (type === TILE_FLOWERS) return 0.06
+  return 0
 }
 
 function computeIncome(population, taxRatePercent) {

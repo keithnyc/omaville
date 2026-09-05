@@ -94,6 +94,41 @@ const youngStats = M.summarize(young);
 assert.ok(M.computeIncome(youngStats.taxablePopulation, 10) - M.computeUpkeep(youngStats, all(1)) > 0,
   'a starter town with one firehouse still runs in the black');
 
-console.log(`PASS: clamping, neutral defaults, per-resident billing, coverage purchase, and balance ` +
+
+// --- the itemised bill must equal what is actually charged ----------------
+// The whole value of showing a breakdown is that it cannot drift from the
+// real deduction, so assert the identity rather than trusting it.
+for (const [grid, funding] of [[city, all(1)], [city, all(0.5)], [city, all(1.5)],
+                               [young, all(1)], [bare, all(1.25)]]) {
+  const st = M.summarize(grid);
+  const bill = M.upkeepBreakdown(st, funding);
+  const summed = bill.reduce((t, row) => t + row.amount, 0);
+  assert.ok(Math.abs(summed - M.computeUpkeep(st, funding)) < 1e-9,
+    'every itemised bill must sum to exactly the upkeep charged');
+  for (const row of bill) {
+    assert.ok(row.label && row.key, 'every line is displayable');
+    assert.ok(row.amount >= 0, 'no negative line items');
+  }
+}
+
+// --- recurring cost shown at the point of purchase ------------------------
+// Infrastructure used to be effectively free to keep; these are the numbers
+// the build hint promises, so they must be real.
+assert.ok(M.monthlyCostOf('E', 0) > 0 && M.monthlyCostOf('W', 0) > 0 && M.monthlyCostOf('#', 0) > 0);
+assert.ok(M.monthlyCostOf('E', 2) > M.monthlyCostOf('E', 0), 'a bigger plant costs more to run');
+assert.equal(M.monthlyCostOf('R', 0), 0, 'zoning itself carries no direct monthly cost');
+// Departments are billed per resident, so an extra station is not a second bill.
+assert.equal(M.monthlyCostOf('F', 0), 0);
+
+// Adding a plant really does raise the bill by exactly what was quoted.
+const before = M.emptyGrid(size);
+for (let i = 0; i < 20; i++) before[500 + i] = 'R3';
+const after = before.slice();
+after[900] = 'E0';
+const delta = M.computeUpkeep(M.summarize(after), all(1)) - M.computeUpkeep(M.summarize(before), all(1));
+assert.ok(Math.abs(delta - M.monthlyCostOf('E', 0)) < 1e-9,
+  'the quoted monthly cost is what the next bill actually rises by');
+
+console.log(`PASS: clamping, neutral defaults, per-resident billing, coverage purchase, balance, itemised billing and quoted monthly costs ` +
   `(mature city net ${net(1).toFixed(0)}/tick at 100%, ${net(M.FUNDING_MIN).toFixed(0)} at 50%, ` +
   `${net(M.FUNDING_MAX).toFixed(0)} at 150%).`);
