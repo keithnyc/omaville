@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+const model = vm.createContext({ Math });
+vm.runInContext(fs.readFileSync(new URL('../Model.js', import.meta.url), 'utf8').replace('.pragma library', ''), model);
+const empty = () => Array(81).fill('_0');
+let grid = empty();
+grid[40] = 'R2';
+const baseline = model.summarize(grid);
+assert.equal(baseline.taxablePopulation, baseline.population);
+assert.equal(model.computeAttractiveness(baseline), 0);
+for (const [type, cost, bonus] of [['T', 12, 6], ['B', 18, 8]]) {
+  assert(model.canPlace(grid, 41, type, cost));
+  assert(!model.canPlace(grid, 41, type, cost - 1));
+  assert(!model.canPlace(grid, 40, type, 100));
+  const placed = model.placeTile(grid, 41, type);
+  assert.equal(placed[41], type + '0');
+  assert.equal(model.propertyValueBonus(placed, 9, 40), bonus);
+  const stats = model.summarize(placed);
+  assert.equal(stats.population, baseline.population);
+  assert.equal(stats.taxablePopulation, baseline.population * (1 + bonus / 100));
+  assert(model.computeDemand(stats).R > model.computeDemand(baseline).R);
+  assert.equal(model.propertyValueBonus(model.bulldozeTile(placed, 41), 9, 40), 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(placed)), Array.from(placed));
+}
+grid[42] = 'T0';
+assert.equal(model.propertyValueBonus(grid, 9, 40), 3);
+grid[42] = '_0'; grid[44] = 'T0';
+assert.equal(model.propertyValueBonus(grid, 9, 40), 0);
+grid = empty(); grid[8] = 'T0';
+assert.equal(model.propertyValueBonus(grid, 9, 9), 0, 'no row wrapping');
+grid.fill('B0'); grid[40] = 'R2';
+assert.equal(model.propertyValueBonus(grid, 9, 40), 25);
+assert.equal(model.computeAttractiveness(model.summarize(grid)), 15);
+console.log('PASS: decoration costs, placement, persistence, removal, local falloff, boundaries, caps, demand and taxable population.');

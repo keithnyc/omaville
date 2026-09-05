@@ -1,13 +1,21 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Wayland
 import "Model.js" as Model
 
 // Headless city brain. Loaded once at shell startup (independent of the
 // bar widget and panel), so the city keeps growing with the panel closed.
 // Age ticks in active-shell-minutes, not wall clock, the same trick
 // Omagotchi uses — a machine that sleeps doesn't lose progress, but it
-// doesn't secretly keep simulating while suspended either.
+// doesn't secretly keep simulating while suspended either. That covers
+// actual suspend for free (a sleeping machine can't run any Timer at all),
+// but a machine left on and unlocked overnight never suspends — the Timer
+// below used to happily fire the whole time, "simulating" months of city
+// life (and rolling for a dilemma every tick) with nobody there to see it.
+// idleMonitor closes that gap: the tick pauses once the compositor reports
+// no keyboard/mouse activity for a while, exactly like the away-from-desk
+// detection the shell's own screensaver/lock plugin uses.
 Item {
   id: root
 
@@ -31,8 +39,33 @@ Item {
   property int population: 0
   property int jobs: 0
   property int happiness: 70
+  // R/C/I growth-chance multipliers from the last tick (Model.computeDemand)
+  // — 1.0 is "balanced" for that zone, not a shared 0-1 scale across all
+  // three. Persisted like population/jobs/happiness so the demand meter
+  // shows real numbers immediately after a restart instead of a neutral
+  // placeholder until the first tick fires.
+  property var demand: ({ R: 1, C: 1, I: 1 })
   property var reachedMilestones: []
   property bool budgetCrisisActive: false
+  // Queue of unresolved mayor's-dilemma events (oldest first) — stacking is
+  // intentional, a mayor who's been away comes back to a backlog, not a
+  // silently-dropped one. Each entry is a full event object from Model.EVENTS.
+  property var pendingEvents: []
+  // Lingering effects from resolved dilemmas (a happiness or income hit/boost
+  // that plays out over a few ticks rather than landing all at once) —
+  // folded into every tick via Model.advanceCity's modifier params.
+  property var activeEffects: []
+  // Per-tick roll chance for the next dilemma — a cooldown, not a constant.
+  // Starts warmed up at the max (a brand-new city isn't "due" for a quiet
+  // spell just because it's new); only firing an event resets it low, and it
+  // doubles back toward the max on every quiet tick after that. See
+  // Model.nextEventChance.
+  property real eventChance: Model.EVENT_CHANCE_MAX
+  // A player-facing multiplier on top of the cooldown above — 0 (Off), 0.5
+  // (Low), 1 (Normal), 2 (Frequent). A preference, not city state: New Game
+  // deliberately leaves this alone (see resetCity) so picking "Off" once
+  // doesn't mean re-picking it for every fresh city after.
+  property real eventFrequency: 1.0
 
   property bool initialized: false
   readonly property int maxStateBytes: 65536
@@ -55,16 +88,48 @@ Item {
 
   function zoneTile(index, type) {
     if (!Model.canPlace(root.grid, index, type, root.treasury)) return false
-    root.treasury -= Model.COSTS[type]
+    root.treasury -= Model.placementCost(root.grid, index, type)
     root.grid = Model.placeTile(root.grid, index, type)
+    flushState()
+    return true
+  }
+
+  function buildTier(index, type, level) {
+    if (!root.initialized) return false
+    var check = Model.canBuildTier(root.grid, index, type, level, root.population, root.treasury)
+    if (!check.ok) return false
+    var next = root.grid.slice()
+    next[index] = Model.makeTile(type, level)
+    root.treasury -= check.cost
+    root.grid = next
     flushState()
     return true
   }
 
   function bulldozeTile(index) {
     if (index < 0 || index >= root.grid.length) return
+    var tile = Model.parseTile(root.grid[index])
+    var refund = Model.totalInvestment(tile.type, tile.level)
     root.grid = Model.bulldozeTile(root.grid, index)
+    if (refund > 0) root.treasury += refund
     flushState()
+  }
+
+  // Park/Power/Water/Fire/Police upgrade one tier at a time — a deliberate
+  // spend the player triggers (see CityView's tier flyout), gated by both
+  // a population threshold and cost, unlike R/C/I's automatic
+  // demand-driven growth. Model.canUpgrade is the single source of truth
+  // for eligibility so the flyout's "locked"/"can't afford" state can
+  // never drift from what actually happens when clicked.
+  function upgradeTile(index) {
+    if (index < 0 || index >= root.grid.length) return false
+    var tile = Model.parseTile(root.grid[index])
+    var check = Model.canUpgrade(tile.type, tile.level, root.population, root.treasury)
+    if (!check.ok) return false
+    root.treasury -= check.cost
+    root.grid = Model.upgradeTile(root.grid, index)
+    flushState()
+    return true
   }
 
   function setTaxRate(percent) {
@@ -74,22 +139,150 @@ Item {
     flushState()
   }
 
+  function renameCity(value) {
+    var name = String(value).replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim()
+    if (!root.initialized || name.length === 0 || name.length > 40) return false
+    if (name !== root.cityName) {
+      root.cityName = name
+      flushState()
+    }
+    return true
+  }
+
+  // Wipes the grid and every stat back to a fresh city's defaults, keeping
+  // the city's name (editable in Settings). foundedAtMs resets
+  // too, so the calendar starts back at month 1 of a new founding year.
+  function resetCity() {
+    root.grid = Model.emptyGrid(root.gridSize)
+    root.treasury = 500
+    root.taxRatePercent = 10
+    root.population = 0
+    root.jobs = 0
+    root.happiness = 70
+    root.demand = { R: 1, C: 1, I: 1 }
+    root.reachedMilestones = []
+    root.budgetCrisisActive = false
+    root.pendingEvents = []
+    root.activeEffects = []
+    root.eventChance = Model.EVENT_CHANCE_MAX
+    root.ageMinutes = 0
+    root.foundedAtMs = Date.now()
+    flushState()
+  }
+
+  // --- mayor's dilemmas --------------------------------------------------
+
+  readonly property var eventFrequencyOptions: [
+    { value: 0, label: "Off" },
+    { value: 0.5, label: "Low" },
+    { value: 1, label: "Normal" },
+    { value: 2, label: "Frequent" }
+  ]
+
+  function setEventFrequency(value) {
+    var n = Number(value)
+    if (!isFinite(n) || n < 0) return
+    if (n === root.eventFrequency) return
+    root.eventFrequency = n
+    flushState()
+  }
+
+  function rollEvent() {
+    var pendingIds = root.pendingEvents.map(function(e) { return e.id })
+    var effectiveChance = root.eventChance * root.eventFrequency
+    var event = Model.rollForEvent(pendingIds, root.population, effectiveChance)
+    root.eventChance = Model.nextEventChance(root.eventChance, !!event)
+    if (!event) return
+    root.pendingEvents = root.pendingEvents.concat([event])
+    root.notify(event.title, event.flavor + " Open Omaville to decide.")
+    flushState()
+  }
+
+  function resolveEvent(eventId, choiceIndex) {
+    var idx = -1
+    for (var i = 0; i < root.pendingEvents.length; i++) {
+      if (root.pendingEvents[i].id === eventId) { idx = i; break }
+    }
+    if (idx < 0) return
+    var event = root.pendingEvents[idx]
+    var choice = event.choices[choiceIndex]
+    if (!choice) return
+
+    var remaining = root.pendingEvents.slice()
+    remaining.splice(idx, 1)
+    root.pendingEvents = remaining
+
+    var fx = choice.effects || {}
+    if (fx.treasuryDelta) root.treasury = Math.max(Model.TREASURY_FLOOR, root.treasury + fx.treasuryDelta)
+    if (fx.populationPercent) {
+      var deltaPop = Math.round(root.population * fx.populationPercent)
+      root.grid = Model.applyPopulationShock(root.grid, deltaPop)
+    }
+    if (fx.happinessDelta || (fx.incomeMultiplier !== undefined && fx.incomeMultiplier !== 1)) {
+      root.activeEffects = root.activeEffects.concat([{
+        id: event.id + "-" + Date.now(),
+        label: event.title,
+        happinessDelta: fx.happinessDelta || 0,
+        incomeMultiplier: fx.incomeMultiplier !== undefined ? fx.incomeMultiplier : 1,
+        ticksRemaining: fx.effectTicks || 1
+      }])
+    }
+    root.notify(root.cityName, choice.outcome)
+    flushState()
+  }
+
   // --- the minute tick -------------------------------------------------------
 
+  // ext-idle-notify-v1 via Quickshell.Wayland: true once the compositor has
+  // seen no keyboard/mouse input for idleTimeoutSeconds, same signal the
+  // shell's own screensaver uses. Not tied to whether Omaville's panel is
+  // open — the point is "away from the machine entirely," not "not looking
+  // at this specific widget."
+  readonly property int idleTimeoutSeconds: 300
+  IdleMonitor {
+    id: idleMonitor
+    enabled: true
+    timeout: root.idleTimeoutSeconds
+    respectInhibitors: true
+  }
+
+  // 15s for now while the pacing itself is still being playtested — the
+  // eventual idle-game pace (a month per active minute) is one line to
+  // restore once the mechanics feel right at a readable speed.
   Timer {
-    interval: 60 * 1000
-    running: root.initialized
+    interval: 15 * 1000
+    running: root.initialized && !idleMonitor.isIdle
     repeat: true
     onTriggered: {
-      var result = Model.advanceCity(root.grid, root.gridSize, root.taxRatePercent)
+      var happinessModifier = 0
+      var incomeMultiplier = 1
+      var stillActive = []
+      for (var i = 0; i < root.activeEffects.length; i++) {
+        var eff = root.activeEffects[i]
+        happinessModifier += eff.happinessDelta
+        incomeMultiplier *= eff.incomeMultiplier
+        var ticksLeft = eff.ticksRemaining - 1
+        if (ticksLeft > 0) {
+          stillActive.push({
+            id: eff.id, label: eff.label, happinessDelta: eff.happinessDelta,
+            incomeMultiplier: eff.incomeMultiplier, ticksRemaining: ticksLeft
+          })
+        }
+      }
+      root.activeEffects = stillActive
+
+      var result = Model.advanceCity(root.grid, root.gridSize, root.taxRatePercent,
+        happinessModifier, incomeMultiplier)
       root.grid = result.grid
       root.population = result.population
       root.jobs = result.jobs
       root.happiness = result.happiness
-      root.treasury += result.incomeDelta
+      root.demand = result.demand
+      root.treasury = Math.max(Model.TREASURY_FLOOR, root.treasury + result.incomeDelta)
       root.ageMinutes += 1
       root.checkMilestones()
       root.checkBudget()
+      root.rollEvent()
       if (Math.round(root.ageMinutes) % 5 === 0) root.flushState()
     }
   }
@@ -130,13 +323,21 @@ Item {
       ageMinutes: root.ageMinutes,
       treasury: root.treasury,
       taxRatePercent: root.taxRatePercent,
-      grid: root.grid,
+      // Packed to one string rather than 4096 indented array lines — see
+      // Model.packGrid for why the read cap makes that worth doing.
+      grid: Model.packGrid(root.grid),
       gridSize: root.gridSize,
+      saveVersion: Model.SAVE_VERSION,
       population: root.population,
       jobs: root.jobs,
       happiness: root.happiness,
+      demand: root.demand,
       reachedMilestones: root.reachedMilestones,
-      budgetCrisisActive: root.budgetCrisisActive
+      budgetCrisisActive: root.budgetCrisisActive,
+      pendingEvents: root.pendingEvents,
+      activeEffects: root.activeEffects,
+      eventChance: root.eventChance,
+      eventFrequency: root.eventFrequency
     }, null, 2) + "\n")
   }
 
@@ -144,6 +345,7 @@ Item {
     if (initialized || !stateFileLoaded) return
 
     var saveProblem = stateReadProblem
+    var migratedGrid = false
     function num(v, fallback) {
       var n = Number(v)
       return isFinite(n) ? n : fallback
@@ -153,19 +355,38 @@ Item {
       cityName = typeof saved.cityName === "string" && saved.cityName !== "" ? saved.cityName : "Omaville"
       foundedAtMs = num(saved.foundedAtMs, 0)
       ageMinutes = Math.max(0, num(saved.ageMinutes, 0))
-      treasury = num(saved.treasury, 500)
+      treasury = Math.max(Model.TREASURY_FLOOR, num(saved.treasury, 500))
       taxRatePercent = Math.max(0, Math.min(30, num(saved.taxRatePercent, 10)))
-      var loadedGrid = Array.isArray(saved.grid) ? saved.grid : null
-      // A grid whose length doesn't match the current gridSize (schema
-      // change, corrupt save) falls back to a fresh empty map rather than
-      // indexing garbage for the lifetime of the city.
-      grid = loadedGrid && loadedGrid.length === gridSize * gridSize
-        ? loadedGrid : Model.emptyGrid(gridSize)
+      // Saves written before SAVE_VERSION 2 still hold a plain array here;
+      // both forms decode to the same tile list, so an older city loads
+      // unchanged and is simply rewritten packed on its next flush.
+      var loadedGrid = Array.isArray(saved.grid) ? saved.grid : Model.unpackGrid(saved.grid)
+      var savedSize = loadedGrid ? Math.round(Math.sqrt(loadedGrid.length)) : 0
+      // A grid whose length doesn't match the current gridSize either means
+      // a corrupt save (falls back to empty) or that GRID_SIZE grew since
+      // this city was saved — in which case the old city is carried into
+      // the middle of the new, bigger map rather than discarded.
+      if (loadedGrid && savedSize * savedSize === loadedGrid.length && savedSize === gridSize) {
+        grid = loadedGrid
+      } else if (loadedGrid && savedSize > 0 && savedSize < gridSize) {
+        grid = Model.migrateGrid(loadedGrid, savedSize, gridSize)
+        migratedGrid = true
+      } else {
+        grid = Model.emptyGrid(gridSize)
+      }
       population = Math.max(0, Math.round(num(saved.population, 0)))
       jobs = Math.max(0, Math.round(num(saved.jobs, 0)))
       happiness = Math.max(0, Math.min(100, Math.round(num(saved.happiness, 70))))
+      demand = (saved.demand && typeof saved.demand === "object")
+        ? { R: num(saved.demand.R, 1), C: num(saved.demand.C, 1), I: num(saved.demand.I, 1) }
+        : { R: 1, C: 1, I: 1 }
       reachedMilestones = Array.isArray(saved.reachedMilestones) ? saved.reachedMilestones : []
       budgetCrisisActive = saved.budgetCrisisActive === true
+      pendingEvents = Array.isArray(saved.pendingEvents) ? saved.pendingEvents : []
+      activeEffects = Array.isArray(saved.activeEffects) ? saved.activeEffects : []
+      eventChance = Model.clamp(num(saved.eventChance, Model.EVENT_CHANCE_MAX),
+        Model.EVENT_CHANCE_BASE, Model.EVENT_CHANCE_MAX)
+      eventFrequency = Math.max(0, num(saved.eventFrequency, 1))
     } catch (error) {
       saveProblem = "not valid JSON (" + error + ")"
       foundedAtMs = 0
@@ -184,7 +405,9 @@ Item {
       notify("Omaville couldn't read its save file",
              "It was corrupt or oversized, so a fresh city takes over.")
     }
-    if (founded) flushState()
+    if (migratedGrid)
+      notify(root.cityName, "The map grew — your city now has room to expand.")
+    if (founded || migratedGrid) flushState()
   }
 
   Process {

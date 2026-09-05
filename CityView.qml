@@ -1,0 +1,4286 @@
+import QtQuick
+import qs.Commons
+import qs.Ui
+import "Model.js" as Model
+import "Traffic.js" as Traffic
+import "Ambience.js" as Ambience
+import "Waterfront.js" as Waterfront
+
+// The whole city view — stats, action palette, the map, traffic, utility
+// warnings — as a standalone component so it can be hosted either by the
+// docked bar panel (Panel.qml) or a real resizable window (DetachedWindow.qml)
+// without duplicating any of this. Everything here is decoupled from `bar`
+// (every themed color/font falls back to Color/Style defaults) since a
+// detached window has no bar to inherit from.
+Item {
+  id: root
+
+  property var cityService: null
+  property var bar: null
+  // Gates the car/blink animation timer — false while hidden so a closed
+  // panel or an unfocused/minimized detached window costs nothing.
+  property bool active: true
+  // Only used to pick which icon (detach vs. dock) the button in the
+  // header shows — the actual window management lives in whichever host
+  // (Panel.qml / DetachedWindow.qml / BarWidget.qml) is listening.
+  property bool detached: false
+  signal detachRequested()
+  signal reattachRequested()
+
+  // The canvas area's own size — the docked panel leaves these at the
+  // fixed default; a resizable detached window binds them to its actual
+  // available space, so "resize the window" really does mean "see more
+  // of the map," not just more empty space around a fixed square.
+  property int viewportWidth: 560
+  property int viewportHeight: 560
+  readonly property real mapTop: mapRow.y
+  readonly property real footerHeight: toolStatusLabel.implicitHeight
+
+  readonly property bool serviceReady: !!cityService && cityService.initialized === true
+  readonly property var grid: cityService ? cityService.grid : []
+  onGridChanged: root.detectGrowth()
+
+  // Growth otherwise happens completely silently — a tile just redraws
+  // different the next time its cell is painted, with nothing calling out
+  // the moment it actually happened. Diffing each new grid against the
+  // previous one (rather than having Model.tickGrid report growth
+  // explicitly) keeps this purely a CityView concern: the sim doesn't need
+  // to know anything about how growth is *shown*, only that it happened.
+  property var previousGrid: []
+  property var growthFlashes: []
+  readonly property int growthFlashDuration: 900
+
+  function detectGrowth() {
+    var prev = root.previousGrid
+    var next = root.grid
+    // First load (or a grid-size migration) has no meaningful "previous" to
+    // diff against — every built tile would otherwise register as having
+    // just grown from nothing.
+    if (prev.length !== next.length) {
+      root.previousGrid = next
+      return
+    }
+    var fresh = []
+    for (var i = 0; i < next.length; i++) {
+      if (prev[i] === next[i]) continue
+      var oldTile = Model.parseTile(prev[i])
+      var newTile = Model.parseTile(next[i])
+      if (newTile.type !== oldTile.type) continue
+      if ((newTile.type === Model.TILE_RES || newTile.type === Model.TILE_COM || newTile.type === Model.TILE_IND)
+          && newTile.level > oldTile.level) {
+        fresh.push({ index: i, start: Date.now(), color: root.roofColors[newTile.type] })
+      }
+    }
+    root.previousGrid = next
+    if (fresh.length > 0) root.growthFlashes = root.growthFlashes.concat(fresh)
+  }
+
+  // Advanced by the 80ms utility-blink timer — expired entries are
+  // dropped there so this list never grows without bound.
+  function drawGrowthFlash(ctx, cx, cy, cellSize, flash, now) {
+    var t = (now - flash.start) / root.growthFlashDuration
+    if (t < 0 || t > 1) return
+    var eased = 1 - Math.pow(1 - t, 2)
+    var radius = cellSize * (0.22 + eased * 0.55)
+    ctx.globalAlpha = (1 - t) * 0.85
+    ctx.strokeStyle = flash.color
+    ctx.lineWidth = Math.max(1.5, cellSize * 0.06 * (1 - t * 0.6))
+    ctx.beginPath()
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
+
+  readonly property int gridSize: cityService ? cityService.gridSize : Model.GRID_SIZE
+  // Recomputed only when the grid itself changes (zoning, a sim tick) —
+  // the blink overlay redraws far more often than that, so it just reads
+  // this cached plant list rather than rescanning the whole grid for it
+  // on every animation frame.
+  readonly property var utilities: Model.findUtilities(root.grid)
+  readonly property var serviceCoverage: Model.serviceCoverageStats(root.grid, root.gridSize)
+  readonly property int population: cityService ? cityService.population : 0
+  readonly property int jobs: cityService ? cityService.jobs : 0
+  readonly property real treasury: cityService ? cityService.treasury : 0
+  readonly property int happiness: cityService ? cityService.happiness : 0
+  // Model.computeDemand's raw growth-chance multipliers. Each zone's formula
+  // has its own achievable [min, max] (mirrored here from computeDemand's
+  // own constants) — R/C span 0.5-1.25, but I is a deliberately softer,
+  // capped curve that only ever reaches 0.6-0.9. A shared "1.0 = balanced"
+  // rescale would leave Industrial permanently reading as oversupplied no
+  // matter what's actually built, since its formula can never reach 1.0.
+  // Rescaling each zone against its *own* range instead — floor to -100%,
+  // ceiling to +100% — keeps all three bars meaningful even though they're
+  // not on a literal shared scale (see Model.computeDemand's own comment).
+  readonly property var demand: cityService ? cityService.demand : ({ R: 1, C: 1, I: 1 })
+  readonly property var demandRange: ({
+    R: { min: 0.5, max: 1.25 },
+    C: { min: 0.5, max: 1.25 },
+    I: { min: 0.6, max: 0.9 }
+  })
+  function demandPercent(key, value) {
+    var range = root.demandRange[key]
+    var span = range.max - range.min
+    var pct = span > 0 ? (value - range.min) / span * 200 - 100 : 0
+    return Math.max(-100, Math.min(100, Math.round(pct)))
+  }
+  readonly property int taxRatePercent: cityService ? cityService.taxRatePercent : 10
+  readonly property var calendar: Model.calendarFor(cityService ? cityService.ageMinutes : 0)
+  onCalendarChanged: calendarPulse.restart()
+
+  // Mayor's dilemmas — Reigns-style binary decisions. Shown automatically
+  // (no toggle to open it) whenever there's one waiting, since the whole
+  // point is that it's the mayor's call, not something to dismiss unread.
+  // Stacking is intentional: only the oldest shows at a time, and resolving
+  // it reveals the next one straight away.
+  readonly property var pendingEvents: cityService ? cityService.pendingEvents : []
+  readonly property var currentEvent: pendingEvents.length > 0 ? pendingEvents[0] : null
+
+  // Model tile-type char for the currently selected tool, or the sentinel
+  // "bulldoze" for the clear tool. "" means no tool selected (right-click
+  // to get here) — a neutral "just looking" cursor.
+  property string activeTool: Model.TILE_ROAD
+  // Hovering a palette icon previews its name/cost in the status line;
+  // empty falls back to describing whatever's actually selected — same
+  // "bottom-left status readout" pattern the original SimCity's icon
+  // palette used instead of per-icon tooltips.
+  property string hoveredToolType: ""
+  onActiveToolChanged: {
+    if (root.activeTool !== "inspect") root.inspectedIndex = -1
+    root.flyoutType = ""
+  }
+
+  // Remember the exact selected infrastructure tier for direct placement
+  // and upgrading matching buildings to that tier in a single action.
+  readonly property var upgradeableTypes: [Model.TILE_PARK, Model.TILE_POWER, Model.TILE_WATER, Model.TILE_FIRE, Model.TILE_POLICE, Model.TILE_SCHOOL, Model.TILE_MEDICAL]
+  property string upgradeTarget: ""
+  property int selectedTier: 0
+  property string flyoutType: ""
+  property string decorationTool: Model.TILE_TREE
+  readonly property int attractiveness: Model.computeAttractiveness(Model.summarize(root.grid))
+  readonly property var decorationSpriteUrls: ({
+    T: Qt.resolvedUrl("assets/decorations/tree.png").toString(),
+    B: Qt.resolvedUrl("assets/decorations/flowers.png").toString()
+  })
+
+  function toolHint(type) {
+    if (type === Model.TILE_LAKE) return "Water · $4 per tile\nPaint rivers and lakes on empty land. Roads over water become $35 bridges."
+    if (type === Model.TILE_WATERFRONT_PARK) return "Waterfront Park · $30\nPlace on empty land beside water for a garden and pier. Adds park happiness."
+    if (type === Model.TILE_ROAD) return "Road · $10 on land / $35 bridge on water\nRemoving a bridge restores the water below."
+    if (type === "decorations") return "Decorations · hover for trees and flowerbeds\nRaise nearby home values and residential demand."
+    if (type === "inspect") return "Inspect · click a tile for services, property value and upgrades."
+    if (type === "bulldoze") return "Bulldoze · remove a tile and reclaim its construction cost."
+    var hint = (Model.TILE_LABELS[type] || type) + " · $" + Model.COSTS[type]
+    if (type === Model.TILE_TREE || type === Model.TILE_FLOWERS)
+      return hint + "\nImproves homes within 3 tiles. Property bonus capped at 25%; city appeal capped at 15%."
+    if (root.upgradeableTypes.indexOf(type) >= 0) hint += "\nHover for placement and upgrade tiers."
+    return hint
+  }
+
+  // Index of the tile the Info tool last clicked, or -1 for none. Recomputed
+  // live from Model.inspectTile (the exact same helpers tickGrid uses) so
+  // the card never shows a stale snapshot — if the tile changes under it
+  // (grows, gets bulldozed), the tooltip just describes whatever's there now.
+  property int inspectedIndex: -1
+  readonly property int tileHoverIndex: root.active && root.serviceReady && gridMouse.containsMouse
+    && !gridMouse.pressed && !gridMouse.painting && !gridMouse.panning
+    && !root.gameMenuOpen && !root.settingsOpen && !root.confirmNewGameOpen && !root.currentEvent && root.flyoutType === ""
+    ? gridMouse.tileIndexAt(gridMouse.mouseX, gridMouse.mouseY) : -1
+  property bool tileHoverReady: false
+  onTileHoverIndexChanged: {
+    tileHoverReady = false
+    tileHoverDelay.stop()
+    if (tileHoverIndex >= 0) tileHoverDelay.restart()
+  }
+  readonly property var hoveredTileInfo: tileHoverReady && tileHoverIndex >= 0
+    ? Model.inspectTile(root.grid, root.gridSize, tileHoverIndex, root.utilities, root.demand, root.population, root.treasury) : null
+  Timer {
+    id: tileHoverDelay
+    interval: 650
+    onTriggered: root.tileHoverReady = root.tileHoverIndex >= 0
+  }
+  readonly property var inspectedInfo: root.inspectedIndex >= 0 && root.serviceReady
+    ? Model.inspectTile(root.grid, root.gridSize, root.inspectedIndex, root.utilities, root.demand, root.population, root.treasury)
+    : null
+
+  function inspectTitle(info) {
+    if (!info) return ""
+    if (info.type === Model.TILE_ROAD && info.level === 1) return "Bridge"
+    if (info.tierName) return info.tierName + " · Tier " + (info.level + 1)
+    var label = Model.TILE_LABELS[info.type] || "Unknown"
+    var isZone = info.type === Model.TILE_RES || info.type === Model.TILE_COM || info.type === Model.TILE_IND
+    if (!isZone) return label
+    return label + " · " + (info.level > 0 ? ("Level " + info.level) : "Undeveloped")
+  }
+
+  function inspectLines(info) {
+    if (!info) return []
+    var lines = []
+    var isZone = info.type === Model.TILE_RES || info.type === Model.TILE_COM || info.type === Model.TILE_IND
+    if (isZone) {
+      lines = [
+        "Road access: " + (info.roadAdjacent ? "Yes" : "No"),
+        "Power: " + (info.powerCovered ? "Yes" : "No"),
+        "Water: " + (info.waterCovered ? "Yes" : "No"),
+        "Fire cover: " + (info.fireCovered ? "Yes" : "No"),
+        "Police cover: " + (info.policeCovered ? "Yes" : "No")
+      ]
+      if (info.demand !== undefined) lines.push("Demand: " + root.demandPercent(info.type, info.demand) + "%")
+      if (info.type === Model.TILE_RES) {
+        lines.push("Education: " + (info.educationCovered ? "Covered · growth boosted" : "Unserved · growth slows after Pop 100"))
+        lines.push("Healthcare: " + (info.medicalCovered ? "Covered · growth boosted" : "Unserved · growth slows after Pop 100"))
+        lines.push("Property value: +" + info.propertyBonus + "% · growth / tax bonus")
+        if (info.waterfrontBonus) lines.push("Waterfront contributes +" + info.waterfrontBonus + "% (maximum 12%)")
+        if (info.nearIndustrial) lines.push("Near industrial — growth slowed")
+        if (info.nearCommercial) lines.push("Near commercial — growth boosted")
+      }
+    }
+    if (info.upgrade) {
+      if (info.type !== Model.TILE_SCHOOL && info.type !== Model.TILE_MEDICAL && root.coverageRadii[info.type])
+        lines.push("Service range: " + Math.round(root.coverageRadii[info.type] * Model.INFRA_RADIUS_SCALE[info.level] * 10) / 10 + " tiles")
+      if (info.type === Model.TILE_SCHOOL)
+        lines.push("Education range: " + Model.SCHOOL_RADIUS * Model.INFRA_RADIUS_SCALE[info.level] + " tiles")
+      if (info.type === Model.TILE_MEDICAL)
+        lines.push("Healthcare range: " + Model.MEDICAL_RADIUS * Model.INFRA_RADIUS_SCALE[info.level] + " tiles")
+      var u = info.upgrade
+      if (u.reason === "max-level") lines.push("Max tier reached")
+      else if (u.reason === "locked") lines.push("Upgrade needs Pop " + u.threshold + " ($" + u.cost + ")")
+      else if (u.reason === "cant-afford") lines.push("Upgrade ready — needs $" + u.cost)
+      else if (u.ok) lines.push("Upgrade ready — $" + u.cost + " (hover the tool icon)")
+    }
+    if (info.type === Model.TILE_TREE || info.type === Model.TILE_FLOWERS)
+      lines.push("Beautifies homes within 3 tiles", "Contributes to city appeal: +" + root.attractiveness + "% residential demand")
+    if (info.type === Model.TILE_ROAD)
+      lines.push(info.level === 1 ? "Carries traffic over water · bulldoze restores water" : "Connects buildings and carries traffic")
+    if (info.type === Model.TILE_LAKE)
+      lines.push("Natural water · nearby homes gain up to 12% value", "Draw a road here to build a $35 bridge", "Does not provide utility water")
+    if (info.type === Model.TILE_WATERFRONT_PARK)
+      lines.push("Waterfront garden · contributes to park happiness")
+    if (info.type === Model.TILE_PARK)
+      lines.push("Park happiness contribution: +" + Model.PARK_BONUS_PER_LEVEL[info.level])
+    return lines
+  }
+
+  // --- game menu: the third UX category (game-level actions, distinct
+  // from the build palette and the view controls) — today just New Game,
+  // with Settings/Save Game listed as visible-but-disabled placeholders
+  // so the menu's shape doesn't need to change again once they're built.
+  property bool gameMenuOpen: false
+  property bool confirmNewGameOpen: false
+  property bool settingsOpen: false
+  readonly property bool editingTownName: root.settingsOpen && townNameInput.activeFocus
+  Shortcut {
+    sequence: "F2"
+    enabled: root.active && root.serviceReady
+    onActivated: root.activateGameMenuItem("name")
+  }
+  onSettingsOpenChanged: {
+    if (settingsOpen) townNameInput.text = root.serviceReady ? root.cityService.cityName : ""
+  }
+  readonly property var gameMenuItems: [
+    { action: "new", label: "New Game", enabled: true },
+    { action: "name", label: "Name Town", enabled: root.serviceReady },
+    { action: "settings", label: "Settings", enabled: true },
+    { action: "save", label: "Save Game", enabled: false }
+  ]
+  function activateGameMenuItem(action) {
+    root.gameMenuOpen = false
+    if (action === "new") root.confirmNewGameOpen = true
+    else if (action === "settings") root.settingsOpen = true
+    else if (action === "name") {
+      root.settingsOpen = true
+      townNameInput.forceActiveFocus()
+      townNameInput.selectAll()
+    }
+  }
+
+  function toolStatusText() {
+    var t = root.hoveredToolType !== "" ? root.hoveredToolType : root.activeTool
+    if (t === Model.TILE_ROAD) return "Road — $10 on land · $35 bridge over water"
+    if (t === Model.TILE_LAKE) return "Water — $4 · paint empty land · waterfront homes gain up to 12%"
+    if (t === Model.TILE_WATERFRONT_PARK) return "Waterfront Park — $30 · requires empty land beside water"
+    if (t === "decorations") return "Decorations — hover to choose a tree or flowerbed"
+    if (t === Model.TILE_TREE || t === Model.TILE_FLOWERS) return Model.TILE_LABELS[t] + " — $" + Model.COSTS[t] + " · improves nearby home values"
+    var item = null
+    for (var i = 0; i < root.toolList.length; i++) {
+      if (root.toolList[i].type === t) { item = root.toolList[i]; break }
+    }
+    if (!item) return "Click/drag to build · middle-drag to pan · scroll to zoom"
+    if (t === "inspect") return item.label + " — click a tile to inspect it"
+    if (root.upgradeTarget !== "" && root.upgradeTarget === t)
+      return Model.UPGRADE_TIER_NAMES[t][root.selectedTier] + " — $"
+        + Model.totalInvestment(t, root.selectedTier) + " new · existing buildings pay only the difference"
+    var cost = t === "bulldoze" ? "free" : ("$" + Model.COSTS[t])
+    var holdHint = root.upgradeableTypes.indexOf(t) >= 0 ? " · hover for upgrades" : ""
+    return item.label + " — " + cost + holdHint
+  }
+
+  // --- viewport: the canvas is a fixed-size window onto a much bigger
+  // grid, panned/zoomed independently of the city data itself. Pan/zoom
+  // are view state, not city state — they reset to a sensible default
+  // (centered on the built area) each time the view is (re)created rather
+  // than persisting, since "where you last looked" isn't worth a save-file
+  // field.
+  readonly property int baseCellSize: 32
+  property real zoom: 1.0
+  property real panX: 0
+  property real panY: 0
+  readonly property real effectiveCellSize: baseCellSize * zoom
+  property bool panInitialized: false
+
+  // When the whole grid (at this zoom) is smaller than the viewport —
+  // unreachable in the docked panel's small fixed viewport, but easy to
+  // hit by zooming out in a big detached window — clamping to [0, max]
+  // degenerates to always 0, pinning the content to the top-left corner
+  // instead of centering it in the extra space. Center it in that case
+  // instead, with a negative pan offset if needed.
+  function clampPan() {
+    var contentSize = root.gridSize * root.effectiveCellSize
+    root.panX = contentSize <= root.viewportWidth
+      ? (contentSize - root.viewportWidth) / 2
+      : Math.max(0, Math.min(contentSize - root.viewportWidth, root.panX))
+    root.panY = contentSize <= root.viewportHeight
+      ? (contentSize - root.viewportHeight) / 2
+      : Math.max(0, Math.min(contentSize - root.viewportHeight, root.panY))
+  }
+
+  function centerOnGrid() {
+    var mid = root.gridSize * root.effectiveCellSize / 2
+    root.panX = mid - root.viewportWidth / 2
+    root.panY = mid - root.viewportHeight / 2
+    clampPan()
+  }
+
+  // Zooming keeps whatever's at the viewport's center anchored in place,
+  // rather than always zooming toward the grid's top-left corner.
+  function setZoom(newZoom) {
+    var clamped = Math.max(0.4, Math.min(2.5, newZoom))
+    if (Math.abs(clamped - root.zoom) < 0.001) return
+    var oldEffective = root.effectiveCellSize
+    var centerWorldX = (root.panX + root.viewportWidth / 2) / oldEffective
+    var centerWorldY = (root.panY + root.viewportHeight / 2) / oldEffective
+    root.zoom = clamped
+    var newEffective = root.baseCellSize * root.zoom
+    root.panX = centerWorldX * newEffective - root.viewportWidth / 2
+    root.panY = centerWorldY * newEffective - root.viewportHeight / 2
+    clampPan()
+  }
+
+  function initPanIfReady() {
+    if (root.panInitialized || !root.serviceReady) return
+    root.panInitialized = true
+    root.centerOnGrid()
+  }
+
+  Component.onCompleted: initPanIfReady()
+  onServiceReadyChanged: initPanIfReady()
+
+  // --- traffic: small cosmetic cars wandering the road network. Purely
+  // decorative — not persisted, not part of the sim, alive only while
+  // `active` (see the Timer below) so a hidden view costs nothing.
+  // Drawn on their own overlay canvas (see trafficCanvas) so animating
+  // them doesn't force a full tile repaint 30 times a second — only the
+  // cars themselves get redrawn that often.
+  property var cars: []
+  property var skyLife: Ambience.initialState()
+  // Scales with the city instead of a fixed count — a tiny town shouldn't
+  // look as busy as a growing one, and a shrinking one should visibly
+  // quiet down. Floor of 3 once anyone actually lives here (not 0 — a
+  // town of 150 still has *some* traffic), capped well below where more
+  // cars would just look chaotic rather than alive.
+  readonly property int carCount: root.population <= 0 ? 0
+    : Math.max(3, Math.min(50, Math.round(root.population / 90)))
+  readonly property var carColors: ["#e0524a", "#4a90d9", "#e8c93a", "#5fbf6f", "#e8e8e8", "#c96fd9"]
+
+  readonly property var trafficRoadTiles: Traffic.roadTiles(root.grid, root.gridSize)
+
+  function updateCars(dt, data, gridSize) {
+    root.cars = Traffic.update(root.cars, dt, data, gridSize, root.carCount, root.trafficRoadTiles, root.carColors)
+  }
+
+  function drawCar(ctx, car, cellSize, offsetX, offsetY, gridSize, viewW, viewH) {
+    var pose = Traffic.pose(car, gridSize)
+    var x = pose.x * cellSize - offsetX
+    var y = pose.y * cellSize - offsetY
+    var angle = pose.angle
+
+    if (x < -cellSize || x > viewW + cellSize || y < -cellSize || y > viewH + cellSize) return
+    var w = Math.max(3, cellSize * (car.schoolBus || car.ambulance ? 0.44 : 0.34))
+    var h = Math.max(2, cellSize * 0.2)
+    ctx.save()
+    ctx.translate(x, y)
+    ctx.rotate(angle)
+    ctx.globalAlpha = Math.min(1, car.age / 0.5, Math.max(0, (90 - car.age) / 2))
+    var lights = Traffic.lightPulse(car)
+    if ((car.police || car.ambulance) && Traffic.emergencyActive(car)) {
+      // Soft colored pools below the cruiser, with no full-screen flashes.
+      for (var side = 0; side < 2; side++) {
+        var intensity = side === 0 ? lights.red : lights.blue
+        var rgb = side === 0 ? "255,55,65" : "55,125,255"
+        var ly = (side === 0 ? -1 : 1) * h * 0.32
+        var radius = cellSize * 0.40
+        var glow = ctx.createRadialGradient(0, ly, 0, 0, ly, radius)
+        glow.addColorStop(0, "rgba(" + rgb + "," + intensity * 0.42 + ")")
+        glow.addColorStop(1, "rgba(" + rgb + ",0)")
+        ctx.fillStyle = glow
+        ctx.fillRect(-radius, ly - radius, radius * 2, radius * 2)
+      }
+    }
+    ctx.fillStyle = "rgba(10, 15, 20, 0.4)"
+    ctx.fillRect(-w / 2, -h / 2 + 1, w + 1, h)
+    ctx.fillStyle = car.color
+    ctx.fillRect(-w / 2, -h / 2, w, h)
+    ctx.fillStyle = "#263f50"
+    ctx.fillRect(w * 0.12, -h * 0.4, w * 0.14, h * 0.8)
+    ctx.fillRect(-w * 0.3, -h * 0.4, w * 0.12, h * 0.8)
+    if (car.police) {
+      ctx.fillStyle = "#182b3c"
+      ctx.fillRect(-w * 0.5, -h * 0.5, w * 0.2, h)
+      ctx.fillRect(w * 0.29, -h * 0.5, w * 0.21, h)
+      ctx.fillStyle = "#d8e0e1"
+      ctx.fillRect(-w * 0.13, -h * 0.45, w * 0.20, h * 0.9)
+      ctx.fillStyle = lights.red > 0.5 ? "#ffb2ab" : "#983a47"
+      ctx.fillRect(-w * 0.08, -h * 0.47, w * 0.13, h * 0.42)
+      ctx.fillStyle = lights.blue > 0.5 ? "#b5e0ff" : "#34658d"
+      ctx.fillRect(-w * 0.08, h * 0.05, w * 0.13, h * 0.42)
+    }
+    if (car.schoolBus) {
+      ctx.fillStyle = "#263f50"
+      for (var window = 0; window < 4; window++) {
+        ctx.fillRect(-w * 0.36 + window * w * 0.16, -h * 0.48, w * 0.10, h * 0.23)
+        ctx.fillRect(-w * 0.36 + window * w * 0.16, h * 0.25, w * 0.10, h * 0.23)
+      }
+      ctx.fillStyle = "#f5ca4c"
+      ctx.fillRect(-w * 0.34, -h * 0.18, w * 0.55, h * 0.36)
+    }
+    if (car.ambulance) {
+      // Boxy patient compartment, green medical cross and cab lightbar.
+      ctx.fillStyle = "#f1eee2"
+      ctx.fillRect(-w * 0.45, -h * 0.45, w * 0.58, h * 0.9)
+      ctx.fillStyle = "#389c81"
+      ctx.fillRect(-w * 0.29, -h * 0.13, w * 0.26, h * 0.26)
+      ctx.fillRect(-w * 0.20, -h * 0.34, w * 0.08, h * 0.68)
+      ctx.fillRect(-w * 0.48, h * 0.35, w * 0.80, h * 0.10)
+      ctx.fillStyle = lights.red > 0.5 ? "#ffb2ab" : "#983a47"
+      ctx.fillRect(w * 0.08, -h * 0.47, w * 0.10, h * 0.42)
+      ctx.fillStyle = lights.blue > 0.5 ? "#b5e0ff" : "#34658d"
+      ctx.fillRect(w * 0.08, h * 0.05, w * 0.10, h * 0.42)
+    }
+    ctx.fillStyle = "#eee6bf"
+    ctx.fillRect(w * 0.39, -h * 0.4, w * 0.09, h * 0.22)
+    ctx.fillRect(w * 0.39, h * 0.18, w * 0.09, h * 0.22)
+    ctx.fillStyle = car.braking ? "#ff5644" : "#8e3830"
+    ctx.fillRect(-w * 0.5, -h * 0.4, w * 0.09, h * 0.24)
+    ctx.fillRect(-w * 0.5, h * 0.16, w * 0.09, h * 0.24)
+    ctx.restore()
+  }
+
+  // Utility blinks and growth flashes keep their cheaper 80ms cadence.
+  property real blinkPhase: 0
+  // The first widened range (0.12-0.80) still read as too faint overall —
+  // most of the cycle sits well below the 0.80 peak. Raising the floor
+  // keeps it visible through the whole pulse instead of just at the top.
+  readonly property real blinkAlpha: 0.4 + 0.55 * (0.5 + 0.5 * Math.sin(root.blinkPhase))
+
+  function drawMissingPowerIcon(ctx, cx, cy, cellSize, alpha) {
+    var s = cellSize * 0.36
+    ctx.globalAlpha = alpha
+    ctx.fillStyle = "#f2d24a"
+    ctx.strokeStyle = "rgba(40, 30, 5, 0.8)"
+    ctx.lineWidth = Math.max(1, cellSize * 0.04)
+    ctx.beginPath()
+    ctx.moveTo(cx - s * 0.12, cy - s * 0.5)
+    ctx.lineTo(cx + s * 0.2, cy - s * 0.06)
+    ctx.lineTo(cx, cy - s * 0.06)
+    ctx.lineTo(cx + s * 0.12, cy + s * 0.5)
+    ctx.lineTo(cx - s * 0.2, cy + s * 0.02)
+    ctx.lineTo(cx, cy + s * 0.02)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
+
+  function drawMissingWaterIcon(ctx, cx, cy, cellSize, alpha) {
+    var r = cellSize * 0.17
+    ctx.globalAlpha = alpha
+    ctx.fillStyle = "#5fb0e8"
+    ctx.strokeStyle = "rgba(10, 30, 45, 0.8)"
+    ctx.lineWidth = Math.max(1, cellSize * 0.04)
+    ctx.beginPath()
+    ctx.moveTo(cx, cy - r * 1.3)
+    ctx.quadraticCurveTo(cx + r * 1.1, cy + r * 0.3, cx, cy + r * 1.1)
+    ctx.quadraticCurveTo(cx - r * 1.1, cy + r * 0.3, cx, cy - r * 1.3)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.globalAlpha = 1
+  }
+
+  // Which zoned tiles need a warning icon at all — split out from the
+  // drawing itself so it's only recomputed when the grid (or the utility
+  // buildings on it) actually changes, not on every 80ms blink frame. This
+  // used to be folded into drawUtilityWarnings, re-parsing every visible
+  // tile and re-running isCovered against every plant 12.5 times a second
+  // regardless of whether anything had changed — cheap on a small city, but
+  // it scales with both viewport tile count and plant count, and both grow
+  // as the city does. The blink only needs the *alpha* to update that
+  // often; the underlying set of flagged tiles doesn't.
+  readonly property var utilityWarningTiles: root.serviceReady
+    ? root.computeUtilityWarningTiles(root.grid) : []
+
+  function computeUtilityWarningTiles(data) {
+    var out = []
+    for (var idx = 0; idx < data.length; idx++) {
+      var tile = Model.parseTile(data[idx])
+      if (tile.type !== Model.TILE_RES && tile.type !== Model.TILE_COM && tile.type !== Model.TILE_IND) continue
+      var noPower = !Model.isCovered(root.gridSize, root.utilities.power, idx, Model.POWER_RADIUS)
+      var noWater = !Model.isCovered(root.gridSize, root.utilities.water, idx, Model.WATER_RADIUS)
+      if (!noPower && !noWater) continue
+      out.push({ index: idx, noPower: noPower, noWater: noWater })
+    }
+    return out
+  }
+
+  // Zoned R/C/I tiles get flagged regardless of level — including an
+  // unbuilt lot (still shown with its own dashed-outline treatment
+  // underneath), since "why isn't this growing" is exactly what the icon
+  // should explain for a lot that's zoned but stuck at level 0. Just
+  // iterates the precomputed list above and culls to the visible viewport —
+  // no per-tile parsing or coverage math here anymore.
+  function drawUtilityWarnings(ctx, cellSize, offsetX, offsetY, viewW, viewH) {
+    var startCol = Math.max(0, Math.floor(offsetX / cellSize))
+    var endCol = Math.min(root.gridSize - 1, Math.ceil((offsetX + viewW) / cellSize))
+    var startRow = Math.max(0, Math.floor(offsetY / cellSize))
+    var endRow = Math.min(root.gridSize - 1, Math.ceil((offsetY + viewH) / cellSize))
+    var alpha = root.blinkAlpha
+    var tiles = root.utilityWarningTiles
+    for (var i = 0; i < tiles.length; i++) {
+      var w = tiles[i]
+      var col = w.index % root.gridSize
+      var row = Math.floor(w.index / root.gridSize)
+      if (col < startCol || col > endCol || row < startRow || row > endRow) continue
+      var cx = col * cellSize - offsetX + cellSize * 0.5
+      var cy = row * cellSize - offsetY + cellSize * 0.5
+      // Kept within the tile's own vertical bounds (a small nudge up
+      // from dead-center, not floating above it) — pushing it further
+      // up risked clipping off the canvas edge for anything in the top
+      // row of the viewport, which is likely why this went unnoticed.
+      if (w.noPower && w.noWater) {
+        root.drawMissingPowerIcon(ctx, cx - cellSize * 0.18, cy - cellSize * 0.08, cellSize, alpha)
+        root.drawMissingWaterIcon(ctx, cx + cellSize * 0.18, cy - cellSize * 0.08, cellSize, alpha)
+      } else if (w.noPower) {
+        root.drawMissingPowerIcon(ctx, cx, cy - cellSize * 0.1, cellSize, alpha)
+      } else {
+        root.drawMissingWaterIcon(ctx, cx, cy - cellSize * 0.1, cellSize, alpha)
+      }
+    }
+  }
+
+  readonly property var toolList: [
+    { type: Model.TILE_ROAD, label: "Road" },
+    { type: Model.TILE_LAKE, label: "Water" },
+    { type: Model.TILE_WATERFRONT_PARK, label: "Waterfront Park" },
+    { type: Model.TILE_RES, label: "Residential" },
+    { type: Model.TILE_COM, label: "Commercial" },
+    { type: Model.TILE_IND, label: "Industrial" },
+    { type: Model.TILE_PARK, label: "Playground" },
+    { type: Model.TILE_POWER, label: "Generator" },
+    { type: Model.TILE_WATER, label: "Well" },
+    { type: Model.TILE_FIRE, label: "Firehouse" },
+    { type: Model.TILE_POLICE, label: "Substation" },
+    { type: Model.TILE_SCHOOL, label: "Elementary School" },
+    { type: Model.TILE_MEDICAL, label: "Clinic" },
+    { type: "decorations", label: "Decorations" },
+    { type: "inspect", label: "Info" },
+    { type: "bulldoze", label: "Bulldoze" }
+  ]
+
+  // A translucent tint of the bar foreground, for grid lines and the
+  // empty/undeveloped-lot fill — keeps those elements native to the
+  // current theme while the zone sprites below carry their own fixed,
+  // non-theme colors (the point is to read the city at a glance the way
+  // SimCity's palette always has, in either theme).
+  function neutralTint(alpha) {
+    var fg = root.bar ? root.bar.foreground : Color.foreground
+    return Qt.rgba(fg.r, fg.g, fg.b, alpha)
+  }
+
+  // Drawn straight from above, not wall textures pretending to be aerial
+  // (that's what made the Kenney sprite pass read as "some building
+  // material" instead of "a house"). A house is a small terracotta roof
+  // sitting in a yard — it doesn't fill the lot. Commercial and industrial
+  // are big flat roofs that do, distinguished by roof color and rooftop
+  // detail (AC units vs. stacks) rather than by facade material.
+  readonly property var roofColors: ({ R: "#c1553f", C: "#5c7a94", I: "#7a7361" })
+  readonly property var accentColors: ({ R: "#8f3f2d", C: "#3f5567", I: "#4a463b" })
+
+  // Residential, commercial, and industrial use purpose-built sprite families. Keep each
+  // category behind its own switch (and retain the procedural draw functions
+  // below) so either visual pass remains independently reversible.
+  property bool useResidentialSprites: true
+  readonly property var residentialSpriteUrls: [
+    [Qt.resolvedUrl("assets/residential/r1.png").toString(), Qt.resolvedUrl("assets/residential/r1b.png").toString()],
+    [Qt.resolvedUrl("assets/residential/r2.png").toString(), Qt.resolvedUrl("assets/residential/r2b.png").toString()],
+    [Qt.resolvedUrl("assets/residential/r3.png").toString(), Qt.resolvedUrl("assets/residential/r3b.png").toString()]
+  ]
+  property bool useCommercialSprites: true
+  readonly property var commercialSpriteUrls: [
+    [Qt.resolvedUrl("assets/commercial/c1a.png").toString(), Qt.resolvedUrl("assets/commercial/c1b.png").toString()],
+    [Qt.resolvedUrl("assets/commercial/c2a.png").toString(), Qt.resolvedUrl("assets/commercial/c2b.png").toString()],
+    [Qt.resolvedUrl("assets/commercial/c3a.png").toString(), Qt.resolvedUrl("assets/commercial/c3b.png").toString()]
+  ]
+  property bool useIndustrialSprites: true
+  readonly property var industrialSpriteUrls: [
+    [Qt.resolvedUrl("assets/industrial/i1a.png").toString(), Qt.resolvedUrl("assets/industrial/i1b.png").toString()],
+    [Qt.resolvedUrl("assets/industrial/i2a.png").toString(), Qt.resolvedUrl("assets/industrial/i2b.png").toString()],
+    [Qt.resolvedUrl("assets/industrial/i3a.png").toString(), Qt.resolvedUrl("assets/industrial/i3b.png").toString()]
+  ]
+  // Infrastructure tiers are zero-based (unlike the 1–3 zone growth levels).
+  property bool useInfrastructureSprites: true
+  readonly property var infrastructureSpriteUrls: ({
+    H: [Qt.resolvedUrl("assets/medical/h1.png").toString(), Qt.resolvedUrl("assets/medical/h2.png").toString(), Qt.resolvedUrl("assets/medical/h3.png").toString()],
+    N: [Qt.resolvedUrl("assets/schools/n1.png").toString(), Qt.resolvedUrl("assets/schools/n2.png").toString(), Qt.resolvedUrl("assets/schools/n3.png").toString()],
+    E: [Qt.resolvedUrl("assets/power/e1.png").toString(), Qt.resolvedUrl("assets/power/e2.png").toString(), Qt.resolvedUrl("assets/power/e3.png").toString()],
+    W: [Qt.resolvedUrl("assets/water/w1.png").toString(), Qt.resolvedUrl("assets/water/w2.png").toString(), Qt.resolvedUrl("assets/water/w3.png").toString()],
+    F: [Qt.resolvedUrl("assets/fire/f1.png").toString(), Qt.resolvedUrl("assets/fire/f2.png").toString(), Qt.resolvedUrl("assets/fire/f3.png").toString()],
+    S: [Qt.resolvedUrl("assets/police/s1.png").toString(), Qt.resolvedUrl("assets/police/s2.png").toString(), Qt.resolvedUrl("assets/police/s3.png").toString()],
+    P: [Qt.resolvedUrl("assets/parks/p1.png").toString(), Qt.resolvedUrl("assets/parks/p2.png").toString(), Qt.resolvedUrl("assets/parks/p3.png").toString()]
+  })
+  readonly property var infrastructureGroundColors: ({ E: "#2e2b1c", W: "#1e2c33", F: "#2a1614", S: "#141c2a", P: "#416b43" })
+  readonly property var spriteLotTints: ({ R: "rgba(80, 120, 78, 0.08)", C: "rgba(92, 122, 148, 0.12)", I: "rgba(122, 115, 97, 0.11)", E: "rgba(201, 162, 39, 0.10)", W: "rgba(47, 111, 148, 0.10)", F: "rgba(193, 67, 54, 0.08)", S: "rgba(58, 111, 224, 0.10)", P: "rgba(80, 132, 77, 0.08)" })
+
+  function drawSpriteLot(ctx, gx, gy, cellSize, type, index) {
+    // Sprite PNGs are cutouts. This is map terrain beneath them, deliberately
+    // shared across categories so a building does not look like a square decal.
+    ctx.fillStyle = "#374a34"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    if (root.spriteLotTints[type]) {
+      ctx.fillStyle = root.spriteLotTints[type]
+      ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    }
+    if (index >= 0) root.drawEntrancePath(ctx, gx, gy, cellSize, index)
+  }
+
+  function drawEntrancePath(ctx, gx, gy, size, index) {
+    var conn = root.roadConnections(root.grid, root.gridSize, index)
+    if (!conn.down && !conn.left && !conn.right && !conn.up) return
+    ctx.save()
+    ctx.translate(gx, gy)
+    ctx.scale(size, size)
+    ctx.beginPath()
+    if (conn.down) ctx.moveTo(0.4, 1)
+    else if (conn.left) ctx.moveTo(0, 0.83)
+    else if (conn.right) ctx.moveTo(1, 0.83)
+    else { ctx.moveTo(0.12, 0); ctx.lineTo(0.12, 0.83) }
+    ctx.lineTo(0.4, 0.83)
+    ctx.strokeStyle = "#59604b"
+    ctx.lineWidth = 0.105
+    ctx.stroke()
+    ctx.strokeStyle = "#96907a"
+    ctx.lineWidth = 0.065
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  function drawStreetDetails(ctx, gx, gy, size, conn) {
+    var count = Number(conn.up) + Number(conn.down) + Number(conn.left) + Number(conn.right)
+    if (count < 3) return
+    // Corner posts stay outside the car lanes and leave crosswalks readable.
+    var corners = [[0.08, 0.08], [0.92, 0.92]]
+    ctx.save()
+    for (var i = 0; i < corners.length; i++) {
+      var x = gx + size * corners[i][0], y = gy + size * corners[i][1]
+      var h = size * 0.22, w = size * 0.065
+      ctx.fillStyle = "rgba(15, 20, 19, 0.25)"
+      ctx.fillRect(x, y, h * 0.6, Math.max(1, size * 0.03))
+      ctx.fillStyle = "#263735"
+      ctx.fillRect(x - w * 0.45, y - h, w * 0.9, h)
+      ctx.fillRect(x - w, y - size * 0.025, w * 2, size * 0.04)
+      ctx.fillStyle = "#718578"
+      ctx.fillRect(x - w * 0.15, y - h, Math.max(0.6, w * 0.23), h)
+      ctx.fillStyle = "#34423c"
+      ctx.fillRect(x - w, y - h - w * 1.2, w * 2, w * 1.6)
+      ctx.fillStyle = "#e4c987"
+      ctx.fillRect(x - w * 0.62, y - h - w * 0.85, w * 1.24, w)
+      ctx.fillStyle = "#293a36"
+      ctx.beginPath()
+      ctx.moveTo(x - w * 1.3, y - h - w * 1.2)
+      ctx.lineTo(x, y - h - w * 2)
+      ctx.lineTo(x + w * 1.3, y - h - w * 1.2)
+      ctx.closePath(); ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  function infrastructureSpriteSource(type, level) {
+    var sources = root.infrastructureSpriteUrls[type]
+    if (!root.useInfrastructureSprites || !sources) return ""
+    var tier = level === undefined ? 1 : Math.max(0, Math.min(2, Math.floor(level)))
+    return sources[tier] || ""
+  }
+
+  function previewSpriteSource(type, tier) {
+    if (type === Model.TILE_WATERFRONT_PARK) return root.infrastructureSpriteSource(Model.TILE_PARK, 2)
+    if (type === "decorations") return root.decorationSpriteUrls[root.decorationTool]
+    if (root.decorationSpriteUrls[type]) return root.decorationSpriteUrls[type]
+    if (type === Model.TILE_RES && root.useResidentialSprites) return root.residentialSpriteUrls[0][0]
+    if (type === Model.TILE_COM && root.useCommercialSprites) return root.commercialSpriteUrls[0][0]
+    if (type === Model.TILE_IND && root.useIndustrialSprites) return root.industrialSpriteUrls[0][0]
+    return root.infrastructureSpriteSource(type, tier)
+  }
+
+  function drawInfrastructureSprite(ctx, gx, gy, cellSize, type, level, index) {
+    var source = root.infrastructureSpriteSource(type, level)
+    if (!source || !cityCanvas.isImageLoaded(source)) return false
+    var tier = level === undefined ? 1 : Math.max(0, Math.min(2, Math.floor(level)))
+    root.drawSpriteLot(ctx, gx, gy, cellSize, type, index)
+    // Parks remain inside their plots; civic buildings gain height with upgrades.
+    var scale = type === Model.TILE_PARK ? [0.92, 1.0, 0.98][tier] : [0.86, 1.04, 1.14][tier]
+    var size = cellSize * scale
+    ctx.drawImage(source, gx + (cellSize - size) / 2, gy + cellSize * 0.98 - size, size, size)
+    return true
+  }
+  // Same hues as roofColors/the demand meter, just translucent — so an
+  // undeveloped lot reads as "this will be a house" at a glance instead of
+  // looking identical to every other empty zone until it grows.
+  readonly property var zoneUndevelopedColors: ({
+    R: { fill: "rgba(193, 85, 63, 0.3)", stroke: "rgba(226, 138, 115, 0.9)" },
+    C: { fill: "rgba(92, 122, 148, 0.3)", stroke: "rgba(140, 175, 205, 0.9)" },
+    I: { fill: "rgba(122, 115, 97, 0.3)", stroke: "rgba(168, 158, 133, 0.9)" }
+  })
+
+  // Unclaimed land, not a void — a muted "wild grass" flat fill (duller
+  // than Park's vivid maintained green, so Park still reads as the
+  // deliberately-built feature) with a couple of small tuft marks. A
+  // per-tile gradient here (like the buildings use) looked good on one
+  // roof but turned into harsh repeating horizontal banding once tiled
+  // across a big open field — flat is the right call for a texture that
+  // repeats this many times.
+  // Tuft positions are hashed from the tile's own coordinates rather
+  // than Math.random(), so they're stable across repaints instead of
+  // flickering to a new random pattern every time the grid changes.
+  function drawEmpty(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#374a34"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var spots = [[0.3, 0.6], [0.65, 0.35], [0.5, 0.78], [0.22, 0.3]]
+    var seed = Math.abs(Math.round(gx * 13 + gy * 7)) % spots.length
+    ctx.strokeStyle = "rgba(80, 105, 65, 0.32)"
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    for (var i = 0; i < 2; i++) {
+      var spot = spots[(seed + i) % spots.length]
+      var tx = gx + cellSize * spot[0]
+      var ty = gy + cellSize * spot[1]
+      ctx.beginPath()
+      ctx.moveTo(tx - cellSize * 0.04, ty + cellSize * 0.05)
+      ctx.lineTo(tx, ty - cellSize * 0.06)
+      ctx.lineTo(tx + cellSize * 0.04, ty + cellSize * 0.05)
+      ctx.stroke()
+    }
+  }
+
+  function drawUndeveloped(ctx, gx, gy, cellSize, type) {
+    root.drawEmpty(ctx, gx, gy, cellSize)
+    var colors = root.zoneUndevelopedColors[type]
+    var inset = cellSize * 0.22
+    var size = cellSize * 0.56
+    if (colors) ctx.fillStyle = colors.fill
+    else ctx.fillStyle = root.neutralTint(0.1)
+    ctx.fillRect(gx + inset, gy + inset, size, size)
+    ctx.setLineDash([2, 2])
+    ctx.strokeStyle = colors ? colors.stroke : root.neutralTint(0.4)
+    ctx.strokeRect(gx + inset, gy + inset, size, size)
+    ctx.setLineDash([])
+    // Letter only once tiles are big enough to actually read one — at deep
+    // zoom-out it'd just be a blurry smudge, and the color alone still
+    // tells R/C/I apart at that scale.
+    if (colors && cellSize >= 16) {
+      ctx.fillStyle = colors.stroke
+      ctx.font = "bold " + Math.round(cellSize * 0.34) + "px sans-serif"
+      ctx.textAlign = "center"
+      ctx.textBaseline = "middle"
+      ctx.fillText(type, gx + cellSize * 0.5, gy + cellSize * 0.52)
+    }
+  }
+
+  // Which of the four neighbors are also road, so the lane marking can
+  // follow the road's actual direction instead of always running N-S.
+  function roadConnections(data, gridSize, index) {
+    var x = index % gridSize, y = Math.floor(index / gridSize)
+    function isRoad(i) {
+      return i >= 0 && i < data.length && Model.parseTile(data[i]).type === Model.TILE_ROAD
+    }
+    return {
+      left: x > 0 && isRoad(index - 1),
+      right: x < gridSize - 1 && isRoad(index + 1),
+      up: y > 0 && isRoad(index - gridSize),
+      down: y < gridSize - 1 && isRoad(index + gridSize)
+    }
+  }
+
+  function roadTextureHash(value) {
+    var hash = value | 0
+    hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b)
+    hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b)
+    return (hash ^ (hash >>> 16)) >>> 0
+  }
+
+  // One renderer covers every topology: isolated tile, dead end, straight,
+  // corner, T-junction, and four-way crossing. Curbs are drawn only against
+  // non-road neighbors; markings follow the actual connection mask.
+  function drawRoad(ctx, gx, gy, cellSize, conn, index) {
+    ctx.save()
+
+    // Layered asphalt: dark enough to frame the colorful buildings, with a
+    // soft center lift and tiny coordinate-stable aggregate instead of a flat
+    // gray slab or repaint-flickering random noise.
+    ctx.fillStyle = "#2c2e32"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    var asphalt = ctx.createRadialGradient(
+      gx + cellSize * 0.48, gy + cellSize * 0.46, 0,
+      gx + cellSize * 0.48, gy + cellSize * 0.46, cellSize * 0.72)
+    asphalt.addColorStop(0, "rgba(82, 84, 89, 0.42)")
+    asphalt.addColorStop(0.72, "rgba(53, 55, 60, 0.18)")
+    asphalt.addColorStop(1, "rgba(18, 19, 22, 0.22)")
+    ctx.fillStyle = asphalt
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var cx = gx + cellSize * 0.5
+    var cy = gy + cellSize * 0.5
+
+    // Slightly worn wheel path along every connected arm. This is deliberately
+    // broad and faint: it should give the road depth without reading as lanes.
+    var wearW = cellSize * 0.38
+    ctx.fillStyle = "rgba(8, 9, 11, 0.08)"
+    if (conn.up) ctx.fillRect(cx - wearW / 2, gy, wearW, cellSize * 0.5)
+    if (conn.down) ctx.fillRect(cx - wearW / 2, cy, wearW, cellSize * 0.5 + 1)
+    if (conn.left) ctx.fillRect(gx, cy - wearW / 2, cellSize * 0.5, wearW)
+    if (conn.right) ctx.fillRect(cx, cy - wearW / 2, cellSize * 0.5 + 1, wearW)
+
+    var seed = root.roadTextureHash(index + 37)
+    var speckSize = Math.max(0.55, cellSize * 0.014)
+    for (var s = 0; s < 4; s++) {
+      seed = root.roadTextureHash(seed + s + 1)
+      var sx = gx + cellSize * (0.12 + ((seed & 255) / 255) * 0.76)
+      var sy = gy + cellSize * (0.12 + (((seed >>> 8) & 255) / 255) * 0.76)
+      ctx.fillStyle = s % 2 === 0 ? "rgba(210, 211, 208, 0.12)" : "rgba(5, 6, 8, 0.14)"
+      ctx.fillRect(sx, sy, speckSize, speckSize)
+    }
+    if (cellSize >= 24 && (seed & 3) === 0) {
+      var crackX = gx + cellSize * (0.22 + ((seed >>> 12) & 63) / 160)
+      var crackY = gy + cellSize * (0.24 + ((seed >>> 18) & 63) / 160)
+      ctx.strokeStyle = "rgba(7, 8, 10, 0.24)"
+      ctx.lineWidth = Math.max(0.6, cellSize * 0.014)
+      ctx.beginPath()
+      ctx.moveTo(crackX, crackY)
+      ctx.lineTo(crackX + cellSize * 0.07, crackY + cellSize * 0.045)
+      ctx.lineTo(crackX + cellSize * 0.04, crackY + cellSize * 0.11)
+      ctx.stroke()
+    }
+
+    // A three-tone curb reads at both overview and close zoom: dark gutter,
+    // concrete face, then a hairline highlight toward the neighboring lot.
+    var edgeInset = cellSize * 0.035
+    function drawCurb(x1, y1, x2, y2) {
+      ctx.lineCap = "square"
+      ctx.strokeStyle = "rgba(15, 16, 18, 0.72)"
+      ctx.lineWidth = Math.max(1.5, cellSize * 0.105)
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke()
+      ctx.strokeStyle = "#74736f"
+      ctx.lineWidth = Math.max(1, cellSize * 0.065)
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke()
+      ctx.strokeStyle = "rgba(225, 219, 201, 0.42)"
+      ctx.lineWidth = Math.max(0.65, cellSize * 0.018)
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke()
+    }
+    if (!conn.up) drawCurb(gx + edgeInset, gy + edgeInset, gx + cellSize - edgeInset, gy + edgeInset)
+    if (!conn.down) drawCurb(gx + edgeInset, gy + cellSize - edgeInset, gx + cellSize - edgeInset, gy + cellSize - edgeInset)
+    if (!conn.left) drawCurb(gx + edgeInset, gy + edgeInset, gx + edgeInset, gy + cellSize - edgeInset)
+    if (!conn.right) drawCurb(gx + cellSize - edgeInset, gy + edgeInset, gx + cellSize - edgeInset, gy + cellSize - edgeInset)
+
+    var count = (conn.up ? 1 : 0) + (conn.down ? 1 : 0)
+      + (conn.left ? 1 : 0) + (conn.right ? 1 : 0)
+    ctx.lineCap = "round"
+    ctx.lineJoin = "round"
+    ctx.strokeStyle = "rgba(232, 230, 211, 0.72)"
+    ctx.lineWidth = Math.max(1, cellSize * 0.045)
+    ctx.setLineDash([cellSize * 0.13, cellSize * 0.12])
+
+    if (count === 1) {
+      ctx.beginPath()
+      if (conn.up) { ctx.moveTo(cx, gy); ctx.lineTo(cx, cy) }
+      else if (conn.down) { ctx.moveTo(cx, gy + cellSize); ctx.lineTo(cx, cy) }
+      else if (conn.left) { ctx.moveTo(gx, cy); ctx.lineTo(cx, cy) }
+      else { ctx.moveTo(gx + cellSize, cy); ctx.lineTo(cx, cy) }
+      ctx.stroke()
+      // Solid terminal bar makes a dead end intentional instead of broken.
+      ctx.setLineDash([])
+      ctx.strokeStyle = "rgba(232, 230, 211, 0.58)"
+      ctx.beginPath()
+      if (conn.up || conn.down) { ctx.moveTo(cx - cellSize * 0.11, cy); ctx.lineTo(cx + cellSize * 0.11, cy) }
+      else { ctx.moveTo(cx, cy - cellSize * 0.11); ctx.lineTo(cx, cy + cellSize * 0.11) }
+      ctx.stroke()
+    } else if (count === 2 && conn.up && conn.down) {
+      ctx.beginPath(); ctx.moveTo(cx, gy); ctx.lineTo(cx, gy + cellSize); ctx.stroke()
+    } else if (count === 2 && conn.left && conn.right) {
+      ctx.beginPath(); ctx.moveTo(gx, cy); ctx.lineTo(gx + cellSize, cy); ctx.stroke()
+    } else if (count === 2) {
+      // Adjacent connections get a genuine curved center marking.
+      ctx.beginPath()
+      if (conn.up && conn.right) { ctx.moveTo(cx, gy); ctx.quadraticCurveTo(cx, cy, gx + cellSize, cy) }
+      else if (conn.right && conn.down) { ctx.moveTo(gx + cellSize, cy); ctx.quadraticCurveTo(cx, cy, cx, gy + cellSize) }
+      else if (conn.down && conn.left) { ctx.moveTo(cx, gy + cellSize); ctx.quadraticCurveTo(cx, cy, gx, cy) }
+      else { ctx.moveTo(gx, cy); ctx.quadraticCurveTo(cx, cy, cx, gy) }
+      ctx.stroke()
+    } else if (count >= 3) {
+      // Intersection markings stop short of the conflict area instead of
+      // painting an unrealistic bright knot in its center.
+      var gap = cellSize * 0.13
+      if (conn.up) { ctx.beginPath(); ctx.moveTo(cx, gy); ctx.lineTo(cx, cy - gap); ctx.stroke() }
+      if (conn.down) { ctx.beginPath(); ctx.moveTo(cx, cy + gap); ctx.lineTo(cx, gy + cellSize); ctx.stroke() }
+      if (conn.left) { ctx.beginPath(); ctx.moveTo(gx, cy); ctx.lineTo(cx - gap, cy); ctx.stroke() }
+      if (conn.right) { ctx.beginPath(); ctx.moveTo(cx + gap, cy); ctx.lineTo(gx + cellSize, cy); ctx.stroke() }
+
+      if (cellSize >= 20) {
+        // Two understated bars per approach suggest crosswalks without turning
+        // every junction into a field of high-contrast zebra stripes.
+        ctx.setLineDash([])
+        ctx.strokeStyle = "rgba(235, 233, 219, 0.24)"
+        ctx.lineWidth = Math.max(0.65, cellSize * 0.018)
+        var crossHalf = cellSize * 0.27
+        var near = cellSize * 0.19, far = cellSize * 0.25
+        if (conn.up) {
+          ctx.beginPath(); ctx.moveTo(cx - crossHalf, gy + near); ctx.lineTo(cx + crossHalf, gy + near); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(cx - crossHalf, gy + far); ctx.lineTo(cx + crossHalf, gy + far); ctx.stroke()
+        }
+        if (conn.down) {
+          ctx.beginPath(); ctx.moveTo(cx - crossHalf, gy + cellSize - near); ctx.lineTo(cx + crossHalf, gy + cellSize - near); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(cx - crossHalf, gy + cellSize - far); ctx.lineTo(cx + crossHalf, gy + cellSize - far); ctx.stroke()
+        }
+        if (conn.left) {
+          ctx.beginPath(); ctx.moveTo(gx + near, cy - crossHalf); ctx.lineTo(gx + near, cy + crossHalf); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(gx + far, cy - crossHalf); ctx.lineTo(gx + far, cy + crossHalf); ctx.stroke()
+        }
+        if (conn.right) {
+          ctx.beginPath(); ctx.moveTo(gx + cellSize - near, cy - crossHalf); ctx.lineTo(gx + cellSize - near, cy + crossHalf); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(gx + cellSize - far, cy - crossHalf); ctx.lineTo(gx + cellSize - far, cy + crossHalf); ctx.stroke()
+        }
+
+        // Offset the cover so it never obscures the visual center of the junction.
+        var coverX = cx + cellSize * 0.075, coverY = cy + cellSize * 0.065
+        var coverR = cellSize * 0.052
+        ctx.fillStyle = "#24262a"
+        ctx.beginPath(); ctx.arc(coverX, coverY, coverR, 0, Math.PI * 2); ctx.fill()
+        ctx.strokeStyle = "rgba(132, 134, 136, 0.62)"
+        ctx.lineWidth = Math.max(0.65, cellSize * 0.016)
+        ctx.stroke()
+        ctx.beginPath(); ctx.moveTo(coverX - coverR * 0.55, coverY); ctx.lineTo(coverX + coverR * 0.55, coverY); ctx.stroke()
+      }
+    }
+
+    ctx.setLineDash([])
+    ctx.restore()
+  }
+
+  // Same treatment the buildings got: a gradient instead of a flat fill,
+  // and real layered shading + an outline on each tree instead of one
+  // flat dot — three different sizes so they don't look stamped.
+  // Level 0/1/2 map to tier 1/2/3 — these five infrastructure types place
+  // at tier 1 and get manually upgraded (see Service.qml's upgradeTile),
+  // unlike R/C/I which grow automatically. level undefined (palette icon
+  // previews) falls back to tier 2, the "canonical" look each type had
+  // before tiers existed.
+  function drawPark(ctx, gx, gy, cellSize, level) {
+    if (level === undefined) level = 1
+    if (level <= 0) root.drawParkPlayground(ctx, gx, gy, cellSize)
+    else if (level === 1) root.drawParkGrove(ctx, gx, gy, cellSize)
+    else root.drawParkGarden(ctx, gx, gy, cellSize)
+  }
+
+  // Tier 1 — a playground: a sand pit, a swing set, a slide. Smaller and
+  // busier than open grass, reading as "just getting started" next to the
+  // grove's full trees.
+  function drawParkPlayground(ctx, gx, gy, cellSize) {
+    var grad = ctx.createLinearGradient(gx, gy, gx, gy + cellSize)
+    grad.addColorStop(0, "#4bab63")
+    grad.addColorStop(1, "#357a44")
+    ctx.fillStyle = grad
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var px = gx + cellSize * 0.18, py = gy + cellSize * 0.36
+    var pw = cellSize * 0.64, ph = cellSize * 0.46
+    ctx.fillStyle = "#d8c48a"
+    ctx.fillRect(px, py, pw, ph)
+    ctx.strokeStyle = "rgba(90, 70, 30, 0.4)"
+    ctx.lineWidth = Math.max(1, cellSize * 0.02)
+    ctx.strokeRect(px, py, pw, ph)
+
+    // swing set: two A-frames, a crossbar, two seats
+    var topY = py - cellSize * 0.03
+    ctx.strokeStyle = "#8a6a45"
+    ctx.lineWidth = Math.max(1, cellSize * 0.025)
+    ctx.beginPath()
+    ctx.moveTo(px + pw * 0.12, py + ph * 0.85); ctx.lineTo(px + pw * 0.3, topY)
+    ctx.moveTo(px + pw * 0.48, py + ph * 0.85); ctx.lineTo(px + pw * 0.3, topY)
+    ctx.moveTo(px + pw * 0.3, topY); ctx.lineTo(px + pw * 0.3, topY)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(px + pw * 0.3, topY); ctx.lineTo(px + pw * 0.7, topY)
+    ctx.stroke()
+    ctx.strokeStyle = "#5a4530"
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.016)
+    ctx.beginPath()
+    ctx.moveTo(px + pw * 0.42, topY); ctx.lineTo(px + pw * 0.42, topY + ph * 0.45)
+    ctx.moveTo(px + pw * 0.58, topY); ctx.lineTo(px + pw * 0.58, topY + ph * 0.45)
+    ctx.stroke()
+    ctx.fillStyle = "#3a3a3a"
+    ctx.fillRect(px + pw * 0.37, topY + ph * 0.45, pw * 0.1, cellSize * 0.02)
+    ctx.fillRect(px + pw * 0.53, topY + ph * 0.45, pw * 0.1, cellSize * 0.02)
+
+    // slide
+    var slideX = px + pw * 0.72
+    ctx.fillStyle = "#c94f3f"
+    ctx.beginPath()
+    ctx.moveTo(slideX, py + ph * 0.95)
+    ctx.lineTo(slideX, py + ph * 0.3)
+    ctx.lineTo(slideX + pw * 0.16, py + ph * 0.95)
+    ctx.closePath()
+    ctx.fill()
+    ctx.strokeStyle = "rgba(20, 10, 5, 0.5)"
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.stroke()
+  }
+
+  // Tier 2 — the original three-tree grove, unchanged.
+  function drawParkGrove(ctx, gx, gy, cellSize) {
+    var grad = ctx.createLinearGradient(gx, gy, gx, gy + cellSize)
+    grad.addColorStop(0, "#4bab63")
+    grad.addColorStop(1, "#357a44")
+    ctx.fillStyle = grad
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var outline = "rgba(20, 40, 15, 0.55)"
+    var spots = [[0.32, 0.38, 1.0], [0.68, 0.3, 0.85], [0.52, 0.7, 1.15]]
+    for (var i = 0; i < spots.length; i++) {
+      var tx = gx + cellSize * spots[i][0]
+      var ty = gy + cellSize * spots[i][1]
+      var r = cellSize * 0.13 * spots[i][2]
+
+      ctx.strokeStyle = "#5a3d22"
+      ctx.lineWidth = Math.max(1, cellSize * 0.045 * spots[i][2])
+      ctx.beginPath()
+      ctx.moveTo(tx, ty + r * 0.9); ctx.lineTo(tx, ty + r * 0.15)
+      ctx.stroke()
+
+      ctx.fillStyle = "#2a6b3e"
+      ctx.beginPath()
+      ctx.arc(tx, ty, r, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = "#3a8a52"
+      ctx.beginPath()
+      ctx.arc(tx + r * 0.12, ty + r * 0.12, r * 0.82, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = "#57b06e"
+      ctx.beginPath()
+      ctx.arc(tx - r * 0.28, ty - r * 0.28, r * 0.45, 0, Math.PI * 2)
+      ctx.fill()
+
+      ctx.strokeStyle = outline
+      ctx.lineWidth = Math.max(1, cellSize * 0.025)
+      ctx.beginPath()
+      ctx.arc(tx, ty, r, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+  }
+
+  // Tier 3 — a garden: a stone fountain on a gravel ring, with flower beds
+  // planted in each corner.
+  function drawParkGarden(ctx, gx, gy, cellSize) {
+    var grad = ctx.createLinearGradient(gx, gy, gx, gy + cellSize)
+    grad.addColorStop(0, "#4bab63")
+    grad.addColorStop(1, "#357a44")
+    ctx.fillStyle = grad
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var cx = gx + cellSize * 0.5, cy = gy + cellSize * 0.5
+
+    ctx.strokeStyle = "#c9bfa0"
+    ctx.lineWidth = cellSize * 0.08
+    ctx.beginPath()
+    ctx.arc(cx, cy, cellSize * 0.28, 0, Math.PI * 2)
+    ctx.stroke()
+
+    ctx.fillStyle = "#8a97a0"
+    ctx.beginPath(); ctx.arc(cx, cy, cellSize * 0.17, 0, Math.PI * 2); ctx.fill()
+    ctx.strokeStyle = "rgba(20, 30, 40, 0.4)"
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.stroke()
+    var poolGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, cellSize * 0.12)
+    poolGrad.addColorStop(0, "#a9d8f0")
+    poolGrad.addColorStop(1, "#4f8ab0")
+    ctx.fillStyle = poolGrad
+    ctx.beginPath(); ctx.arc(cx, cy, cellSize * 0.12, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = "rgba(255, 255, 255, 0.6)"
+    ctx.beginPath(); ctx.arc(cx, cy, cellSize * 0.025, 0, Math.PI * 2); ctx.fill()
+
+    var bedColors = ["#e0524a", "#e8c93a", "#c96fd9", "#f0a03a"]
+    var bedPos = [[0.16, 0.16], [0.84, 0.16], [0.16, 0.84], [0.84, 0.84]]
+    for (var b = 0; b < 4; b++) {
+      var bx = gx + cellSize * bedPos[b][0], by = gy + cellSize * bedPos[b][1]
+      for (var d = 0; d < 3; d++) {
+        ctx.fillStyle = bedColors[(b + d) % bedColors.length]
+        var ang = d * (Math.PI * 2 / 3)
+        ctx.beginPath()
+        ctx.arc(bx + Math.cos(ang) * cellSize * 0.045, by + Math.sin(ang) * cellSize * 0.045, cellSize * 0.032, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+  }
+
+  // A soft offset rect peeking out from a building's bottom-right edge —
+  // cheap depth cue (no shadowBlur, which tanks Canvas2D perf at the tile
+  // counts this grid can hit) that still reads as "sitting on the ground"
+  // instead of a flat decal painted onto it.
+  function drawFootprintShadow(ctx, x, y, w, h, cellSize) {
+    var off = cellSize * 0.05
+    ctx.fillStyle = "rgba(8, 12, 8, 0.24)"
+    ctx.fillRect(x + off, y + off, w, h)
+  }
+
+  // Same "actual different building per level" treatment as commercial and
+  // industrial: a trailer growing into a real house growing into an
+  // apartment block, instead of one house archetype just getting bigger.
+  function drawResidential(ctx, gx, gy, cellSize, level) {
+    root.drawSpriteLot(ctx, gx, gy, cellSize, "R")
+    if (level <= 1) root.drawResidentialTrailer(ctx, gx, gy, cellSize)
+    else if (level === 2) root.drawResidentialHouse(ctx, gx, gy, cellSize)
+    else root.drawResidentialApartment(ctx, gx, gy, cellSize)
+  }
+
+  // Draw a roof-dominant, lightly dimensional building over the same square
+  // lot as the procedural art. R1 stays comfortably within the tile, R2 gets
+  // broader, and R3 grows upward into the row north of it. The grid itself is
+  // still completely orthogonal; only the building illustration has depth.
+  // Returning false lets drawTile fall back cleanly until every PNG is loaded.
+  // Pick variation from the tile's world coordinate, not repaint order or a
+  // random value. A block keeps the same building across pans and restarts.
+  function spriteSourceFor(levelSets, level, index) {
+    if (level < 1 || level > levelSets.length || index < 0) return ""
+    var choices = levelSets[level - 1]
+    if (!choices || choices.length === 0) return ""
+    var hash = index | 0
+    hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b)
+    hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b)
+    hash = (hash ^ (hash >>> 16)) >>> 0
+    return choices[hash % choices.length]
+  }
+
+  function drawResidentialSprite(ctx, gx, gy, cellSize, level, index) {
+    if (!root.useResidentialSprites || level < 1 || level > 3) return false
+    var source = root.spriteSourceFor(root.residentialSpriteUrls, level, index)
+    if (source === "") return false
+    if (!cityCanvas.isImageLoaded(source)) return false
+
+    root.drawSpriteLot(ctx, gx, gy, cellSize, "R", index)
+
+    // Source aspect ratios after transparent-edge trimming. Width is the
+    // gameplay control: R2 reads denser laterally; R3 uses its narrower source
+    // to gain height without spilling far into either neighboring lot.
+    var sourceAspect = [256 / 244, 256 / 216, 220 / 256][level - 1]
+    var widthScale = [0.92, 1.05, 1.0][level - 1]
+    var drawW = cellSize * widthScale
+    var drawH = drawW / sourceAspect
+    var drawX = gx + (cellSize - drawW) / 2
+    var baseline = gy + cellSize * 0.97
+    ctx.drawImage(source, drawX, baseline - drawH, drawW, drawH)
+    return true
+  }
+
+  // Commercial shares the same near-overhead camera but fills more of its
+  // block as it develops: corner shop, restaurant/market, then office-retail
+  // complex. All source canvases are square so variants within a tier keep a
+  // stable baseline and footprint despite their different silhouettes.
+  function drawCommercialSprite(ctx, gx, gy, cellSize, level, index) {
+    if (!root.useCommercialSprites || level < 1 || level > 3) return false
+    var source = root.spriteSourceFor(root.commercialSpriteUrls, level, index)
+    if (source === "") return false
+    if (!cityCanvas.isImageLoaded(source)) return false
+
+    root.drawSpriteLot(ctx, gx, gy, cellSize, "C", index)
+
+    var widthScale = [0.9, 1.08, 1.12][level - 1]
+    var drawW = cellSize * widthScale
+    var drawH = drawW
+    var drawX = gx + (cellSize - drawW) / 2
+    var baseline = gy + cellSize * 0.98
+    ctx.drawImage(source, drawX, baseline - drawH, drawW, drawH)
+    return true
+  }
+
+  // Industrial grows from a compact workshop into a working factory and a
+  // dense processing plant. Matching square source canvases let the paired
+  // silhouettes vary freely while keeping their lot baseline predictable.
+  function drawIndustrialSprite(ctx, gx, gy, cellSize, level, index) {
+    if (!root.useIndustrialSprites || level < 1 || level > 3) return false
+    var source = root.spriteSourceFor(root.industrialSpriteUrls, level, index)
+    if (source === "") return false
+    if (!cityCanvas.isImageLoaded(source)) return false
+
+    root.drawSpriteLot(ctx, gx, gy, cellSize, "I", index)
+
+    var widthScale = [0.9, 1.08, 1.16][level - 1]
+    var drawW = cellSize * widthScale
+    var drawH = drawW
+    var drawX = gx + (cellSize - drawW) / 2
+    var baseline = gy + cellSize * 0.98
+    ctx.drawImage(source, drawX, baseline - drawH, drawW, drawH)
+    return true
+  }
+
+  // Level 1 — a single-wide trailer. Low, long, an arched roof cap, a
+  // color band, skirting at the base, and a hitch poking out one end —
+  // the hitch is the one unmistakable "this is a trailer" cue.
+  function drawResidentialTrailer(ctx, gx, gy, cellSize) {
+    var bx = gx + cellSize * 0.16, by = gy + cellSize * 0.5
+    var bw = cellSize * 0.7, bh = cellSize * 0.3
+    var outline = "rgba(22, 15, 10, 0.65)"
+    root.drawFootprintShadow(ctx, bx, by, bw, bh, cellSize)
+
+    var bodyGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    bodyGrad.addColorStop(0, "#e8e2d0")
+    bodyGrad.addColorStop(1, "#c9c0a8")
+    ctx.fillStyle = bodyGrad
+    ctx.fillRect(bx, by, bw, bh)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.025)
+    ctx.strokeRect(bx, by, bw, bh)
+
+    ctx.fillStyle = "#9a9284"
+    ctx.fillRect(bx - cellSize * 0.01, by - cellSize * 0.035, bw + cellSize * 0.02, cellSize * 0.045)
+
+    ctx.fillStyle = root.roofColors.R
+    ctx.fillRect(bx, by + bh * 0.55, bw, bh * 0.18)
+
+    ctx.fillStyle = "#8a8274"
+    ctx.fillRect(bx, by + bh * 0.88, bw, bh * 0.12)
+
+    var winW = bw * 0.22, winH = bh * 0.32
+    var winX = bx + bw * 0.12, winY = by + bh * 0.14
+    var glassGrad = ctx.createLinearGradient(0, winY, 0, winY + winH)
+    glassGrad.addColorStop(0, "#cfe6f2")
+    glassGrad.addColorStop(1, "#5f90b8")
+    ctx.fillStyle = glassGrad
+    ctx.fillRect(winX, winY, winW, winH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.014)
+    ctx.strokeRect(winX, winY, winW, winH)
+
+    var doorW = bw * 0.16, doorH = bh * 0.6
+    var doorX = bx + bw * 0.62, doorY = by + bh - doorH
+    ctx.fillStyle = "#8a4a1e"
+    ctx.fillRect(doorX, doorY, doorW, doorH)
+    ctx.strokeStyle = outline
+    ctx.strokeRect(doorX, doorY, doorW, doorH)
+    ctx.fillStyle = "#6b6255"
+    ctx.fillRect(doorX - cellSize * 0.02, by + bh, doorW + cellSize * 0.04, cellSize * 0.03)
+
+    ctx.strokeStyle = "#5a5248"
+    ctx.lineWidth = Math.max(1, cellSize * 0.02)
+    ctx.beginPath()
+    ctx.moveTo(bx, by + bh * 0.5)
+    ctx.lineTo(bx - cellSize * 0.1, by + bh * 0.5)
+    ctx.stroke()
+    ctx.fillStyle = "#3a3a3a"
+    ctx.beginPath()
+    ctx.arc(bx - cellSize * 0.1, by + bh * 0.5, cellSize * 0.02, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // Level 2 — a proper single-family house: gabled roof with shingle rows
+  // and a ridge glint, a glazed window, a paneled door, a chimney.
+  function drawResidentialHouse(ctx, gx, gy, cellSize) {
+    var frac = 0.62
+    var pad = cellSize * (1 - frac) / 2
+    var x = gx + pad, y = gy + pad, s = cellSize - pad * 2
+    root.drawFootprintShadow(ctx, x, y, s, s, cellSize)
+
+    var roofBase = root.roofColors.R
+    var roofLight = Qt.lighter(roofBase, 1.4)
+    var roofBright = Qt.lighter(roofBase, 1.65)
+    var roofDark = root.accentColors.R
+    var peakX = x + s * 0.5
+    var eaveY = y + s * 0.6
+    var outline = "rgba(22, 15, 10, 0.65)"
+    var outlineW = Math.max(1, cellSize * 0.035)
+
+    var leftGrad = ctx.createLinearGradient(x, eaveY, peakX, y)
+    leftGrad.addColorStop(0, roofBase)
+    leftGrad.addColorStop(0.55, roofLight)
+    leftGrad.addColorStop(1, roofBright)
+    ctx.fillStyle = leftGrad
+    ctx.beginPath()
+    ctx.moveTo(peakX, y); ctx.lineTo(x, eaveY); ctx.lineTo(peakX, eaveY)
+    ctx.closePath()
+    ctx.fill()
+
+    var rightGrad = ctx.createLinearGradient(peakX, y, x + s, eaveY)
+    rightGrad.addColorStop(0, roofBase)
+    rightGrad.addColorStop(0.6, Qt.darker(roofBase, 1.15))
+    rightGrad.addColorStop(1, roofDark)
+    ctx.fillStyle = rightGrad
+    ctx.beginPath()
+    ctx.moveTo(peakX, y); ctx.lineTo(x + s, eaveY); ctx.lineTo(peakX, eaveY)
+    ctx.closePath()
+    ctx.fill()
+
+    // Shingle rows — two per slope, endpoints computed straight off the
+    // triangle's own edges (both are simple right triangles with one
+    // vertical edge at peakX) rather than clipped, which is exact either
+    // way and skips the extra save/clip/restore per row.
+    ctx.strokeStyle = "rgba(20, 12, 8, 0.22)"
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.018)
+    var rows = [0.35, 0.65]
+    for (var ri = 0; ri < rows.length; ri++) {
+      var t = rows[ri]
+      var rowY = eaveY - t * (eaveY - y)
+      var leftX = x + t * (peakX - x)
+      var rightX = (x + s) + t * (peakX - (x + s))
+      ctx.beginPath(); ctx.moveTo(leftX, rowY); ctx.lineTo(peakX, rowY); ctx.stroke()
+      ctx.beginPath(); ctx.moveTo(peakX, rowY); ctx.lineTo(rightX, rowY); ctx.stroke()
+    }
+
+    ctx.strokeStyle = outline
+    ctx.lineWidth = outlineW
+    ctx.lineJoin = "round"
+    ctx.beginPath()
+    ctx.moveTo(x, eaveY); ctx.lineTo(peakX, y); ctx.lineTo(x + s, eaveY)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(peakX, y); ctx.lineTo(peakX, eaveY)
+    ctx.stroke()
+
+    // Ridge glint — a short bright stroke on the sunlit slope only, right
+    // at the peak, so the roof reads as catching light rather than just
+    // being a lighter color up top.
+    ctx.strokeStyle = Qt.lighter(roofBright, 1.15)
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.02)
+    ctx.beginPath()
+    ctx.moveTo(peakX - s * 0.16, y + (eaveY - y) * 0.16)
+    ctx.lineTo(peakX, y)
+    ctx.stroke()
+
+    var wallH = (y + s) - eaveY
+    if (wallH > 1) {
+      var wallGrad = ctx.createLinearGradient(x, eaveY, x, y + s)
+      wallGrad.addColorStop(0, "#efe8d4")
+      wallGrad.addColorStop(1, "#d5cbaf")
+      ctx.fillStyle = wallGrad
+      ctx.fillRect(x, eaveY, s, wallH)
+      ctx.strokeStyle = outline
+      ctx.lineWidth = outlineW * 0.75
+      ctx.strokeRect(x, eaveY, s, wallH)
+
+      var winX = x + s * 0.14, winY = eaveY + wallH * 0.15
+      var winW = s * 0.28, winH = wallH * 0.5
+      var glassGrad = ctx.createLinearGradient(winX, winY, winX, winY + winH)
+      glassGrad.addColorStop(0, "#cfe6f2")
+      glassGrad.addColorStop(1, "#5f90b8")
+      ctx.fillStyle = glassGrad
+      ctx.fillRect(winX, winY, winW, winH)
+      ctx.strokeStyle = outline
+      ctx.lineWidth = Math.max(0.6, cellSize * 0.02)
+      ctx.strokeRect(winX, winY, winW, winH)
+      ctx.beginPath()
+      ctx.moveTo(winX + winW / 2, winY); ctx.lineTo(winX + winW / 2, winY + winH)
+      ctx.moveTo(winX, winY + winH / 2); ctx.lineTo(winX + winW, winY + winH / 2)
+      ctx.stroke()
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.55)"
+      ctx.lineWidth = Math.max(0.5, cellSize * 0.014)
+      ctx.beginPath()
+      ctx.moveTo(winX + winW * 0.18, winY + winH * 0.85)
+      ctx.lineTo(winX + winW * 0.55, winY + winH * 0.15)
+      ctx.stroke()
+
+      var doorX = x + s * 0.58, doorY = eaveY + wallH * 0.3
+      var doorW = s * 0.24, doorH = wallH * 0.7
+      var doorGrad = ctx.createLinearGradient(doorX, doorY, doorX + doorW, doorY + doorH)
+      doorGrad.addColorStop(0, "#b96b32")
+      doorGrad.addColorStop(1, "#8a4a1e")
+      ctx.fillStyle = doorGrad
+      ctx.fillRect(doorX, doorY, doorW, doorH)
+      ctx.strokeStyle = outline
+      ctx.strokeRect(doorX, doorY, doorW, doorH)
+      ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+      ctx.beginPath()
+      ctx.moveTo(doorX, doorY + doorH * 0.42); ctx.lineTo(doorX + doorW, doorY + doorH * 0.42)
+      ctx.stroke()
+      ctx.fillStyle = "#2e2013"
+      ctx.beginPath()
+      ctx.arc(doorX + doorW * 0.78, doorY + doorH * 0.5, Math.max(0.7, cellSize * 0.016), 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    var chimW = s * 0.1, chimH = s * 0.12
+    var chimGrad = ctx.createLinearGradient(peakX - chimW / 2, y, peakX + chimW / 2, y)
+    chimGrad.addColorStop(0, "#8a8a8a")
+    chimGrad.addColorStop(1, "#57575a")
+    ctx.fillStyle = chimGrad
+    ctx.fillRect(peakX - chimW / 2, y, chimW, chimH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = outlineW * 0.6
+    ctx.strokeRect(peakX - chimW / 2, y, chimW, chimH)
+  }
+
+  // Level 3 — an apartment block: a tall flat-roofed building, a 2x3 grid
+  // of glazed windows with balcony rails, a ground-floor entrance, and a
+  // rooftop water tank — the unmistakable "this got dense" silhouette.
+  function drawResidentialApartment(ctx, gx, gy, cellSize) {
+    var bx = gx + cellSize * 0.14, by = gy + cellSize * 0.1
+    var bw = cellSize * 0.72, bh = cellSize * 0.8
+    var outline = "rgba(22, 15, 10, 0.65)"
+    root.drawFootprintShadow(ctx, bx, by, bw, bh, cellSize)
+
+    var wallGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    wallGrad.addColorStop(0, "#d8c9a8")
+    wallGrad.addColorStop(1, "#b8a482")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(bx, by, bw, bh)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(bx, by, bw, bh)
+
+    ctx.fillStyle = root.accentColors.R
+    ctx.fillRect(bx - cellSize * 0.01, by - cellSize * 0.03, bw + cellSize * 0.02, cellSize * 0.04)
+
+    var cols = 2, rows = 3
+    var gridPadX = bw * 0.14
+    var gridW = bw - gridPadX * 2, gridH = bh * 0.62
+    var gridTop = by + bh * 0.12
+    var winW = (gridW / cols) * 0.62, winH = (gridH / rows) * 0.55
+    var glassGrad = ctx.createLinearGradient(0, gridTop, 0, gridTop + gridH)
+    glassGrad.addColorStop(0, "#cfe6f2")
+    glassGrad.addColorStop(1, "#5f90b8")
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        var wx = bx + gridPadX + c * (gridW / cols) + (gridW / cols - winW) / 2
+        var wy = gridTop + r * (gridH / rows) + (gridH / rows - winH) / 2
+        ctx.fillStyle = glassGrad
+        ctx.fillRect(wx, wy, winW, winH)
+        ctx.strokeStyle = outline
+        ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+        ctx.strokeRect(wx, wy, winW, winH)
+        ctx.strokeStyle = "rgba(60, 50, 40, 0.5)"
+        ctx.lineWidth = Math.max(0.5, cellSize * 0.01)
+        ctx.beginPath()
+        ctx.moveTo(wx - winW * 0.08, wy + winH + cellSize * 0.015)
+        ctx.lineTo(wx + winW * 1.08, wy + winH + cellSize * 0.015)
+        ctx.stroke()
+      }
+    }
+
+    var doorW = bw * 0.24, doorH = bh * 0.16
+    var doorX = bx + bw * 0.5 - doorW / 2, doorY = by + bh - doorH
+    ctx.fillStyle = "#5c3a22"
+    ctx.fillRect(doorX, doorY, doorW, doorH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.014)
+    ctx.strokeRect(doorX, doorY, doorW, doorH)
+    ctx.fillStyle = root.accentColors.R
+    ctx.fillRect(doorX - cellSize * 0.02, doorY - cellSize * 0.03, doorW + cellSize * 0.04, cellSize * 0.03)
+
+    // Rooftop water tank — the signature "apartment block" cue.
+    var tankX = bx + bw * 0.78, tankY = by - cellSize * 0.14
+    ctx.fillStyle = "#8a6a45"
+    ctx.beginPath()
+    ctx.moveTo(tankX - cellSize * 0.05, tankY + cellSize * 0.09)
+    ctx.lineTo(tankX + cellSize * 0.05, tankY + cellSize * 0.09)
+    ctx.lineTo(tankX + cellSize * 0.04, tankY - cellSize * 0.02)
+    ctx.lineTo(tankX - cellSize * 0.04, tankY - cellSize * 0.02)
+    ctx.closePath()
+    ctx.fill()
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.stroke()
+    ctx.fillStyle = "#5c4530"
+    ctx.beginPath()
+    ctx.moveTo(tankX - cellSize * 0.06, tankY - cellSize * 0.02)
+    ctx.lineTo(tankX + cellSize * 0.06, tankY - cellSize * 0.02)
+    ctx.lineTo(tankX, tankY - cellSize * 0.07)
+    ctx.closePath()
+    ctx.fill()
+    ctx.strokeStyle = "#3a3a3a"
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.008)
+    ctx.beginPath()
+    ctx.moveTo(tankX - cellSize * 0.035, tankY + cellSize * 0.09); ctx.lineTo(tankX - cellSize * 0.035, tankY + cellSize * 0.13)
+    ctx.moveTo(tankX + cellSize * 0.035, tankY + cellSize * 0.09); ctx.lineTo(tankX + cellSize * 0.035, tankY + cellSize * 0.13)
+    ctx.stroke()
+  }
+
+  // A cheap gear silhouette — a filled disc plus a ring of small rotated
+  // teeth — reused at every industrial tier so "gear" reads as one
+  // consistent visual language instead of a one-off doodle per level.
+  function drawGear(ctx, cx, cy, r, teeth, fill, outline, cellSize) {
+    ctx.fillStyle = fill
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.stroke()
+    var toothW = r * 0.55, toothH = r * 0.5
+    for (var t = 0; t < teeth; t++) {
+      var ang = (t / teeth) * Math.PI * 2
+      ctx.save()
+      ctx.translate(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r)
+      ctx.rotate(ang)
+      ctx.fillStyle = fill
+      ctx.fillRect(-toothW / 2, -toothH / 2, toothW, toothH)
+      ctx.restore()
+    }
+    ctx.fillStyle = outline
+    ctx.beginPath()
+    ctx.arc(cx, cy, r * 0.35, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // Commercial and industrial used to just be one archetype scaled up by
+  // level — same silhouette, bigger numbers. That reads as abstract no
+  // matter how much shading gets piled on, because there's nothing to
+  // recognize. Each level is now an actual different kind of building —
+  // a corner shop growing into a chain storefront growing into a mall; a
+  // garage growing into a small factory growing into a full industrial
+  // complex — the way a real block actually changes character as it
+  // develops, not just gets taller.
+  function drawCommercial(ctx, gx, gy, cellSize, level) {
+    ctx.fillStyle = "#4a4a52"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    if (level <= 1) root.drawCommercialShop(ctx, gx, gy, cellSize)
+    else if (level === 2) root.drawCommercialFastFood(ctx, gx, gy, cellSize)
+    else root.drawCommercialMall(ctx, gx, gy, cellSize)
+  }
+
+  // Level 1 — a small corner shop. A pastel storefront, a scalloped
+  // awning, pastries in the window, and a rooftop donut sign on a pole —
+  // the single most recognizable "small commercial" silhouette there is.
+  function drawCommercialShop(ctx, gx, gy, cellSize) {
+    var bx = gx + cellSize * 0.16, by = gy + cellSize * 0.46
+    var bw = cellSize * 0.68, bh = cellSize * 0.4
+    var outline = "rgba(15, 16, 20, 0.6)"
+    root.drawFootprintShadow(ctx, bx, by, bw, bh, cellSize)
+
+    var wallGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    wallGrad.addColorStop(0, "#f4dcc8")
+    wallGrad.addColorStop(1, "#dcb896")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(bx, by, bw, bh)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(bx, by, bw, bh)
+
+    var winW = bw * 0.32, winH = bh * 0.42
+    var winX = bx + bw * 0.12, winY = by + bh * 0.3
+    var glassGrad = ctx.createLinearGradient(0, winY, 0, winY + winH)
+    glassGrad.addColorStop(0, "#fff6ea")
+    glassGrad.addColorStop(1, "#e7b98c")
+    ctx.fillStyle = glassGrad
+    ctx.fillRect(winX, winY, winW, winH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.014)
+    ctx.strokeRect(winX, winY, winW, winH)
+    var treats = ["#c9752f", "#e0a23f", "#b5542a"]
+    for (var t = 0; t < 3; t++) {
+      ctx.fillStyle = treats[t]
+      ctx.beginPath()
+      ctx.arc(winX + winW * (0.22 + t * 0.28), winY + winH * 0.65, winW * 0.11, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    var doorW = bw * 0.26, doorH = bh * 0.62
+    var doorX = bx + bw * 0.62, doorY = by + bh - doorH
+    var doorGrad = ctx.createLinearGradient(doorX, doorY, doorX + doorW, doorY + doorH)
+    doorGrad.addColorStop(0, "#8a5a3a")
+    doorGrad.addColorStop(1, "#5c3a22")
+    ctx.fillStyle = doorGrad
+    ctx.fillRect(doorX, doorY, doorW, doorH)
+    ctx.strokeStyle = outline
+    ctx.strokeRect(doorX, doorY, doorW, doorH)
+
+    var awningY = by - cellSize * 0.05
+    var scallops = 4
+    var scallopW = bw / scallops
+    ctx.fillStyle = root.accentColors.C
+    for (var sc = 0; sc < scallops; sc++) {
+      ctx.beginPath()
+      ctx.arc(bx + scallopW * (sc + 0.5), awningY, scallopW * 0.5, 0, Math.PI, false)
+      ctx.fill()
+    }
+    ctx.fillStyle = "#e6e0d2"
+    ctx.fillRect(bx, awningY - cellSize * 0.02, bw, cellSize * 0.05)
+
+    var poleX = bx + bw * 0.5
+    var poleTopY = by - cellSize * 0.34
+    ctx.strokeStyle = "#3a3a3a"
+    ctx.lineWidth = Math.max(1, cellSize * 0.02)
+    ctx.beginPath()
+    ctx.moveTo(poleX, awningY - cellSize * 0.02)
+    ctx.lineTo(poleX, poleTopY)
+    ctx.stroke()
+
+    var donutR = cellSize * 0.11
+    ctx.fillStyle = "#e79ac9"
+    ctx.beginPath(); ctx.arc(poleX, poleTopY, donutR, 0, Math.PI * 2); ctx.fill()
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.014)
+    ctx.stroke()
+    ctx.fillStyle = "#4a4a52"
+    ctx.beginPath(); ctx.arc(poleX, poleTopY, donutR * 0.4, 0, Math.PI * 2); ctx.fill()
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.01)
+    ctx.stroke()
+    var sprinkleColors = ["#5a3a8a", "#3a8a5a", "#e0d23a", "#3a5a8a"]
+    var sprSize = Math.max(0.7, cellSize * 0.016)
+    for (var sp = 0; sp < 4; sp++) {
+      var ang = sp * (Math.PI / 2) + 0.4
+      var rx = poleX + Math.cos(ang) * donutR * 0.68
+      var ry = poleTopY + Math.sin(ang) * donutR * 0.68
+      ctx.fillStyle = sprinkleColors[sp]
+      ctx.fillRect(rx - sprSize / 2, ry - sprSize / 2, sprSize, sprSize)
+    }
+  }
+
+  // Level 2 — a fast-food chain storefront. Wider, brighter, a bold arch
+  // roofline, a lit menu-sign pole, and a drive-thru lane curling around
+  // the side — the "this got a lot busier" silhouette.
+  function drawCommercialFastFood(ctx, gx, gy, cellSize) {
+    var bx = gx + cellSize * 0.08, by = gy + cellSize * 0.4
+    var bw = cellSize * 0.84, bh = cellSize * 0.4
+    var outline = "rgba(15, 16, 20, 0.6)"
+    root.drawFootprintShadow(ctx, bx, by, bw, bh, cellSize)
+
+    var wallGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    wallGrad.addColorStop(0, "#e0524a")
+    wallGrad.addColorStop(1, "#a83a34")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(bx, by, bw, bh)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(bx, by, bw, bh)
+
+    var winY = by + bh * 0.42, winH = bh * 0.42
+    var glassGrad = ctx.createLinearGradient(0, winY, 0, winY + winH)
+    glassGrad.addColorStop(0, "#eaf6fb")
+    glassGrad.addColorStop(1, "#9fd0e8")
+    ctx.fillStyle = glassGrad
+    ctx.fillRect(bx + bw * 0.06, winY, bw * 0.88, winH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.014)
+    ctx.strokeRect(bx + bw * 0.06, winY, bw * 0.88, winH)
+    ctx.beginPath()
+    for (var m = 1; m < 4; m++) {
+      var mx = bx + bw * 0.06 + bw * 0.88 * (m / 4)
+      ctx.moveTo(mx, winY); ctx.lineTo(mx, winY + winH)
+    }
+    ctx.stroke()
+
+    ctx.strokeStyle = "#f0c020"
+    ctx.lineWidth = Math.max(2, cellSize * 0.05)
+    ctx.lineCap = "round"
+    ctx.beginPath()
+    ctx.moveTo(bx + bw * 0.12, by)
+    ctx.quadraticCurveTo(bx + bw * 0.5, by - cellSize * 0.22, bx + bw * 0.88, by)
+    ctx.stroke()
+    ctx.lineCap = "butt"
+
+    var poleX = bx + bw * 0.92
+    ctx.strokeStyle = "#3a3a3a"
+    ctx.lineWidth = Math.max(1, cellSize * 0.02)
+    ctx.beginPath()
+    ctx.moveTo(poleX, by)
+    ctx.lineTo(poleX, by - cellSize * 0.3)
+    ctx.stroke()
+    var signW = cellSize * 0.16, signH = cellSize * 0.12
+    ctx.fillStyle = "#f0c020"
+    ctx.fillRect(poleX - signW / 2, by - cellSize * 0.3 - signH, signW, signH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.strokeRect(poleX - signW / 2, by - cellSize * 0.3 - signH, signW, signH)
+    ctx.fillStyle = "#c9392f"
+    ctx.beginPath()
+    ctx.arc(poleX, by - cellSize * 0.3 - signH / 2, signH * 0.28, 0, Math.PI * 2)
+    ctx.fill()
+
+    ctx.strokeStyle = "rgba(230, 220, 200, 0.55)"
+    ctx.lineWidth = Math.max(1, cellSize * 0.02)
+    ctx.setLineDash([cellSize * 0.04, cellSize * 0.03])
+    ctx.beginPath()
+    ctx.moveTo(bx - cellSize * 0.02, by + bh * 0.2)
+    ctx.quadraticCurveTo(bx - cellSize * 0.14, by + bh * 0.5, bx - cellSize * 0.02, by + bh * 0.85)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.fillStyle = "rgba(230, 220, 200, 0.7)"
+    ctx.beginPath()
+    ctx.moveTo(bx - cellSize * 0.02, by + bh * 0.85)
+    ctx.lineTo(bx - cellSize * 0.06, by + bh * 0.78)
+    ctx.lineTo(bx - cellSize * 0.01, by + bh * 0.8)
+    ctx.closePath()
+    ctx.fill()
+
+    var doorW = bw * 0.14, doorH = bh * 0.5
+    var doorX = bx + bw * 0.5 - doorW / 2, doorY = by + bh - doorH
+    ctx.fillStyle = "#2a2a2e"
+    ctx.fillRect(doorX, doorY, doorW, doorH)
+    ctx.strokeStyle = outline
+    ctx.strokeRect(doorX, doorY, doorW, doorH)
+  }
+
+  // Level 3 — a shopping mall. A wide flat-roofed block spanning most of
+  // the tile, multiple storefront bays, an entrance canopy, and a couple
+  // of parked cars out front — the "this is a destination now" silhouette.
+  function drawCommercialMall(ctx, gx, gy, cellSize) {
+    var bx = gx + cellSize * 0.05, by = gy + cellSize * 0.22
+    var bw = cellSize * 0.9, bh = cellSize * 0.58
+    var outline = "rgba(15, 16, 20, 0.6)"
+    root.drawFootprintShadow(ctx, bx, by, bw, bh, cellSize)
+
+    var wallGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    wallGrad.addColorStop(0, "#8a97a8")
+    wallGrad.addColorStop(1, "#5c6a7c")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(bx, by, bw, bh)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(bx, by, bw, bh)
+
+    ctx.fillStyle = "#aab4c2"
+    ctx.fillRect(bx, by, bw, cellSize * 0.05)
+
+    var bays = 3
+    var bayW = bw / bays
+    ctx.strokeStyle = "rgba(15, 16, 20, 0.3)"
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    for (var b = 1; b < bays; b++) {
+      var bayX = bx + b * bayW
+      ctx.beginPath(); ctx.moveTo(bayX, by + cellSize * 0.05); ctx.lineTo(bayX, by + bh); ctx.stroke()
+    }
+    var glassGrad = ctx.createLinearGradient(0, by + bh * 0.35, 0, by + bh * 0.85)
+    glassGrad.addColorStop(0, "#dff0f7")
+    glassGrad.addColorStop(1, "#86b8d2")
+    for (var bi = 0; bi < bays; bi++) {
+      var gxb = bx + bi * bayW + bayW * 0.12
+      ctx.fillStyle = glassGrad
+      ctx.fillRect(gxb, by + bh * 0.35, bayW * 0.76, bh * 0.5)
+      ctx.strokeStyle = outline
+      ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+      ctx.strokeRect(gxb, by + bh * 0.35, bayW * 0.76, bh * 0.5)
+    }
+
+    var canW = bw * 0.26, canH = cellSize * 0.06
+    var canX = bx + bw / 2 - canW / 2, canY = by + bh * 0.3
+    ctx.fillStyle = root.accentColors.C
+    ctx.fillRect(canX, canY, canW, canH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.strokeRect(canX, canY, canW, canH)
+    ctx.beginPath()
+    ctx.moveTo(canX + canW * 0.15, canY + canH); ctx.lineTo(canX + canW * 0.15, by + bh)
+    ctx.moveTo(canX + canW * 0.85, canY + canH); ctx.lineTo(canX + canW * 0.85, by + bh)
+    ctx.stroke()
+
+    var dotColors = root.carColors
+    var pRow = by + bh + cellSize * 0.08
+    for (var pd = 0; pd < 4; pd++) {
+      ctx.fillStyle = dotColors[pd % dotColors.length]
+      ctx.beginPath()
+      ctx.arc(bx + bw * (0.15 + pd * 0.24), pRow, cellSize * 0.035, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+
+  function drawIndustrial(ctx, gx, gy, cellSize, level) {
+    ctx.fillStyle = "#3a382f"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    if (level <= 1) root.drawIndustrialWorkshop(ctx, gx, gy, cellSize)
+    else if (level === 2) root.drawIndustrialFactory(ctx, gx, gy, cellSize)
+    else root.drawIndustrialComplex(ctx, gx, gy, cellSize)
+  }
+
+  // Level 1 — a small workshop. A garage with a ridged roll-up door, a
+  // roof vent, and a small gear emblem over the entrance — the "somebody's
+  // running a business out of a shed" silhouette, not a full factory yet.
+  function drawIndustrialWorkshop(ctx, gx, gy, cellSize) {
+    var bx = gx + cellSize * 0.2, by = gy + cellSize * 0.44
+    var bw = cellSize * 0.6, bh = cellSize * 0.42
+    var outline = "rgba(12, 12, 10, 0.6)"
+    root.drawFootprintShadow(ctx, bx, by, bw, bh, cellSize)
+
+    var wallGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    wallGrad.addColorStop(0, "#8a8378")
+    wallGrad.addColorStop(1, "#5c574c")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(bx, by, bw, bh)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(bx, by, bw, bh)
+
+    ctx.fillStyle = root.accentColors.I
+    ctx.fillRect(bx - cellSize * 0.02, by - cellSize * 0.05, bw + cellSize * 0.04, cellSize * 0.06)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.02)
+    ctx.strokeRect(bx - cellSize * 0.02, by - cellSize * 0.05, bw + cellSize * 0.04, cellSize * 0.06)
+
+    var doorW = bw * 0.62, doorH = bh * 0.72
+    var doorX = bx + bw * 0.08, doorY = by + bh - doorH
+    ctx.fillStyle = "#3a3a3a"
+    ctx.fillRect(doorX, doorY, doorW, doorH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.014)
+    ctx.strokeRect(doorX, doorY, doorW, doorH)
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.4)"
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.01)
+    for (var rdg = 1; rdg < 4; rdg++) {
+      var ry = doorY + doorH * (rdg / 4)
+      ctx.beginPath(); ctx.moveTo(doorX, ry); ctx.lineTo(doorX + doorW, ry); ctx.stroke()
+    }
+
+    var winW = bw * 0.2, winH = bh * 0.28
+    var winX = bx + bw * 0.76, winY = by + bh * 0.2
+    ctx.fillStyle = "#7fa9c4"
+    ctx.fillRect(winX, winY, winW, winH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.014)
+    ctx.strokeRect(winX, winY, winW, winH)
+
+    var ventX = bx + bw * 0.82
+    ctx.fillStyle = "#4c4c4c"
+    ctx.fillRect(ventX, by - cellSize * 0.16, cellSize * 0.05, cellSize * 0.12)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.strokeRect(ventX, by - cellSize * 0.16, cellSize * 0.05, cellSize * 0.12)
+
+    root.drawGear(ctx, bx + bw * 0.5, by - cellSize * 0.02, cellSize * 0.05, 6, "#c9a53f", outline, cellSize)
+  }
+
+  // Level 2 — a small factory. Corrugated panels, one smokestack, a
+  // corner hazard tag, and a pair of meshed gears on the wall — visible
+  // machinery instead of a blank metal box.
+  function drawIndustrialFactory(ctx, gx, gy, cellSize) {
+    var bx = gx + cellSize * 0.1, by = gy + cellSize * 0.3
+    var bw = cellSize * 0.68, bh = cellSize * 0.5
+    var outline = "rgba(12, 12, 10, 0.6)"
+    root.drawFootprintShadow(ctx, bx, by, bw, bh, cellSize)
+
+    var panelCount = 4
+    var panelW = bw / panelCount
+    var lightGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    lightGrad.addColorStop(0, "#828e98")
+    lightGrad.addColorStop(1, "#5c6870")
+    var darkGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    darkGrad.addColorStop(0, "#5c646c")
+    darkGrad.addColorStop(1, "#3c4248")
+    for (var p = 0; p < panelCount; p++) {
+      ctx.fillStyle = p % 2 === 0 ? lightGrad : darkGrad
+      ctx.fillRect(bx + p * panelW, by, panelW, bh)
+    }
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(bx, by, bw, bh)
+    ctx.strokeStyle = "rgba(220, 225, 230, 0.35)"
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.beginPath(); ctx.moveTo(bx, by + 0.5); ctx.lineTo(bx + bw, by + 0.5); ctx.stroke()
+
+    var gearR = cellSize * 0.09
+    root.drawGear(ctx, bx + bw * 0.82, by + bh * 0.72, gearR, 6, "#c9a53f", outline, cellSize)
+    root.drawGear(ctx, bx + bw * 0.82 + gearR * 1.5, by + bh * 0.72 + gearR * 0.2, gearR * 0.6, 6, "#e0b85a", outline, cellSize)
+
+    var sx = bx + bw * 0.28
+    var stackW = cellSize * 0.09, stackH = cellSize * 0.3
+    var stackY = by - stackH * 0.7
+    var stackGrad = ctx.createLinearGradient(sx - stackW / 2, 0, sx + stackW / 2, 0)
+    stackGrad.addColorStop(0, "#26241f")
+    stackGrad.addColorStop(0.5, "#4a4640")
+    stackGrad.addColorStop(1, "#26241f")
+    ctx.fillStyle = stackGrad
+    ctx.fillRect(sx - stackW / 2, stackY, stackW, stackH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.strokeRect(sx - stackW / 2, stackY, stackW, stackH)
+    ctx.fillStyle = "#c94f3f"
+    ctx.beginPath(); ctx.arc(sx, stackY, stackW * 0.4, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = "rgba(210, 210, 210, 0.5)"
+    ctx.beginPath(); ctx.arc(sx, stackY - cellSize * 0.08, cellSize * 0.07, 0, Math.PI * 2); ctx.fill()
+
+    var hazW = bw * 0.22, hazH = cellSize * 0.06
+    var hazX = bx + bw - hazW, hazY = by + bh - hazH
+    ctx.save()
+    ctx.beginPath(); ctx.rect(hazX, hazY, hazW, hazH); ctx.clip()
+    var hazSeg = cellSize * 0.045
+    var si = 0
+    for (var hx = hazX - hazH; hx < hazX + hazW + hazH; hx += hazSeg) {
+      ctx.fillStyle = si % 2 === 0 ? "#e0b02a" : "#232320"
+      ctx.beginPath()
+      ctx.moveTo(hx, hazY + hazH)
+      ctx.lineTo(hx + hazH, hazY)
+      ctx.lineTo(hx + hazH + hazSeg, hazY)
+      ctx.lineTo(hx + hazSeg, hazY + hazH)
+      ctx.closePath()
+      ctx.fill()
+      si++
+    }
+    ctx.restore()
+  }
+
+  // Level 3 — a full industrial complex. The corrugated-panel warehouse
+  // from before, banded smokestacks trailing rising smoke, and a gear
+  // cluster peeking out beside the hazard band.
+  function drawIndustrialComplex(ctx, gx, gy, cellSize) {
+    var bx = gx + cellSize * 0.08
+    var by = gy + cellSize * 0.16
+    var bw = cellSize * 0.84
+    var bh = cellSize * 0.64
+    var outline = "rgba(12, 12, 10, 0.6)"
+    root.drawFootprintShadow(ctx, bx, by, bw, bh, cellSize)
+
+    var panelCount = 6
+    var panelW = bw / panelCount
+    var lightGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    lightGrad.addColorStop(0, "#828e98")
+    lightGrad.addColorStop(1, "#5c6870")
+    var darkGrad = ctx.createLinearGradient(0, by, 0, by + bh)
+    darkGrad.addColorStop(0, "#5c646c")
+    darkGrad.addColorStop(1, "#3c4248")
+    for (var p = 0; p < panelCount; p++) {
+      ctx.fillStyle = p % 2 === 0 ? lightGrad : darkGrad
+      ctx.fillRect(bx + p * panelW, by, panelW, bh)
+      if (p > 0) {
+        ctx.fillStyle = "rgba(20, 20, 18, 0.4)"
+        ctx.fillRect(bx + p * panelW - Math.max(0.5, cellSize * 0.006), by, Math.max(1, cellSize * 0.012), bh)
+      }
+    }
+    ctx.fillStyle = "rgba(20, 20, 18, 0.5)"
+    var rivetR = Math.max(0.5, cellSize * 0.01)
+    for (var rp = 0; rp < panelCount; rp++) {
+      var rx = bx + rp * panelW + panelW * 0.5
+      ctx.beginPath(); ctx.arc(rx, by + bh * 0.08, rivetR, 0, Math.PI * 2); ctx.fill()
+    }
+    ctx.strokeStyle = "rgba(220, 225, 230, 0.35)"
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+    ctx.beginPath(); ctx.moveTo(bx, by + 0.5); ctx.lineTo(bx + bw, by + 0.5); ctx.stroke()
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(bx, by, bw, bh)
+
+    var hazardH = cellSize * 0.13
+    var hazardY = by + bh - hazardH
+    var hazSeg = cellSize * 0.09
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(bx, hazardY, bw, hazardH)
+    ctx.clip()
+    var stripeIndex = 0
+    for (var hx = bx - hazardH; hx < bx + bw + hazardH; hx += hazSeg) {
+      ctx.fillStyle = stripeIndex % 2 === 0 ? "#e0b02a" : "#232320"
+      ctx.beginPath()
+      ctx.moveTo(hx, hazardY + hazardH)
+      ctx.lineTo(hx + hazardH, hazardY)
+      ctx.lineTo(hx + hazardH + hazSeg, hazardY)
+      ctx.lineTo(hx + hazSeg, hazardY + hazardH)
+      ctx.closePath()
+      ctx.fill()
+      stripeIndex++
+    }
+    ctx.restore()
+
+    var gearR = cellSize * 0.07
+    root.drawGear(ctx, bx + bw * 0.14, by + bh + gearR * 0.3, gearR, 7, "#c9a53f", outline, cellSize)
+    root.drawGear(ctx, bx + bw * 0.14 + gearR * 1.6, by + bh + gearR * 0.55, gearR * 0.62, 6, "#e0b85a", outline, cellSize)
+
+    var stackCount = 3
+    for (var i = 0; i < stackCount; i++) {
+      var sx = bx + bw * (0.28 + i * 0.28)
+      var stackW = cellSize * 0.09
+      var stackH = cellSize * 0.32
+      var stackY = by - stackH * 0.7
+      var stackGrad = ctx.createLinearGradient(sx - stackW / 2, 0, sx + stackW / 2, 0)
+      stackGrad.addColorStop(0, "#26241f")
+      stackGrad.addColorStop(0.5, "#4a4640")
+      stackGrad.addColorStop(1, "#26241f")
+      ctx.fillStyle = stackGrad
+      ctx.fillRect(sx - stackW / 2, stackY, stackW, stackH)
+      ctx.strokeStyle = "rgba(15, 14, 12, 0.5)"
+      ctx.lineWidth = Math.max(0.5, cellSize * 0.01)
+      for (var band = 1; band < 3; band++) {
+        var byy = stackY + stackH * (band / 3)
+        ctx.beginPath(); ctx.moveTo(sx - stackW / 2, byy); ctx.lineTo(sx + stackW / 2, byy); ctx.stroke()
+      }
+      ctx.strokeStyle = outline
+      ctx.lineWidth = Math.max(0.5, cellSize * 0.012)
+      ctx.strokeRect(sx - stackW / 2, stackY, stackW, stackH)
+      ctx.fillStyle = "#c94f3f"
+      ctx.beginPath()
+      ctx.arc(sx, stackY, stackW * 0.4, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = "rgba(210, 210, 210, 0.5)"
+      ctx.beginPath()
+      ctx.arc(sx, stackY - cellSize * 0.08, cellSize * 0.07, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = "rgba(200, 200, 200, 0.3)"
+      ctx.beginPath()
+      ctx.arc(sx + stackW * 0.3, stackY - cellSize * 0.16, cellSize * 0.05, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillStyle = "rgba(200, 200, 200, 0.2)"
+      ctx.beginPath()
+      ctx.arc(sx + stackW * 0.6, stackY - cellSize * 0.24, cellSize * 0.06, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
+
+  // Fixed single-tile buildings — no growth levels, just built or not.
+  // Same treatment the zones got: outline + gradient instead of flat
+  // fills, plus a hazard stripe (power) and support legs/ripple (water)
+  // so each reads as real infrastructure, not a colored icon on a square.
+  function drawPower(ctx, gx, gy, cellSize, level) {
+    if (level === undefined) level = 1
+    if (level <= 0) root.drawPowerGenerator(ctx, gx, gy, cellSize)
+    else if (level === 1) root.drawPowerPlant(ctx, gx, gy, cellSize)
+    else root.drawPowerStation(ctx, gx, gy, cellSize)
+  }
+
+  // Tier 1 — a generator: a small dark housing with a vent grille and one
+  // warning bolt, well short of the full pad the plant gets.
+  function drawPowerGenerator(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#2e2b1c"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    var x = gx + cellSize * 0.28, y = gy + cellSize * 0.3
+    var s = cellSize * 0.44
+    var outline = "rgba(35, 25, 5, 0.65)"
+
+    var bodyGrad = ctx.createLinearGradient(x, y, x + s, y + s)
+    bodyGrad.addColorStop(0, "#8a8378")
+    bodyGrad.addColorStop(1, "#5c574c")
+    ctx.fillStyle = bodyGrad
+    ctx.fillRect(x, y, s, s)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(x, y, s, s)
+
+    ctx.strokeStyle = "rgba(20, 20, 15, 0.5)"
+    ctx.lineWidth = Math.max(0.5, cellSize * 0.014)
+    for (var g = 1; g < 4; g++) {
+      var gy2 = y + s * (g / 4)
+      ctx.beginPath(); ctx.moveTo(x + s * 0.12, gy2); ctx.lineTo(x + s * 0.88, gy2); ctx.stroke()
+    }
+
+    var cx = x + s * 0.5, cy = y - cellSize * 0.06
+    ctx.fillStyle = "#e0bb3f"
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.02)
+    ctx.beginPath()
+    ctx.moveTo(cx - cellSize * 0.06, cy - cellSize * 0.16)
+    ctx.lineTo(cx + cellSize * 0.09, cy - cellSize * 0.02)
+    ctx.lineTo(cx + cellSize * 0.01, cy - cellSize * 0.02)
+    ctx.lineTo(cx + cellSize * 0.06, cy + cellSize * 0.16)
+    ctx.lineTo(cx - cellSize * 0.09, cy + cellSize * 0.02)
+    ctx.lineTo(cx - cellSize * 0.01, cy + cellSize * 0.02)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  // Tier 2 — the original hazard-striped plant, unchanged.
+  function drawPowerPlant(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#2e2b1c"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var pad = cellSize * 0.08
+    var x = gx + pad, y = gy + pad, s = cellSize - pad * 2
+    var outline = "rgba(35, 25, 5, 0.65)"
+
+    var padGrad = ctx.createLinearGradient(x, y, x + s, y + s)
+    padGrad.addColorStop(0, "#e0bb3f")
+    padGrad.addColorStop(1, "#b8901f")
+    ctx.fillStyle = padGrad
+    ctx.fillRect(x, y, s, s)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.035)
+    ctx.strokeRect(x, y, s, s)
+
+    // hazard stripe along the bottom edge, same chevron trick as the
+    // industrial dock — a strong, unambiguous "electrical" cue
+    var hazardH = s * 0.16
+    var hazardY = y + s - hazardH
+    var hazSeg = cellSize * 0.09
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x, hazardY, s, hazardH)
+    ctx.clip()
+    var stripeIndex = 0
+    for (var hx = x - hazardH; hx < x + s + hazardH; hx += hazSeg) {
+      ctx.fillStyle = stripeIndex % 2 === 0 ? "#3a3020" : "#e0bb3f"
+      ctx.beginPath()
+      ctx.moveTo(hx, hazardY + hazardH)
+      ctx.lineTo(hx + hazardH, hazardY)
+      ctx.lineTo(hx + hazardH + hazSeg, hazardY)
+      ctx.lineTo(hx + hazSeg, hazardY + hazardH)
+      ctx.closePath()
+      ctx.fill()
+      stripeIndex++
+    }
+    ctx.restore()
+
+    // corner pylon marks
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    var corners = [[x + s * 0.1, y + s * 0.1], [x + s * 0.9, y + s * 0.1]]
+    for (var c = 0; c < corners.length; c++) {
+      var pcx = corners[c][0], pcy = corners[c][1]
+      ctx.beginPath()
+      ctx.moveTo(pcx - s * 0.05, pcy); ctx.lineTo(pcx + s * 0.05, pcy)
+      ctx.moveTo(pcx, pcy - s * 0.05); ctx.lineTo(pcx, pcy + s * 0.05)
+      ctx.stroke()
+    }
+
+    // bolt, bigger and outlined
+    var cx = gx + cellSize * 0.5, cy = gy + cellSize * 0.42
+    ctx.fillStyle = "#fff3c2"
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.beginPath()
+    ctx.moveTo(cx - cellSize * 0.1, cy - cellSize * 0.26)
+    ctx.lineTo(cx + cellSize * 0.15, cy - cellSize * 0.03)
+    ctx.lineTo(cx + cellSize * 0.02, cy - cellSize * 0.03)
+    ctx.lineTo(cx + cellSize * 0.1, cy + cellSize * 0.26)
+    ctx.lineTo(cx - cellSize * 0.15, cy + cellSize * 0.02)
+    ctx.lineTo(cx - cellSize * 0.02, cy + cellSize * 0.02)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  // Tier 3 — a power station: a bigger hazard pad flanked by two
+  // transformer coils, with a bolt at each end instead of just one.
+  function drawPowerStation(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#2e2b1c"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var pad = cellSize * 0.04
+    var x = gx + pad, y = gy + pad, s = cellSize - pad * 2
+    var outline = "rgba(35, 25, 5, 0.65)"
+
+    var padGrad = ctx.createLinearGradient(x, y, x + s, y + s)
+    padGrad.addColorStop(0, "#e0bb3f")
+    padGrad.addColorStop(1, "#b8901f")
+    ctx.fillStyle = padGrad
+    ctx.fillRect(x, y, s, s)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.035)
+    ctx.strokeRect(x, y, s, s)
+
+    var hazardH = s * 0.13
+    var hazardY = y + s - hazardH
+    var hazSeg = cellSize * 0.08
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x, hazardY, s, hazardH)
+    ctx.clip()
+    var stripeIndex = 0
+    for (var hx = x - hazardH; hx < x + s + hazardH; hx += hazSeg) {
+      ctx.fillStyle = stripeIndex % 2 === 0 ? "#3a3020" : "#e0bb3f"
+      ctx.beginPath()
+      ctx.moveTo(hx, hazardY + hazardH)
+      ctx.lineTo(hx + hazardH, hazardY)
+      ctx.lineTo(hx + hazardH + hazSeg, hazardY)
+      ctx.lineTo(hx + hazSeg, hazardY + hazardH)
+      ctx.closePath()
+      ctx.fill()
+      stripeIndex++
+    }
+    ctx.restore()
+
+    // transformer coils at each end
+    var coilY = y + s * 0.28
+    var coilXs = [x + s * 0.18, x + s * 0.82]
+    for (var ci = 0; ci < coilXs.length; ci++) {
+      ctx.strokeStyle = "rgba(60, 45, 15, 0.7)"
+      ctx.lineWidth = Math.max(1, cellSize * 0.02)
+      for (var loop = 0; loop < 3; loop++) {
+        ctx.beginPath()
+        ctx.arc(coilXs[ci], coilY - s * 0.06 + loop * s * 0.05, s * 0.07, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+    }
+
+    var boltPositions = [gx + cellSize * 0.32, gx + cellSize * 0.68]
+    for (var bi = 0; bi < boltPositions.length; bi++) {
+      var cx = boltPositions[bi], cy = gy + cellSize * 0.42
+      ctx.fillStyle = "#fff3c2"
+      ctx.strokeStyle = outline
+      ctx.lineWidth = Math.max(1, cellSize * 0.025)
+      ctx.beginPath()
+      ctx.moveTo(cx - cellSize * 0.07, cy - cellSize * 0.18)
+      ctx.lineTo(cx + cellSize * 0.1, cy - cellSize * 0.02)
+      ctx.lineTo(cx + cellSize * 0.01, cy - cellSize * 0.02)
+      ctx.lineTo(cx + cellSize * 0.07, cy + cellSize * 0.18)
+      ctx.lineTo(cx - cellSize * 0.1, cy + cellSize * 0.02)
+      ctx.lineTo(cx - cellSize * 0.01, cy + cellSize * 0.02)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+    }
+  }
+
+  function drawWater(ctx, gx, gy, cellSize, level) {
+    if (level === undefined) level = 1
+    if (level <= 0) root.drawWaterWell(ctx, gx, gy, cellSize)
+    else if (level === 1) root.drawWaterTower(ctx, gx, gy, cellSize)
+    else root.drawWaterTreatmentPlant(ctx, gx, gy, cellSize)
+  }
+
+  // Tier 1 — a well: a small stone ring, a peaked roof, and a crank —
+  // hand-drawn water, not piped.
+  function drawWaterWell(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#1e2c33"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    var cx = gx + cellSize * 0.5, cy = gy + cellSize * 0.58
+    var r = cellSize * 0.2
+    var outline = "rgba(10, 30, 45, 0.7)"
+
+    ctx.strokeStyle = "#6b4a2a"
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.beginPath()
+    ctx.moveTo(cx - r * 1.1, cy - r * 0.6); ctx.lineTo(cx - r * 1.3, cy - r * 1.9)
+    ctx.moveTo(cx + r * 1.1, cy - r * 0.6); ctx.lineTo(cx + r * 1.3, cy - r * 1.9)
+    ctx.stroke()
+    ctx.fillStyle = "#8a5a32"
+    ctx.beginPath()
+    ctx.moveTo(cx - r * 1.6, cy - r * 1.7)
+    ctx.lineTo(cx, cy - r * 2.6)
+    ctx.lineTo(cx + r * 1.6, cy - r * 1.7)
+    ctx.closePath()
+    ctx.fill()
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.016)
+    ctx.stroke()
+
+    var wellGrad = ctx.createLinearGradient(cx, cy - r, cx, cy + r)
+    wellGrad.addColorStop(0, "#9a9488")
+    wellGrad.addColorStop(1, "#6c665c")
+    ctx.fillStyle = wellGrad
+    ctx.fillRect(cx - r, cy - r * 0.4, r * 2, r * 1.2)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.025)
+    ctx.strokeRect(cx - r, cy - r * 0.4, r * 2, r * 1.2)
+    ctx.fillStyle = "#3f84ab"
+    ctx.beginPath()
+    ctx.arc(cx, cy - r * 0.4, r * 0.6, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = outline
+    ctx.beginPath()
+    ctx.arc(cx, cy - r * 0.4, r * 0.6, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+
+  // Tier 2 — the original tower on legs, unchanged.
+  function drawWaterTower(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#1e2c33"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    var cx = gx + cellSize * 0.5, cy = gy + cellSize * 0.5
+    var r = cellSize * 0.33
+    var outline = "rgba(10, 30, 45, 0.7)"
+
+    // support legs poking out from under the tank, like a real water tower
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.035)
+    var legs = 4
+    for (var i = 0; i < legs; i++) {
+      var a = (Math.PI / 4) + i * (Math.PI / 2)
+      ctx.beginPath()
+      ctx.moveTo(cx + Math.cos(a) * r * 0.8, cy + Math.sin(a) * r * 0.8)
+      ctx.lineTo(cx + Math.cos(a) * r * 1.4, cy + Math.sin(a) * r * 1.4)
+      ctx.stroke()
+    }
+
+    var tankGrad = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.1, cx, cy, r)
+    tankGrad.addColorStop(0, "#a9d8f0")
+    tankGrad.addColorStop(1, "#3f84ab")
+    ctx.fillStyle = tankGrad
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.045)
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.stroke()
+
+    // ripple ring for a bit of "water" detail
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+    ctx.lineWidth = Math.max(1, cellSize * 0.02)
+    ctx.beginPath()
+    ctx.arc(cx, cy, r * 0.55, 0, Math.PI * 2)
+    ctx.stroke()
+  }
+
+  // Tier 3 — a treatment plant: two round settling tanks joined by a
+  // pipe, bigger and more industrial than a single tower.
+  function drawWaterTreatmentPlant(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#1e2c33"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    var outline = "rgba(10, 30, 45, 0.7)"
+    var r = cellSize * 0.22
+    var tanks = [[gx + cellSize * 0.3, gy + cellSize * 0.42], [gx + cellSize * 0.68, gy + cellSize * 0.62]]
+
+    ctx.strokeStyle = "#3f4a52"
+    ctx.lineWidth = Math.max(1.5, cellSize * 0.045)
+    ctx.beginPath()
+    ctx.moveTo(tanks[0][0], tanks[0][1]); ctx.lineTo(tanks[1][0], tanks[1][1])
+    ctx.stroke()
+
+    for (var t = 0; t < tanks.length; t++) {
+      var tx = tanks[t][0], ty = tanks[t][1]
+      var tankGrad = ctx.createRadialGradient(tx - r * 0.3, ty - r * 0.3, r * 0.1, tx, ty, r)
+      tankGrad.addColorStop(0, "#a9d8f0")
+      tankGrad.addColorStop(1, "#3f84ab")
+      ctx.fillStyle = tankGrad
+      ctx.beginPath(); ctx.arc(tx, ty, r, 0, Math.PI * 2); ctx.fill()
+      ctx.strokeStyle = outline
+      ctx.lineWidth = Math.max(1, cellSize * 0.03)
+      ctx.stroke()
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)"
+      ctx.lineWidth = Math.max(0.6, cellSize * 0.014)
+      ctx.beginPath(); ctx.arc(tx, ty, r * 0.6, 0, Math.PI * 2); ctx.stroke()
+    }
+  }
+
+  function drawFire(ctx, gx, gy, cellSize, level) {
+    if (level === undefined) level = 1
+    if (level <= 0) root.drawFirehouse(ctx, gx, gy, cellSize)
+    else if (level === 1) root.drawFireStation(ctx, gx, gy, cellSize)
+    else root.drawFireBattalion(ctx, gx, gy, cellSize)
+  }
+
+  // Tier 1 — a firehouse: small, one narrow bay, a modest flame badge, no
+  // roof beacon yet.
+  function drawFirehouse(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#2a1614"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var x = gx + cellSize * 0.24, y = gy + cellSize * 0.28
+    var s = cellSize * 0.5
+    var outline = "rgba(30, 10, 8, 0.7)"
+
+    var wallGrad = ctx.createLinearGradient(x, y, x + s, y + s)
+    wallGrad.addColorStop(0, "#c14336")
+    wallGrad.addColorStop(1, "#7f261c")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(x, y, s, s)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(x, y, s, s)
+    ctx.fillStyle = "#4a1a14"
+    ctx.fillRect(x, y, s, s * 0.14)
+
+    var bayW = s * 0.5, bayH = s * 0.4
+    var bayX = x + (s - bayW) / 2, bayY = y + s - bayH - s * 0.08
+    ctx.fillStyle = "#241210"
+    ctx.fillRect(bayX, bayY, bayW, bayH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.02)
+    ctx.strokeRect(bayX, bayY, bayW, bayH)
+
+    var fcx = x + s * 0.5, fcy = y + s * 0.32, fr = s * 0.14
+    ctx.fillStyle = "#f2a53a"
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.8, cellSize * 0.02)
+    ctx.beginPath()
+    ctx.moveTo(fcx, fcy - fr)
+    ctx.quadraticCurveTo(fcx + fr * 0.9, fcy - fr * 0.2, fcx + fr * 0.35, fcy + fr * 0.5)
+    ctx.quadraticCurveTo(fcx + fr * 0.55, fcy + fr * 0.1, fcx, fcy + fr)
+    ctx.quadraticCurveTo(fcx - fr * 0.55, fcy + fr * 0.1, fcx - fr * 0.35, fcy + fr * 0.5)
+    ctx.quadraticCurveTo(fcx - fr * 0.9, fcy - fr * 0.2, fcx, fcy - fr)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  // Tier 2 — the original single-bay station with a roof beacon, unchanged.
+  function drawFireStation(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#2a1614"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var pad = cellSize * 0.1
+    var x = gx + pad, y = gy + pad, s = cellSize - pad * 2
+    var outline = "rgba(30, 10, 8, 0.7)"
+
+    var wallGrad = ctx.createLinearGradient(x, y, x + s, y + s)
+    wallGrad.addColorStop(0, "#c14336")
+    wallGrad.addColorStop(1, "#7f261c")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(x, y, s, s)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.035)
+    ctx.strokeRect(x, y, s, s)
+
+    // roof cap strip along the top — a station, not a house
+    ctx.fillStyle = "#4a1a14"
+    ctx.fillRect(x, y, s, s * 0.12)
+
+    // the bay door: wide, dark, with a couple of light-stripe accents
+    var bayW = s * 0.62, bayH = s * 0.42
+    var bayX = x + (s - bayW) / 2, bayY = y + s - bayH - s * 0.06
+    ctx.fillStyle = "#241210"
+    ctx.fillRect(bayX, bayY, bayW, bayH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.025)
+    ctx.strokeRect(bayX, bayY, bayW, bayH)
+    ctx.strokeStyle = "rgba(255, 230, 200, 0.55)"
+    ctx.lineWidth = Math.max(1, cellSize * 0.018)
+    ctx.beginPath()
+    ctx.moveTo(bayX + bayW * 0.33, bayY); ctx.lineTo(bayX + bayW * 0.33, bayY + bayH)
+    ctx.moveTo(bayX + bayW * 0.67, bayY); ctx.lineTo(bayX + bayW * 0.67, bayY + bayH)
+    ctx.stroke()
+
+    // flame emblem above the door
+    var fcx = x + s * 0.5, fcy = y + s * 0.36
+    var fr = s * 0.16
+    ctx.fillStyle = "#f2a53a"
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.025)
+    ctx.beginPath()
+    ctx.moveTo(fcx, fcy - fr)
+    ctx.quadraticCurveTo(fcx + fr * 0.9, fcy - fr * 0.2, fcx + fr * 0.35, fcy + fr * 0.5)
+    ctx.quadraticCurveTo(fcx + fr * 0.55, fcy + fr * 0.1, fcx, fcy + fr)
+    ctx.quadraticCurveTo(fcx - fr * 0.55, fcy + fr * 0.1, fcx - fr * 0.35, fcy + fr * 0.5)
+    ctx.quadraticCurveTo(fcx - fr * 0.9, fcy - fr * 0.2, fcx, fcy - fr)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+    ctx.fillStyle = "#fde08a"
+    ctx.beginPath()
+    ctx.moveTo(fcx, fcy - fr * 0.35)
+    ctx.quadraticCurveTo(fcx + fr * 0.35, fcy + fr * 0.15, fcx, fcy + fr * 0.6)
+    ctx.quadraticCurveTo(fcx - fr * 0.35, fcy + fr * 0.15, fcx, fcy - fr * 0.35)
+    ctx.fill()
+
+    // a single roof beacon
+    ctx.fillStyle = "#ff5540"
+    ctx.beginPath()
+    ctx.arc(x + s * 0.5, y + s * 0.06, s * 0.045, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // Tier 3 — a battalion HQ: two bay doors, a watch tower with an antenna,
+  // and a pair of roof beacons instead of just one.
+  function drawFireBattalion(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#2a1614"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var pad = cellSize * 0.04
+    var x = gx + pad, y = gy + pad, s = cellSize - pad * 2
+    var outline = "rgba(30, 10, 8, 0.7)"
+
+    var wallGrad = ctx.createLinearGradient(x, y, x + s, y + s)
+    wallGrad.addColorStop(0, "#c14336")
+    wallGrad.addColorStop(1, "#7f261c")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(x, y, s, s)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.035)
+    ctx.strokeRect(x, y, s, s)
+    ctx.fillStyle = "#4a1a14"
+    ctx.fillRect(x, y, s, s * 0.1)
+
+    var bayW = s * 0.28, bayH = s * 0.4
+    var bayY = y + s - bayH - s * 0.05
+    var bayXs = [x + s * 0.14, x + s * 0.58]
+    for (var bi = 0; bi < bayXs.length; bi++) {
+      ctx.fillStyle = "#241210"
+      ctx.fillRect(bayXs[bi], bayY, bayW, bayH)
+      ctx.strokeStyle = outline
+      ctx.lineWidth = Math.max(1, cellSize * 0.02)
+      ctx.strokeRect(bayXs[bi], bayY, bayW, bayH)
+      ctx.strokeStyle = "rgba(255, 230, 200, 0.55)"
+      ctx.lineWidth = Math.max(0.6, cellSize * 0.014)
+      ctx.beginPath()
+      ctx.moveTo(bayXs[bi] + bayW * 0.5, bayY); ctx.lineTo(bayXs[bi] + bayW * 0.5, bayY + bayH)
+      ctx.stroke()
+    }
+
+    // watch tower with antenna
+    var towerX = x + s * 0.5, towerW = s * 0.14
+    ctx.fillStyle = "#7f261c"
+    ctx.fillRect(towerX - towerW / 2, y - s * 0.16, towerW, s * 0.2)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.8, cellSize * 0.018)
+    ctx.strokeRect(towerX - towerW / 2, y - s * 0.16, towerW, s * 0.2)
+    ctx.beginPath()
+    ctx.moveTo(towerX, y - s * 0.16); ctx.lineTo(towerX, y - s * 0.32)
+    ctx.stroke()
+
+    var fcx = x + s * 0.5, fcy = y + s * 0.42, fr = s * 0.12
+    ctx.fillStyle = "#f2a53a"
+    ctx.beginPath()
+    ctx.moveTo(fcx, fcy - fr)
+    ctx.quadraticCurveTo(fcx + fr * 0.9, fcy - fr * 0.2, fcx + fr * 0.35, fcy + fr * 0.5)
+    ctx.quadraticCurveTo(fcx + fr * 0.55, fcy + fr * 0.1, fcx, fcy + fr)
+    ctx.quadraticCurveTo(fcx - fr * 0.55, fcy + fr * 0.1, fcx - fr * 0.35, fcy + fr * 0.5)
+    ctx.quadraticCurveTo(fcx - fr * 0.9, fcy - fr * 0.2, fcx, fcy - fr)
+    ctx.closePath()
+    ctx.fill()
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.8, cellSize * 0.02)
+    ctx.stroke()
+
+    ctx.fillStyle = "#ff5540"
+    ctx.beginPath(); ctx.arc(x + s * 0.18, y + s * 0.06, s * 0.04, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(x + s * 0.82, y + s * 0.06, s * 0.04, 0, Math.PI * 2); ctx.fill()
+  }
+
+  function drawPolice(ctx, gx, gy, cellSize, level) {
+    if (level === undefined) level = 1
+    if (level <= 0) root.drawPoliceSubstation(ctx, gx, gy, cellSize)
+    else if (level === 1) root.drawPoliceStation(ctx, gx, gy, cellSize)
+    else root.drawPoliceSwat(ctx, gx, gy, cellSize)
+  }
+
+  // Tier 1 — a substation: a small booth with a plain badge, no light bar.
+  function drawPoliceSubstation(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#141c2a"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var x = gx + cellSize * 0.28, y = gy + cellSize * 0.32
+    var s = cellSize * 0.44
+    var outline = "rgba(10, 16, 28, 0.7)"
+
+    var wallGrad = ctx.createLinearGradient(x, y, x + s, y + s)
+    wallGrad.addColorStop(0, "#5c7c9c")
+    wallGrad.addColorStop(1, "#31465c")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(x, y, s, s)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.03)
+    ctx.strokeRect(x, y, s, s)
+
+    var doorW = s * 0.3, doorH = s * 0.4
+    ctx.fillStyle = "#161e2a"
+    ctx.fillRect(x + (s - doorW) / 2, y + s - doorH, doorW, doorH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.018)
+    ctx.strokeRect(x + (s - doorW) / 2, y + s - doorH, doorW, doorH)
+
+    var bcx = x + s * 0.5, bcy = y - cellSize * 0.03, br = s * 0.14
+    ctx.fillStyle = "#e8c93a"
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.02)
+    ctx.beginPath()
+    ctx.moveTo(bcx, bcy - br)
+    ctx.lineTo(bcx + br * 0.85, bcy - br * 0.35)
+    ctx.lineTo(bcx + br * 0.6, bcy + br * 0.75)
+    ctx.lineTo(bcx, bcy + br)
+    ctx.lineTo(bcx - br * 0.6, bcy + br * 0.75)
+    ctx.lineTo(bcx - br * 0.85, bcy - br * 0.35)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  // Tier 2 — the original station with badge and light bar, unchanged.
+  function drawPoliceStation(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#141c2a"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var pad = cellSize * 0.1
+    var x = gx + pad, y = gy + pad, s = cellSize - pad * 2
+    var outline = "rgba(10, 16, 28, 0.7)"
+
+    var wallGrad = ctx.createLinearGradient(x, y, x + s, y + s)
+    wallGrad.addColorStop(0, "#5c7c9c")
+    wallGrad.addColorStop(1, "#31465c")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(x, y, s, s)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.035)
+    ctx.strokeRect(x, y, s, s)
+
+    // entrance
+    var doorW = s * 0.26, doorH = s * 0.4
+    var doorX = x + (s - doorW) / 2, doorY = y + s - doorH - s * 0.06
+    ctx.fillStyle = "#161e2a"
+    ctx.fillRect(doorX, doorY, doorW, doorH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.02)
+    ctx.strokeRect(doorX, doorY, doorW, doorH)
+
+    // badge emblem above the door: a simple five-point shield
+    var bcx = x + s * 0.5, bcy = y + s * 0.36, br = s * 0.15
+    ctx.fillStyle = "#e8c93a"
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.022)
+    ctx.beginPath()
+    ctx.moveTo(bcx, bcy - br)
+    ctx.lineTo(bcx + br * 0.85, bcy - br * 0.35)
+    ctx.lineTo(bcx + br * 0.6, bcy + br * 0.75)
+    ctx.lineTo(bcx, bcy + br)
+    ctx.lineTo(bcx - br * 0.6, bcy + br * 0.75)
+    ctx.lineTo(bcx - br * 0.85, bcy - br * 0.35)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+
+    // roof light bar: red/blue pair, the unmistakable cue
+    var barW = s * 0.34, barH = s * 0.09
+    var barY = y + s * 0.02
+    ctx.fillStyle = "#e0433a"
+    ctx.fillRect(x + s * 0.5 - barW / 2, barY, barW / 2, barH)
+    ctx.fillStyle = "#3a6fe0"
+    ctx.fillRect(x + s * 0.5, barY, barW / 2, barH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.018)
+    ctx.strokeRect(x + s * 0.5 - barW / 2, barY, barW, barH)
+  }
+
+  // Tier 3 — a SWAT HQ: darker tactical walls, a wider light bar with
+  // three lamps, and an armored vehicle parked out front.
+  function drawPoliceSwat(ctx, gx, gy, cellSize) {
+    ctx.fillStyle = "#141c2a"
+    ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+
+    var pad = cellSize * 0.05
+    var x = gx + pad, y = gy + pad * 1.5, s = cellSize * 0.6
+    var outline = "rgba(8, 12, 20, 0.75)"
+
+    var wallGrad = ctx.createLinearGradient(x, y, x + s, y + s)
+    wallGrad.addColorStop(0, "#3a4a58")
+    wallGrad.addColorStop(1, "#1e2830")
+    ctx.fillStyle = wallGrad
+    ctx.fillRect(x, y, s, s)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(1, cellSize * 0.035)
+    ctx.strokeRect(x, y, s, s)
+
+    var doorW = s * 0.3, doorH = s * 0.42
+    var doorX = x + (s - doorW) / 2, doorY = y + s - doorH - s * 0.05
+    ctx.fillStyle = "#0e141c"
+    ctx.fillRect(doorX, doorY, doorW, doorH)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.8, cellSize * 0.02)
+    ctx.strokeRect(doorX, doorY, doorW, doorH)
+
+    var bcx = x + s * 0.5, bcy = y + s * 0.32, br = s * 0.13
+    ctx.fillStyle = "#c9a53f"
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.8, cellSize * 0.02)
+    ctx.beginPath()
+    ctx.moveTo(bcx, bcy - br)
+    ctx.lineTo(bcx + br * 0.85, bcy - br * 0.35)
+    ctx.lineTo(bcx + br * 0.6, bcy + br * 0.75)
+    ctx.lineTo(bcx, bcy + br)
+    ctx.lineTo(bcx - br * 0.6, bcy + br * 0.75)
+    ctx.lineTo(bcx - br * 0.85, bcy - br * 0.35)
+    ctx.closePath()
+    ctx.fill()
+    ctx.stroke()
+
+    // wider light bar, three lamps
+    var barW = s * 0.5, barH = s * 0.08, barY = y - s * 0.02
+    var lampColors = ["#e0433a", "#3a6fe0", "#e0433a"]
+    for (var l = 0; l < 3; l++) {
+      ctx.fillStyle = lampColors[l]
+      ctx.fillRect(x + s * 0.5 - barW / 2 + l * (barW / 3), barY, barW / 3, barH)
+    }
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.8, cellSize * 0.018)
+    ctx.strokeRect(x + s * 0.5 - barW / 2, barY, barW, barH)
+
+    // armored vehicle parked at the bottom-left corner of the lot
+    var vx = gx + cellSize * 0.12, vy = gy + cellSize * 0.78
+    var vw = cellSize * 0.26, vh = cellSize * 0.14
+    ctx.fillStyle = "#2c3438"
+    ctx.fillRect(vx, vy, vw, vh)
+    ctx.strokeStyle = outline
+    ctx.lineWidth = Math.max(0.6, cellSize * 0.016)
+    ctx.strokeRect(vx, vy, vw, vh)
+    ctx.fillStyle = "#1a1a1a"
+    ctx.beginPath(); ctx.arc(vx + vw * 0.22, vy + vh, vh * 0.28, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(vx + vw * 0.78, vy + vh, vh * 0.28, 0, Math.PI * 2); ctx.fill()
+  }
+
+  // A plain info badge for the palette icon only — "inspect" is a mode
+  // like Bulldoze, never actually placed on the map, so this has no
+  // corresponding case in drawTile.
+  function drawInfoIcon(ctx, gx, gy, cellSize) {
+    // A small brass-rimmed inspection glass, kept code-native for clarity.
+    var cx = gx + cellSize * 0.4, cy = gy + cellSize * 0.38, r = cellSize * 0.25
+    ctx.strokeStyle = "#263342"
+    ctx.lineWidth = cellSize * 0.19
+    ctx.beginPath()
+    ctx.moveTo(cx + r * 0.6, cy + r * 0.6)
+    ctx.lineTo(gx + cellSize * 0.83, gy + cellSize * 0.85)
+    ctx.stroke()
+    ctx.strokeStyle = "#bf8746"
+    ctx.lineWidth = cellSize * 0.1
+    ctx.stroke()
+    ctx.fillStyle = "#5294a9"
+    ctx.strokeStyle = "#dfba72"
+    ctx.lineWidth = Math.max(1, cellSize * 0.07)
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+    ctx.strokeStyle = "#d3eef0"
+    ctx.lineWidth = Math.max(1, cellSize * 0.045)
+    ctx.beginPath()
+    ctx.arc(cx, cy, r * 0.65, Math.PI, Math.PI * 1.5)
+    ctx.stroke()
+  }
+
+  function drawBulldozeIcon(ctx, gx, gy, cellSize) {
+    // Readable amber tracked dozer; no generated bitmap needed for this tool.
+    ctx.save()
+    ctx.translate(gx, gy)
+    ctx.scale(cellSize, cellSize)
+    ctx.fillStyle = "#25313c"
+    ctx.fillRect(0.1, 0.65, 0.64, 0.21)
+    ctx.fillStyle = "#657581"
+    for (var i = 0; i < 5; i++) ctx.fillRect(0.14 + i * 0.12, 0.69, 0.06, 0.1)
+    ctx.fillStyle = "#c6892e"
+    ctx.fillRect(0.14, 0.49, 0.62, 0.18)
+    ctx.fillStyle = "#edbc55"
+    ctx.fillRect(0.15, 0.47, 0.59, 0.08)
+    ctx.fillRect(0.24, 0.2, 0.31, 0.31)
+    ctx.fillStyle = "#77b3c2"
+    ctx.fillRect(0.29, 0.26, 0.2, 0.19)
+    ctx.fillStyle = "#344555"
+    ctx.fillRect(0.2, 0.17, 0.39, 0.07)
+    ctx.fillRect(0.65, 0.31, 0.055, 0.18)
+    ctx.fillStyle = "#c1c9c9"
+    ctx.beginPath()
+    ctx.moveTo(0.79, 0.48); ctx.lineTo(0.92, 0.43)
+    ctx.lineTo(0.92, 0.85); ctx.lineTo(0.76, 0.79)
+    ctx.closePath(); ctx.fill()
+    ctx.fillStyle = "#e8d8a9"
+    ctx.fillRect(0.87, 0.46, 0.045, 0.34)
+    ctx.restore()
+  }
+
+  function drawMedical(ctx, gx, gy, cellSize, level) {
+    root.drawSpriteLot(ctx, gx, gy, cellSize, Model.TILE_MEDICAL)
+    ctx.fillStyle = "#e3d7bd"
+    ctx.fillRect(gx + cellSize * 0.12, gy + cellSize * 0.30, cellSize * 0.76, cellSize * 0.56)
+    ctx.fillStyle = "#4d8779"
+    ctx.fillRect(gx + cellSize * 0.08, gy + cellSize * 0.22, cellSize * 0.84, cellSize * 0.14)
+    ctx.fillRect(gx + cellSize * 0.44, gy + cellSize * 0.42, cellSize * 0.12, cellSize * 0.34)
+    ctx.fillRect(gx + cellSize * 0.33, gy + cellSize * 0.53, cellSize * 0.34, cellSize * 0.12)
+  }
+
+  function drawSchool(ctx, gx, gy, cellSize, level) {
+    root.drawSpriteLot(ctx, gx, gy, cellSize, Model.TILE_SCHOOL)
+    ctx.fillStyle = "#a46a4b"
+    ctx.fillRect(gx + cellSize * 0.15, gy + cellSize * 0.35, cellSize * 0.7, cellSize * 0.5)
+    ctx.fillStyle = "#386e73"
+    ctx.fillRect(gx + cellSize * 0.10, gy + cellSize * 0.25, cellSize * 0.8, cellSize * 0.14)
+    ctx.fillStyle = "#efdbb1"
+    for (var i = 0; i < 3 + level; i++)
+      ctx.fillRect(gx + cellSize * (0.21 + i * 0.12), gy + cellSize * 0.48, cellSize * 0.07, cellSize * 0.14)
+  }
+
+  function drawTile(ctx, tile, gx, gy, cellSize, data, index) {
+    switch (tile.type) {
+    case Model.TILE_LAKE:
+      Waterfront.drawWater(ctx, gx, gy, cellSize, data, root.gridSize, index)
+      break
+    case Model.TILE_WATERFRONT_PARK:
+      if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, Model.TILE_PARK, 2, index)) root.drawPark(ctx, gx, gy, cellSize, 2)
+      break
+    case Model.TILE_TREE:
+    case Model.TILE_FLOWERS:
+      root.drawSpriteLot(ctx, gx, gy, cellSize, tile.type)
+      var decorationSource = root.decorationSpriteUrls[tile.type]
+      if (cityCanvas.isImageLoaded(decorationSource)) {
+        var decorationSize = cellSize * (tile.type === Model.TILE_TREE ? 1.08 : 0.78)
+        ctx.drawImage(decorationSource, gx + (cellSize - decorationSize) / 2,
+          gy + cellSize * 0.97 - decorationSize, decorationSize, decorationSize)
+      } else {
+        ctx.fillStyle = tile.type === Model.TILE_TREE ? "#6c9a4d" : "#c58794"
+        ctx.beginPath(); ctx.arc(gx + cellSize * 0.5, gy + cellSize * 0.6, cellSize * 0.22, 0, Math.PI * 2); ctx.fill()
+      }
+      break
+    case Model.TILE_ROAD:
+      if (tile.level === 1) {
+        Waterfront.drawWater(ctx, gx, gy, cellSize, data, root.gridSize, index)
+        Waterfront.drawBridge(ctx, gx, gy, cellSize, root.roadConnections(data, root.gridSize, index))
+      } else root.drawRoad(ctx, gx, gy, cellSize, root.roadConnections(data, root.gridSize, index), index)
+      break
+    case Model.TILE_PARK:
+      if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawPark(ctx, gx, gy, cellSize, tile.level)
+      break
+    case Model.TILE_POWER:
+      if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawPower(ctx, gx, gy, cellSize, tile.level)
+      break
+    case Model.TILE_WATER:
+      if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawWater(ctx, gx, gy, cellSize, tile.level)
+      break
+    case Model.TILE_FIRE:
+      if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawFire(ctx, gx, gy, cellSize, tile.level)
+      break
+    case Model.TILE_POLICE:
+      if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawPolice(ctx, gx, gy, cellSize, tile.level)
+      break
+    case Model.TILE_SCHOOL:
+      if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawSchool(ctx, gx, gy, cellSize, tile.level)
+      break
+    case Model.TILE_MEDICAL:
+      if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawMedical(ctx, gx, gy, cellSize, tile.level)
+      break
+    case Model.TILE_RES:
+      if (tile.level <= 0) root.drawUndeveloped(ctx, gx, gy, cellSize, tile.type)
+      else if (!root.drawResidentialSprite(ctx, gx, gy, cellSize, tile.level, index))
+        root.drawResidential(ctx, gx, gy, cellSize, tile.level)
+      break
+    case Model.TILE_COM:
+      if (tile.level <= 0) root.drawUndeveloped(ctx, gx, gy, cellSize, tile.type)
+      else if (!root.drawCommercialSprite(ctx, gx, gy, cellSize, tile.level, index))
+        root.drawCommercial(ctx, gx, gy, cellSize, tile.level)
+      break
+    case Model.TILE_IND:
+      if (tile.level <= 0) root.drawUndeveloped(ctx, gx, gy, cellSize, tile.type)
+      else if (!root.drawIndustrialSprite(ctx, gx, gy, cellSize, tile.level, index))
+        root.drawIndustrial(ctx, gx, gy, cellSize, tile.level)
+      break
+    default: root.drawEmpty(ctx, gx, gy, cellSize)
+    }
+  }
+
+  // One line per boundary, not one inset border per tile — two tiles each
+  // stroking their own edge left a visibly doubled line right where they
+  // meet. Drawn once, after every tile, so it isn't painted over. Only the
+  // boundaries crossing the current viewport are drawn — with a 64x64 grid
+  // there's no reason to stroke thousands of off-screen lines every paint.
+  function drawGridOverlay(ctx, startCol, endCol, startRow, endRow, cellSize, offsetX, offsetY, viewW, viewH) {
+    ctx.strokeStyle = root.neutralTint(0.04)
+    ctx.lineWidth = 1
+    for (var c = startCol; c <= endCol + 1; c++) {
+      var x = c * cellSize - offsetX + 0.5
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, viewH); ctx.stroke()
+    }
+    for (var r = startRow; r <= endRow + 1; r++) {
+      var y = r * cellSize - offsetY + 0.5
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(viewW, y); ctx.stroke()
+    }
+  }
+
+  readonly property var utilityRangeColors: ({
+    H: { fill: "rgba(75, 195, 145, 0.16)", stroke: "rgba(130, 230, 170, 0.8)" },
+    N: { fill: "rgba(69, 170, 150, 0.16)", stroke: "rgba(110, 210, 190, 0.8)" },
+    E: { fill: "rgba(201, 162, 39, 0.16)", stroke: "rgba(230, 190, 60, 0.75)" },
+    W: { fill: "rgba(47, 111, 148, 0.2)", stroke: "rgba(100, 180, 220, 0.75)" },
+    F: { fill: "rgba(193, 67, 54, 0.16)", stroke: "rgba(230, 110, 90, 0.75)" },
+    S: { fill: "rgba(58, 111, 224, 0.16)", stroke: "rgba(110, 150, 230, 0.75)" }
+  })
+  readonly property var coverageRadii: ({
+    H: Model.MEDICAL_RADIUS,
+    N: Model.SCHOOL_RADIUS,
+    E: Model.POWER_RADIUS, W: Model.WATER_RADIUS,
+    F: Model.FIRE_RADIUS, S: Model.POLICE_RADIUS
+  })
+  readonly property var coverageTypes: [Model.TILE_POWER, Model.TILE_WATER, Model.TILE_FIRE, Model.TILE_POLICE, Model.TILE_SCHOOL, Model.TILE_MEDICAL]
+
+  // Shows a plant's actual reach: while a coverage-building tool (power,
+  // water, fire, police) is active, previews what placing one *here* would
+  // cover (even on bare ground); otherwise, hovering an already-built one
+  // shows its real coverage. Same circle either way, since the math
+  // (Model.withinRadius) is literally the circle radius, not an
+  // approximation of a square.
+  function drawCoverageOverlay(ctx, data, hoverIndex, cellSize, offsetX, offsetY) {
+    if (hoverIndex < 0) return
+    var utilType = null
+    var levelForRadius = 0
+    if (root.coverageTypes.indexOf(root.activeTool) >= 0) {
+      utilType = root.activeTool
+      levelForRadius = root.upgradeTarget === root.activeTool ? root.selectedTier : 0
+    } else {
+      var hovered = Model.parseTile(data[hoverIndex])
+      if (root.coverageTypes.indexOf(hovered.type) >= 0) { utilType = hovered.type; levelForRadius = hovered.level }
+    }
+    if (!utilType) return
+
+    var radius = root.coverageRadii[utilType] * Model.INFRA_RADIUS_SCALE[levelForRadius]
+    var colors = root.utilityRangeColors[utilType]
+    var col = hoverIndex % root.gridSize
+    var row = Math.floor(hoverIndex / root.gridSize)
+    var cx = col * cellSize - offsetX + cellSize / 2
+    var cy = row * cellSize - offsetY + cellSize / 2
+    var pixelRadius = radius * cellSize
+
+    ctx.fillStyle = colors.fill
+    ctx.beginPath()
+    ctx.arc(cx, cy, pixelRadius, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = colors.stroke
+    ctx.lineWidth = 2
+    ctx.setLineDash([6, 4])
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
+
+  Flickable {
+    anchors.fill: parent
+    contentWidth: width
+    contentHeight: content.implicitHeight
+    clip: true
+    boundsBehavior: Flickable.StopAtBounds
+
+    Column {
+      id: content
+      width: parent.width
+      spacing: Style.space(10)
+
+      Row {
+        width: parent.width
+        spacing: Style.space(8)
+
+        Button {
+          id: gameMenuButton
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: "☰"
+          tooltipText: "Game menu"
+          foreground: root.bar ? root.bar.foreground : Color.foreground
+          onClicked: root.gameMenuOpen = !root.gameMenuOpen
+        }
+
+        Text {
+          width: parent.width - gameMenuButton.width - taxRow.implicitWidth - detachButton.width - parent.spacing * 3
+          text: root.serviceReady ? root.cityService.cityName : "Omaville"
+          elide: Text.ElideRight
+          color: root.bar ? root.bar.foreground : Color.foreground
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.subtitle
+          font.bold: true
+          anchors.verticalCenter: parent.verticalCenter
+        }
+
+        Row {
+          id: taxRow
+          spacing: Style.space(4)
+          anchors.verticalCenter: parent.verticalCenter
+
+          Text {
+            text: "Tax " + root.taxRatePercent + "%"
+            color: root.bar ? root.bar.foreground : Color.foreground
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            anchors.verticalCenter: parent.verticalCenter
+          }
+          Button {
+            iconText: "−"
+            foreground: root.bar ? root.bar.foreground : Color.foreground
+            onClicked: if (root.cityService) root.cityService.setTaxRate(root.taxRatePercent - 1)
+          }
+          Button {
+            iconText: "+"
+            foreground: root.bar ? root.bar.foreground : Color.foreground
+            onClicked: if (root.cityService) root.cityService.setTaxRate(root.taxRatePercent + 1)
+          }
+        }
+
+        Button {
+          id: detachButton
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: root.detached ? "⧈" : "⧉"
+          tooltipText: root.detached ? "Dock back into the bar" : "Pop out into its own window"
+          foreground: root.bar ? root.bar.foreground : Color.foreground
+          onClicked: root.detached ? root.reattachRequested() : root.detachRequested()
+        }
+      }
+
+      Text {
+        id: calendarLabel
+        width: parent.width
+        horizontalAlignment: Text.AlignHCenter
+        text: root.calendar.monthName + " · Year " + root.calendar.year
+        color: root.bar ? root.bar.foreground : Color.foreground
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        font.bold: true
+
+        transform: Scale {
+          id: calendarScale
+          origin.x: calendarLabel.width / 2
+          origin.y: calendarLabel.height / 2
+          xScale: 1
+          yScale: 1
+        }
+
+        SequentialAnimation {
+          id: calendarPulse
+          NumberAnimation {
+            targets: [calendarScale]
+            properties: "xScale,yScale"
+            to: 1.12
+            duration: 90
+            easing.type: Easing.OutQuad
+          }
+          NumberAnimation {
+            targets: [calendarScale]
+            properties: "xScale,yScale"
+            to: 1
+            duration: 160
+            easing.type: Easing.InQuad
+          }
+        }
+      }
+
+      Row {
+        width: parent.width
+        spacing: Style.space(14)
+
+        Text {
+          text: "Pop " + root.population
+          color: root.bar ? root.bar.foreground : Color.foreground
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+        Text {
+          text: "Jobs " + root.jobs
+          color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.2)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+        Text {
+          text: "$" + Math.round(root.treasury)
+          color: root.treasury < 0 ? Color.urgent : (root.bar ? root.bar.foreground : Color.foreground)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+        Text {
+          text: root.happiness + "% happy · Appeal +" + root.attractiveness + "%"
+          color: root.happiness < 30 ? Color.urgent : Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.2)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+        }
+      }
+
+      // RCI demand meter, SimCity-style: one bar per zone that rises above
+      CoverageStatus {
+        rows: root.serviceCoverage
+        active: root.active
+        width: parent.width
+      }
+
+      // RCI demand meter, SimCity-style: one bar per zone that rises above
+      // the center line when that zone is undersupplied (build more) and
+      // dips below it when it's oversupplied (hold off) — same growth-chance
+      // multiplier that actually drives tickGrid, just rescaled for display.
+      // Given its own card (rather than sitting bare in the stats flow like
+      // the Pop/Jobs/$/Happy row) so it reads as one grouped instrument
+      // instead of three numbers floating loose in the layout.
+      Rectangle {
+        width: parent.width
+        height: demandColumn.implicitHeight + Style.space(16)
+        radius: Style.cornerRadius
+        color: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 0.55)
+        border.width: 1
+        border.color: root.neutralTint(0.15)
+
+        Column {
+          id: demandColumn
+          anchors.fill: parent
+          anchors.margins: Style.space(8)
+          spacing: Style.space(6)
+
+          Text {
+            text: "Demand"
+            color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.3)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.space(16)
+
+            Repeater {
+              model: [
+                { key: "R", color: root.roofColors.R },
+                { key: "C", color: root.roofColors.C },
+                { key: "I", color: root.roofColors.I }
+              ]
+
+              Row {
+                id: demandItem
+                required property var modelData
+                spacing: Style.space(4)
+
+                readonly property int pct: root.demandPercent(modelData.key, root.demand[modelData.key])
+                readonly property real barHalf: Style.space(12)
+
+                Item {
+                  width: Style.space(10)
+                  height: Style.space(24)
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  Rectangle {
+                    width: parent.width
+                    height: 1
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: root.neutralTint(0.35)
+                  }
+
+                  Rectangle {
+                    width: parent.width
+                    radius: 1
+                    color: demandItem.modelData.color
+                    y: demandItem.pct >= 0
+                      ? demandItem.barHalf - demandItem.barHalf * demandItem.pct / 100
+                      : demandItem.barHalf
+                    height: demandItem.barHalf * Math.abs(demandItem.pct) / 100
+                  }
+                }
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: demandItem.modelData.key + " " + (demandItem.pct >= 0 ? "+" : "") + demandItem.pct + "%"
+                  color: root.bar ? root.bar.foreground : Color.foreground
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+        }
+      }
+
+      PanelSeparator {
+        foreground: root.bar ? root.bar.foreground : Color.foreground
+      }
+
+      // Display controls: view-only state (today: zoom), kept visually
+      // and structurally separate from the build palette above — a
+      // different category of control, not just more buttons.
+      Row {
+        spacing: Style.space(6)
+
+        Text {
+          text: "View"
+          color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.3)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          anchors.verticalCenter: parent.verticalCenter
+        }
+        Text {
+          text: Math.round(root.zoom * 100) + "%"
+          color: root.bar ? root.bar.foreground : Color.foreground
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          anchors.verticalCenter: parent.verticalCenter
+        }
+        Button {
+          iconText: "−"
+          foreground: root.bar ? root.bar.foreground : Color.foreground
+          onClicked: root.setZoom(root.zoom / 1.2)
+        }
+        Button {
+          iconText: "+"
+          foreground: root.bar ? root.bar.foreground : Color.foreground
+          onClicked: root.setZoom(root.zoom * 1.2)
+        }
+        Button {
+          iconText: "⌂"
+          foreground: root.bar ? root.bar.foreground : Color.foreground
+          onClicked: { root.zoom = 1; root.centerOnGrid() }
+        }
+      }
+
+      // Palette-beside-map, SimCity-2000-style, instead of a horizontal
+      // strip above it: a vertical icon column that just grows taller as
+      // more tools are added, rather than eating into the map's own
+      // vertical space row by row. Each icon is still a live mini-render
+      // from the same draw functions used on the map, and the name/cost
+      // still lives in the status line below rather than a per-icon label.
+      Row {
+        id: mapRow
+        width: parent.width
+        spacing: Style.space(8)
+
+        Grid {
+          id: toolPalette
+          columns: root.detached ? 1 : 2
+          // Higher than the map Item beside it (default z: 0, but declared
+          // *after* this Column so it paints on top when equal) — the tier
+          // flyout escapes toolButton's own bounds to sit beside it, and
+          // without this it was rendering underneath the map canvas.
+          z: 5
+          spacing: Style.space(6)
+
+          Repeater {
+            model: root.toolList
+
+            Rectangle {
+              id: toolButton
+              required property var modelData
+              z: root.flyoutType === modelData.type ? 10 : 0
+              readonly property bool upgradeable: root.upgradeableTypes.indexOf(modelData.type) >= 0
+              readonly property bool decorations: modelData.type === "decorations"
+              readonly property bool hasFlyout: upgradeable || decorations
+              readonly property bool armed: root.activeTool === modelData.type
+                || (decorations && (root.activeTool === Model.TILE_TREE || root.activeTool === Model.TILE_FLOWERS))
+              readonly property bool upgradeArmed: armed && root.upgradeTarget === modelData.type
+              width: Style.space(34)
+              height: Style.space(34)
+              radius: Style.space(4)
+              color: !armed ? "transparent"
+                : upgradeArmed ? Qt.rgba(0.88, 0.62, 0.22, 0.35)
+                : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35)
+              border.width: 1
+              border.color: !armed ? root.neutralTint(0.35)
+                : upgradeArmed ? "#e0a83a"
+                : Color.accent
+
+              Canvas {
+                id: toolIcon
+                visible: toolbarSprite.status !== Image.Ready
+                anchors.centerIn: parent
+                width: Style.space(26)
+                height: Style.space(26)
+                onPaint: {
+                  var ctx = getContext("2d")
+                  ctx.clearRect(0, 0, width, height)
+                  switch (toolButton.modelData.type) {
+                  case Model.TILE_ROAD:
+                    root.drawRoad(ctx, 0, 0, width, { up: true, down: true, left: true, right: true })
+                    break
+                  case Model.TILE_LAKE: Waterfront.drawWater(ctx, 0, 0, width, ['L0'], 1, 0); break
+                  case Model.TILE_WATERFRONT_PARK: root.drawPark(ctx, 0, 0, width, 2); break
+                  case Model.TILE_RES: root.drawResidential(ctx, 0, 0, width, 2); break
+                  case Model.TILE_COM: root.drawCommercial(ctx, 0, 0, width, 2); break
+                  case Model.TILE_IND: root.drawIndustrial(ctx, 0, 0, width, 2); break
+                  case Model.TILE_PARK: root.drawPark(ctx, 0, 0, width, 0); break
+                  case Model.TILE_POWER: root.drawPower(ctx, 0, 0, width, 0); break
+                  case Model.TILE_WATER: root.drawWater(ctx, 0, 0, width, 0); break
+                  case Model.TILE_FIRE: root.drawFire(ctx, 0, 0, width, 0); break
+                  case Model.TILE_POLICE: root.drawPolice(ctx, 0, 0, width, 0); break
+                  case Model.TILE_SCHOOL: root.drawSchool(ctx, 0, 0, width, 0); break
+                  case Model.TILE_MEDICAL: root.drawMedical(ctx, 0, 0, width, 0); break
+                  case "decorations": root.drawPark(ctx, 0, 0, width, 0); break
+                  case "inspect": root.drawInfoIcon(ctx, 0, 0, width); break
+                  default: root.drawBulldozeIcon(ctx, 0, 0, width); break
+                  }
+                }
+              }
+
+              Image {
+                id: toolbarSprite
+                anchors.centerIn: parent
+                width: Style.space(30)
+                height: Style.space(30)
+                source: root.previewSpriteSource(toolButton.modelData.type,
+                  root.upgradeTarget === toolButton.modelData.type ? root.selectedTier : 0)
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                visible: status === Image.Ready
+              }
+
+              // Corner marker identifies tools with hover choices.
+              Rectangle {
+                visible: toolButton.hasFlyout
+                width: Style.space(6)
+                height: Style.space(6)
+                radius: width / 2
+                color: "#e0a83a"
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: Style.space(1)
+              }
+
+              MouseArea {
+                id: toolMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  // Deliberately doesn't reset upgradeTarget: once you've
+                  // picked a tier from the flyout, a plain reselect of this
+                  // same tool should keep remembering that choice instead
+                  // of falling back to plain placement every time — only
+                  // the flyout itself changes which mode is armed.
+                  root.flyoutType = ""
+                  root.activeTool = toolButton.decorations ? root.decorationTool : toolButton.modelData.type
+                }
+                onEntered: {
+                  root.hoveredToolType = toolButton.modelData.type
+                  closeFlyout.stop()
+                  if (toolButton.hasFlyout) openFlyout.restart()
+                  else root.flyoutType = ""
+                }
+                onExited: {
+                  if (root.hoveredToolType === toolButton.modelData.type) root.hoveredToolType = ""
+                  openFlyout.stop()
+                  closeFlyout.restart()
+                }
+              }
+
+              Timer {
+                id: openFlyout
+                interval: 180
+                onTriggered: if (toolMouse.containsMouse) root.flyoutType = toolButton.modelData.type
+              }
+              Timer {
+                id: closeFlyout
+                interval: 300
+                onTriggered: if (!toolMouse.containsMouse && !flyoutHover.hovered
+                  && root.flyoutType === toolButton.modelData.type) root.flyoutType = ""
+              }
+              ToolHint { visible: toolMouse.containsMouse; text: root.toolHint(toolButton.modelData.type) }
+
+              // A hover bridge and close grace period keep choices reachable.
+              Item {
+                id: tierFlyout
+                visible: root.flyoutType === toolButton.modelData.type
+                anchors.left: parent.right
+                anchors.leftMargin: 0
+                anchors.verticalCenter: parent.verticalCenter
+                width: flyoutBg.width + Style.space(6)
+                height: flyoutBg.height
+                z: 200
+
+                // Observe the actual ancestor of the choices. A sibling
+                // hover bridge underneath them loses hover to their MouseAreas.
+                HoverHandler {
+                  id: flyoutHover
+                  onHoveredChanged: {
+                    if (hovered) closeFlyout.stop()
+                    else closeFlyout.restart()
+                  }
+                }
+
+                Rectangle {
+                  id: flyoutBg
+                  x: Style.space(6)
+                  width: flyoutRow.implicitWidth + Style.space(12)
+                  height: flyoutRow.implicitHeight + Style.space(12)
+                  radius: Style.space(6)
+                  color: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 0.97)
+                  border.width: 1
+                  border.color: root.neutralTint(0.3)
+
+                  Row {
+                    id: flyoutRow
+                    anchors.centerIn: parent
+                    spacing: Style.space(8)
+
+                    Repeater {
+                      model: toolButton.decorations ? 2 : toolButton.upgradeable ? 3 : 0
+
+                      Column {
+                        id: tierEntry
+                        required property int index
+                        readonly property string ttype: toolButton.decorations
+                          ? [Model.TILE_TREE, Model.TILE_FLOWERS][index] : toolButton.modelData.type
+                        readonly property int tierIndex: toolButton.decorations ? 0 : index
+                        readonly property string tierName: toolButton.decorations
+                          ? Model.TILE_LABELS[ttype] : Model.UPGRADE_TIER_NAMES[ttype][tierIndex]
+                        readonly property int threshold: Model.UPGRADE_THRESHOLDS[tierIndex]
+                        readonly property bool unlocked: root.population >= threshold
+                        spacing: Style.space(2)
+                        width: Style.space(64)
+
+                        Rectangle {
+                          width: Style.space(30)
+                          height: Style.space(30)
+                          anchors.horizontalCenter: parent.horizontalCenter
+                          radius: Style.space(4)
+                          opacity: tierEntry.unlocked ? 1.0 : 0.45
+                          color: root.activeTool === tierEntry.ttype
+                            && ((tierEntry.tierIndex === 0 && root.upgradeTarget === "")
+                              || (tierEntry.tierIndex > 0 && root.upgradeTarget === tierEntry.ttype
+                                && root.selectedTier === tierEntry.tierIndex))
+                            ? Qt.rgba(0.88, 0.62, 0.22, 0.35) : "transparent"
+                          border.width: 1
+                          border.color: root.neutralTint(0.35)
+
+                          Canvas {
+                            anchors.fill: parent
+                            anchors.margins: Style.space(2)
+                            visible: tierSprite.status !== Image.Ready
+                            onPaint: {
+                              var ctx = getContext("2d")
+                              ctx.clearRect(0, 0, width, height)
+                              switch (tierEntry.ttype) {
+                              case Model.TILE_PARK: root.drawPark(ctx, 0, 0, width, tierEntry.tierIndex); break
+                              case Model.TILE_POWER: root.drawPower(ctx, 0, 0, width, tierEntry.tierIndex); break
+                              case Model.TILE_WATER: root.drawWater(ctx, 0, 0, width, tierEntry.tierIndex); break
+                              case Model.TILE_FIRE: root.drawFire(ctx, 0, 0, width, tierEntry.tierIndex); break
+                              case Model.TILE_POLICE: root.drawPolice(ctx, 0, 0, width, tierEntry.tierIndex); break
+                              case Model.TILE_SCHOOL: root.drawSchool(ctx, 0, 0, width, tierEntry.tierIndex); break
+                              case Model.TILE_MEDICAL: root.drawMedical(ctx, 0, 0, width, tierEntry.tierIndex); break
+                              case Model.TILE_TREE:
+                              case Model.TILE_FLOWERS: root.drawPark(ctx, 0, 0, width, 0); break
+                              }
+                            }
+                          }
+
+                          Image {
+                            id: tierSprite
+                            anchors.fill: parent
+                            anchors.margins: Style.space(2)
+                            source: root.previewSpriteSource(tierEntry.ttype, tierEntry.tierIndex)
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true
+                            visible: status === Image.Ready
+                          }
+
+                          Text {
+                            visible: !tierEntry.unlocked
+                            anchors.centerIn: parent
+                            text: "🔒"
+                            font.pixelSize: Style.space(13)
+                          }
+
+                          MouseArea {
+                            id: tierMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: tierEntry.unlocked ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: {
+                              if (!tierEntry.unlocked) return
+                              if (toolButton.decorations) root.decorationTool = tierEntry.ttype
+                              root.upgradeTarget = tierEntry.tierIndex === 0 ? "" : tierEntry.ttype
+                              root.selectedTier = tierEntry.tierIndex
+                              root.activeTool = tierEntry.ttype
+                              root.flyoutType = ""
+                            }
+                          }
+                          ToolHint {
+                            visible: tierMouse.containsMouse
+                            text: toolButton.decorations ? root.toolHint(tierEntry.ttype)
+                              : tierEntry.tierName + " · " + (tierEntry.unlocked
+                                ? "$" + Model.totalInvestment(tierEntry.ttype, tierEntry.tierIndex) + " new; upgrades pay the difference"
+                                : "Unlocks at population " + tierEntry.threshold)
+                          }
+                        }
+
+                        Text {
+                          width: parent.width
+                          horizontalAlignment: Text.AlignHCenter
+                          wrapMode: Text.WordWrap
+                          text: tierEntry.tierName
+                          font.pixelSize: Style.space(8)
+                          color: Color.menu.text
+                        }
+                        Text {
+                          anchors.horizontalCenter: parent.horizontalCenter
+                          text: tierEntry.unlocked
+                            ? "$" + Model.totalInvestment(tierEntry.ttype, tierEntry.tierIndex)
+                            : ("Pop " + tierEntry.threshold)
+                          font.pixelSize: Style.space(8)
+                          color: root.neutralTint(0.7)
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        Item {
+          width: root.viewportWidth
+          height: cityCanvas.height
+
+        Canvas {
+          id: cityCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.viewportWidth
+          height: root.viewportHeight
+
+          property var gridData: root.grid
+          property real cellSize: root.effectiveCellSize
+          property real offsetX: root.panX
+          property real offsetY: root.panY
+          onGridDataChanged: requestPaint()
+          onCellSizeChanged: requestPaint()
+          onOffsetXChanged: requestPaint()
+          onOffsetYChanged: requestPaint()
+          onWidthChanged: requestPaint()
+          onHeightChanged: requestPaint()
+          Component.onCompleted: {
+            for (var ri = 0; ri < root.residentialSpriteUrls.length; ri++)
+              for (var rj = 0; rj < root.residentialSpriteUrls[ri].length; rj++)
+                loadImage(root.residentialSpriteUrls[ri][rj])
+            for (var ci = 0; ci < root.commercialSpriteUrls.length; ci++)
+              for (var cj = 0; cj < root.commercialSpriteUrls[ci].length; cj++)
+                loadImage(root.commercialSpriteUrls[ci][cj])
+            for (var ii = 0; ii < root.industrialSpriteUrls.length; ii++)
+              for (var ij = 0; ij < root.industrialSpriteUrls[ii].length; ij++)
+                loadImage(root.industrialSpriteUrls[ii][ij])
+            for (var type in root.infrastructureSpriteUrls)
+              for (var ti = 0; ti < root.infrastructureSpriteUrls[type].length; ti++)
+                loadImage(root.infrastructureSpriteUrls[type][ti])
+            for (var decoration in root.decorationSpriteUrls)
+              loadImage(root.decorationSpriteUrls[decoration])
+          }
+          onImageLoaded: requestPaint()
+
+          onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            var data = gridData
+            var size = cellSize
+            var startCol = Math.max(0, Math.floor(offsetX / size))
+            var endCol = Math.min(root.gridSize - 1, Math.ceil((offsetX + width) / size))
+            // Taller R3/C3/I3 buildings extend north of their own lot. Include
+            // one extra row so their overdraw is present at the viewport edge
+            // instead of popping in during a pan.
+            var startRow = Math.max(0, Math.floor(offsetY / size) - 1)
+            var endRow = Math.min(root.gridSize - 1, Math.ceil((offsetY + height) / size))
+            for (var row = startRow; row <= endRow; row++) {
+              for (var col = startCol; col <= endCol; col++) {
+                var idx = row * root.gridSize + col
+                var tile = Model.parseTile(data[idx])
+                var gx = col * size - offsetX
+                var gy = row * size - offsetY
+                root.drawTile(ctx, tile, gx, gy, size, data, idx)
+              }
+            }
+            root.drawGridOverlay(ctx, startCol, endCol, startRow, endRow, size, offsetX, offsetY, width, height)
+            for (var detailRow = startRow; detailRow <= endRow; detailRow++) {
+              for (var detailCol = startCol; detailCol <= endCol; detailCol++) {
+                var detailIndex = detailRow * root.gridSize + detailCol
+                if (data[detailIndex] === '#0')
+                  root.drawStreetDetails(ctx, detailCol * size - offsetX, detailRow * size - offsetY,
+                    size, root.roadConnections(data, root.gridSize, detailIndex))
+              }
+            }
+          }
+
+          MouseArea {
+            id: gridMouse
+            anchors.fill: parent
+            // The outer Flickable must not steal a road-paint or map-pan
+            // gesture when a smaller detached window makes it scrollable.
+            preventStealing: true
+            acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
+            hoverEnabled: true
+            property bool painting: false
+            property bool panning: false
+            property real lastX: 0
+            property real lastY: 0
+            property int hoverIndex: -1
+            property var paintedTiles: ({})
+
+            function tileIndexAt(mx, my) {
+              var worldX = mx + root.panX
+              var worldY = my + root.panY
+              var col = Math.floor(worldX / root.effectiveCellSize)
+              var row = Math.floor(worldY / root.effectiveCellSize)
+              if (col < 0 || col >= root.gridSize || row < 0 || row >= root.gridSize) return -1
+              return row * root.gridSize + col
+            }
+
+            function applyAt(mx, my) {
+              if (root.activeTool === "") return
+              var idx = tileIndexAt(mx, my)
+              if (idx < 0) return
+              if (root.activeTool === "inspect") { root.inspectedIndex = idx; return }
+              if (paintedTiles[idx]) return
+              paintedTiles[idx] = true
+              if (!root.cityService) return
+              if (root.activeTool === "bulldoze") { root.cityService.bulldozeTile(idx); return }
+              if (root.upgradeableTypes.indexOf(root.activeTool) >= 0) {
+                root.cityService.buildTier(idx, root.activeTool,
+                  root.upgradeTarget === root.activeTool ? root.selectedTier : 0)
+                return
+              }
+              root.cityService.zoneTile(idx, root.activeTool)
+            }
+
+            onPressed: function(mouse) {
+              paintedTiles = ({})
+              painting = false
+              panning = false
+              if (mouse.button === Qt.MiddleButton) {
+                panning = true
+                lastX = mouse.x
+                lastY = mouse.y
+              } else if (mouse.button === Qt.RightButton) {
+                // Right-click deselects rather than painting with
+                // whatever was active — a way back to a neutral
+                // "just looking" cursor without picking Bulldoze.
+                root.activeTool = ""
+              } else {
+                painting = true
+                applyAt(mouse.x, mouse.y)
+              }
+            }
+            onPositionChanged: function(mouse) {
+              hoverIndex = tileIndexAt(mouse.x, mouse.y)
+              if (panning) {
+                root.panX -= (mouse.x - lastX)
+                root.panY -= (mouse.y - lastY)
+                root.clampPan()
+                lastX = mouse.x
+                lastY = mouse.y
+              } else if (painting) {
+                applyAt(mouse.x, mouse.y)
+              }
+            }
+            onReleased: function(mouse) { painting = false; panning = false }
+            onCanceled: { painting = false; panning = false }
+            onExited: hoverIndex = -1
+            onWheel: function(wheel) {
+              root.setZoom(root.zoom * (wheel.angleDelta.y > 0 ? 1.12 : 1 / 1.12))
+            }
+          }
+        }
+
+        // The hover-preview coverage circle used to be drawn as the last
+        // step inside cityCanvas's own onPaint, which meant it depended on
+        // hoverIndex — and hoverIndex changes on nearly every pixel of
+        // mouse movement over the map, which was forcing a full viewport
+        // tile re-render (every gradient-shaded building redrawn) on every
+        // mouse move, not just an actual grid/pan/zoom change. Same fix as
+        // the utility-warning one: split the thing that changes constantly
+        // (a hover position) onto its own cheap layer instead of dragging
+        // the whole tile grid along with it.
+        Canvas {
+          id: coverageHoverCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.viewportWidth
+          height: root.viewportHeight
+
+          property real offsetX: root.panX
+          property real offsetY: root.panY
+          property real cellSize: root.effectiveCellSize
+          property int hoverIndex: gridMouse.hoverIndex
+          onOffsetXChanged: requestPaint()
+          onOffsetYChanged: requestPaint()
+          onCellSizeChanged: requestPaint()
+          onHoverIndexChanged: requestPaint()
+          onWidthChanged: requestPaint()
+          onHeightChanged: requestPaint()
+
+          Connections {
+            target: root
+            function onActiveToolChanged() { coverageHoverCanvas.requestPaint() }
+          }
+
+          onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            root.drawCoverageOverlay(ctx, root.grid, hoverIndex, cellSize, offsetX, offsetY)
+          }
+        }
+
+        // Sits visually on top of cityCanvas (later sibling = drawn
+        // later = on top) but has no MouseArea of its own, so clicks,
+        // drags and hover all pass straight through to gridMouse
+        // underneath — purely decorative, never in the way.
+        Canvas {
+          id: trafficCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.viewportWidth
+          height: root.viewportHeight
+
+          // Repainted two ways: the 33ms car-movement timer (below)
+          // for actual driving, and immediately on pan/zoom so cars
+          // stay locked to the road while dragging — otherwise they
+          // sit at a stale screen position for up to 80ms while the
+          // tiles underneath track the mouse in real time, which
+          // reads as the cars vibrating loose from the road.
+          property real offsetX: root.panX
+          property real offsetY: root.panY
+          property real cellSize: root.effectiveCellSize
+          onOffsetXChanged: requestPaint()
+          onOffsetYChanged: requestPaint()
+          onCellSizeChanged: requestPaint()
+          onWidthChanged: requestPaint()
+          onHeightChanged: requestPaint()
+
+          onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            var cars = root.cars
+            for (var i = 0; i < cars.length; i++) {
+              root.drawCar(ctx, cars[i], root.effectiveCellSize, root.panX, root.panY,
+                root.gridSize, width, height)
+            }
+          }
+        }
+
+        // A faint blinking bolt/droplet over any built zone tile missing
+        // power or water — its own overlay for the same reason traffic
+        // gets one: the blink needs to redraw often, and that shouldn't
+        // mean redrawing every tile in the viewport just to animate a
+        // few small icons.
+        Canvas {
+          id: utilityWarningCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.viewportWidth
+          height: root.viewportHeight
+
+          property real offsetX: root.panX
+          property real offsetY: root.panY
+          property real cellSize: root.effectiveCellSize
+          // Bound to the precomputed warning list, not the raw grid — this
+          // repaints when the set of flagged tiles actually changes, not on
+          // every grid mutation (a road placed on the far side of the city
+          // doesn't add or remove any warnings).
+          property var warningTiles: root.utilityWarningTiles
+          onOffsetXChanged: requestPaint()
+          onOffsetYChanged: requestPaint()
+          onCellSizeChanged: requestPaint()
+          onWarningTilesChanged: requestPaint()
+          onWidthChanged: requestPaint()
+          onHeightChanged: requestPaint()
+
+          onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            root.drawUtilityWarnings(ctx, cellSize, offsetX, offsetY, width, height)
+          }
+        }
+
+        // A quick expanding ring, tinted to the zone that just grew, the
+        // instant a tile levels up — growth otherwise happens invisibly
+        // between ticks, and this is the only cue that it happened at all
+        // unless you were already staring at that exact tile.
+        Canvas {
+          id: growthFlashCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.viewportWidth
+          height: root.viewportHeight
+
+          property real offsetX: root.panX
+          property real offsetY: root.panY
+          property real cellSize: root.effectiveCellSize
+          onOffsetXChanged: requestPaint()
+          onOffsetYChanged: requestPaint()
+          onCellSizeChanged: requestPaint()
+          onWidthChanged: requestPaint()
+          onHeightChanged: requestPaint()
+
+          onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            var now = Date.now()
+            var flashes = root.growthFlashes
+            for (var i = 0; i < flashes.length; i++) {
+              var f = flashes[i]
+              var cx = (f.index % root.gridSize) * cellSize - offsetX + cellSize / 2
+              var cy = Math.floor(f.index / root.gridSize) * cellSize - offsetY + cellSize / 2
+              root.drawGrowthFlash(ctx, cx, cy, cellSize, f, now)
+            }
+          }
+        }
+
+        // No input handlers: building, inspecting and panning work through the sky.
+        Canvas {
+          id: ambienceCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.viewportWidth
+          height: root.viewportHeight
+          property real offsetX: root.panX
+          property real offsetY: root.panY
+          property real cellSize: root.effectiveCellSize
+          onOffsetXChanged: if (root.skyLife.objects.length) requestPaint()
+          onOffsetYChanged: if (root.skyLife.objects.length) requestPaint()
+          onCellSizeChanged: if (root.skyLife.objects.length) requestPaint()
+          onWidthChanged: requestPaint()
+          onHeightChanged: requestPaint()
+          onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            Ambience.draw(ctx, root.skyLife, cellSize, offsetX, offsetY, width, height)
+          }
+        }
+
+        Timer {
+          interval: 33
+          running: root.active && root.serviceReady
+          repeat: true
+          property double previousTick: 0
+          onRunningChanged: previousTick = 0
+          onTriggered: {
+            var now = Date.now()
+            var dt = previousTick > 0 ? now - previousTick : interval
+            root.updateCars(dt, root.grid, root.gridSize)
+            var hadSkyLife = root.skyLife.objects.length > 0
+            var size = root.effectiveCellSize
+            root.skyLife = Ambience.update(root.skyLife, dt, {
+              x: root.panX / size, y: root.panY / size,
+              width: root.viewportWidth / size, height: root.viewportHeight / size
+            })
+            if (hadSkyLife || root.skyLife.objects.length) ambienceCanvas.requestPaint()
+            previousTick = now
+            trafficCanvas.requestPaint()
+          }
+        }
+
+        Timer {
+          interval: 80
+          running: root.active && root.serviceReady
+          repeat: true
+          onTriggered: {
+            root.blinkPhase += interval / 260
+            utilityWarningCanvas.requestPaint()
+
+            if (root.growthFlashes.length > 0) {
+              var now = Date.now()
+              root.growthFlashes = root.growthFlashes.filter(function(f) {
+                return now - f.start < root.growthFlashDuration
+              })
+              growthFlashCanvas.requestPaint()
+            }
+          }
+        }
+
+        // Info tool's result: a small card near the clicked tile rather
+        // than a fixed panel elsewhere, so it reads as "about that tile"
+        // at a glance. Clamped inside the viewport (not just offset from
+        // the tile) so a tile near the edge doesn't push it off-canvas —
+        // the same off-canvas-clipping mistake the utility warning icons
+        // made early on, worth not repeating here.
+        Rectangle {
+          id: inspectCard
+          visible: root.inspectedInfo !== null
+          width: Style.space(196)
+          height: inspectColumn.implicitHeight + Style.space(16)
+          radius: Style.cornerRadius
+          color: Color.menu.background
+          border.width: 1
+          border.color: Color.menu.border
+          z: 5
+
+          readonly property real tileScreenX: root.inspectedIndex >= 0
+            ? (root.inspectedIndex % root.gridSize) * root.effectiveCellSize - root.panX : 0
+          readonly property real tileScreenY: root.inspectedIndex >= 0
+            ? Math.floor(root.inspectedIndex / root.gridSize) * root.effectiveCellSize - root.panY : 0
+          x: Math.max(0, Math.min(root.viewportWidth - width, tileScreenX + root.effectiveCellSize + Style.space(6)))
+          y: Math.max(0, Math.min(root.viewportHeight - height, tileScreenY))
+
+          Column {
+            id: inspectColumn
+            anchors.fill: parent
+            anchors.margins: Style.space(8)
+            spacing: Style.space(3)
+
+            Row {
+              width: parent.width
+              Text {
+                width: parent.width - closeInspect.width
+                text: root.inspectTitle(root.inspectedInfo)
+                color: Color.menu.text
+                font.bold: true
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
+              }
+              Text {
+                id: closeInspect
+                text: "✕"
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+                font.pixelSize: Style.font.caption
+                MouseArea {
+                  anchors.fill: parent
+                  anchors.margins: -Style.space(4)
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.inspectedIndex = -1
+                }
+              }
+            }
+
+            Repeater {
+              model: root.inspectLines(root.inspectedInfo)
+              Text {
+                required property string modelData
+                width: inspectColumn.width
+                text: modelData
+                wrapMode: Text.WordWrap
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.8)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+        }
+        }
+      }
+
+      Text {
+        id: toolStatusLabel
+        width: parent.width
+        horizontalAlignment: Text.AlignHCenter
+        text: root.toolStatusText()
+        wrapMode: root.detached ? Text.NoWrap : Text.WordWrap
+        color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.45)
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.caption
+      }
+    }
+  }
+
+  // Input-transparent overlay outside the Flickable: clamp to the actual
+  // view, flip above the pointer near the bottom, and never steal map drags.
+  Rectangle {
+    id: tileHoverCard
+    z: 20
+    visible: root.hoveredTileInfo !== null && root.hoveredTileInfo.type !== Model.TILE_EMPTY
+    readonly property point pointer: root.mapFromItem(gridMouse, gridMouse.mouseX, gridMouse.mouseY)
+    width: Math.max(0, Math.min(Style.space(350), root.width - Style.space(16)))
+    height: Math.min(tileHoverText.implicitHeight + Style.space(16), Math.max(0, root.height - Style.space(16)))
+    x: Math.max(Style.space(8), Math.min(pointer.x + Style.space(16), root.width - width - Style.space(8)))
+    y: Math.max(Style.space(8), Math.min(pointer.y + Style.space(20) + height <= root.height - Style.space(8)
+      ? pointer.y + Style.space(20) : pointer.y - height - Style.space(12), root.height - height - Style.space(8)))
+    color: Color.menu.background
+    border.color: Color.menu.border
+    radius: Style.space(6)
+    clip: true
+    Text {
+      id: tileHoverText
+      x: Style.space(8); y: Style.space(8)
+      width: parent.width - Style.space(16)
+      text: root.hoveredTileInfo ? root.inspectTitle(root.hoveredTileInfo)
+        + "\n" + root.inspectLines(root.hoveredTileInfo).join("\n") : ""
+      textFormat: Text.PlainText
+      wrapMode: Text.WordWrap
+      color: Color.menu.text
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+    }
+  }
+
+  // Floats above the Flickable (declared after it, so it's on top and
+  // unaffected by scroll position) rather than living inside the Column,
+  // since a dropdown menu that scrolled away with the content would be
+  // useless the moment the map pushed it out of view.
+  Item {
+    anchors.fill: parent
+    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen
+
+    MouseArea {
+      anchors.fill: parent
+      visible: root.gameMenuOpen || root.settingsOpen
+      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false }
+    }
+
+    Rectangle {
+      id: gameMenuCard
+      visible: root.gameMenuOpen
+      anchors.top: parent.top
+      anchors.left: parent.left
+      anchors.topMargin: Style.space(38)
+      anchors.leftMargin: Style.space(2)
+      width: Style.space(150)
+      height: menuColumn.implicitHeight + Style.space(10)
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      Column {
+        id: menuColumn
+        anchors.fill: parent
+        anchors.margins: Style.space(5)
+        spacing: Style.space(1)
+
+        Repeater {
+          model: root.gameMenuItems
+
+          Rectangle {
+            id: menuRow
+            required property var modelData
+            width: menuColumn.width
+            height: Style.space(26)
+            radius: Style.space(3)
+            color: menuRowMouse.containsMouse && modelData.enabled
+              ? Color.menu.selectedBackground : "transparent"
+
+            Text {
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.leftMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              text: menuRow.modelData.label
+              color: menuRow.modelData.enabled
+                ? (menuRowMouse.containsMouse ? Color.menu.selectedText : Color.menu.text)
+                : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.4)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Text {
+              visible: !menuRow.modelData.enabled
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "soon"
+              color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.35)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              id: menuRowMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              enabled: menuRow.modelData.enabled
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.activateGameMenuItem(menuRow.modelData.action)
+            }
+          }
+        }
+      }
+    }
+
+    // Settings: today, just event frequency — a preference the game menu's
+    // doc comment always meant to hold, not a placeholder like Save Game.
+    Rectangle {
+      id: settingsCard
+      visible: root.settingsOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(320))
+      height: settingsColumn.implicitHeight + Style.space(28)
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      // Swallow clicks so they don't fall through to the outside-click
+      // dismiss MouseArea behind this card.
+      MouseArea { anchors.fill: parent }
+
+      Column {
+        id: settingsColumn
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        spacing: Style.space(12)
+
+        Text {
+          text: "Settings"
+          color: Color.menu.text
+          font.bold: true
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          text: "Town name"
+          color: Color.menu.text
+          font.pixelSize: Style.font.bodySmall
+        }
+        Rectangle {
+          width: parent.width
+          height: Style.space(34)
+          radius: Style.space(4)
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.06)
+          border.color: townNameInput.activeFocus ? Color.accent : Color.menu.border
+          TextInput {
+            id: townNameInput
+            anchors.fill: parent
+            anchors.margins: Style.space(7)
+            color: Color.menu.text
+            selectionColor: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            maximumLength: 40
+            clip: true
+            selectByMouse: true
+            onAccepted: if (root.serviceReady && root.cityService.renameCity(text)) root.settingsOpen = false
+            Keys.onEscapePressed: { root.settingsOpen = false; event.accepted = true }
+          }
+        }
+        Row {
+          spacing: Style.space(8)
+          Button {
+            text: "Save name"
+            enabled: root.serviceReady && townNameInput.text.trim().length > 0
+            onClicked: if (root.cityService.renameCity(townNameInput.text)) root.settingsOpen = false
+          }
+          Button { text: "Cancel"; onClicked: root.settingsOpen = false }
+        }
+
+        Column {
+          width: parent.width
+          spacing: Style.space(6)
+
+          Text {
+            text: "Mayor's dilemma frequency"
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.8)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+              model: root.serviceReady ? root.cityService.eventFrequencyOptions : []
+
+              Rectangle {
+                id: freqOption
+                required property var modelData
+                readonly property bool active: root.serviceReady
+                  && root.cityService.eventFrequency === modelData.value
+                width: (settingsColumn.width - Style.space(18)) / 4
+                height: Style.space(28)
+                radius: Style.space(4)
+                color: active ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35) : "transparent"
+                border.width: 1
+                border.color: active ? Color.accent : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.3)
+
+                Text {
+                  anchors.centerIn: parent
+                  text: freqOption.modelData.label
+                  color: freqOption.active ? Color.accent : Color.menu.text
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: if (root.cityService) root.cityService.setEventFrequency(freqOption.modelData.value)
+                }
+              }
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: "How often the mayor faces a decision — pick \"Off\" for no dilemmas at all."
+            wrapMode: Text.WordWrap
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
+    }
+
+    ConfirmDialog {
+      anchors.fill: parent
+      opened: root.confirmNewGameOpen
+      message: "Start a new city? This clears "
+        + (root.serviceReady ? root.cityService.cityName : "this city")
+        + "'s grid, population, and treasury."
+      cancelText: "Cancel"
+      confirmText: "New Game"
+      onCanceled: root.confirmNewGameOpen = false
+      onConfirmed: {
+        root.confirmNewGameOpen = false
+        if (root.cityService) root.cityService.resetCity()
+      }
+    }
+  }
+
+  // Mayor's dilemma card — its own overlay (not folded into the game-menu
+  // one above) since it's driven by data, not a button toggle, and has no
+  // outside-click dismissal: the mayor picks one of the two choices, full
+  // stop, the way Reigns never lets you shrug and walk away from the throne.
+  Item {
+    anchors.fill: parent
+    visible: root.currentEvent !== null
+
+    Rectangle {
+      anchors.fill: parent
+      color: Qt.rgba(0, 0, 0, 0.5)
+    }
+
+    Rectangle {
+      id: eventCard
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(360))
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+      height: eventColumn.implicitHeight + Style.space(28)
+
+      Column {
+        id: eventColumn
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        spacing: Style.space(10)
+
+        Text {
+          width: parent.width
+          text: root.currentEvent ? root.currentEvent.title : ""
+          color: Color.menu.text
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+          font.bold: true
+          wrapMode: Text.WordWrap
+        }
+
+        Text {
+          width: parent.width
+          text: root.currentEvent ? root.currentEvent.flavor : ""
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.8)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+
+        Repeater {
+          model: root.currentEvent ? root.currentEvent.choices : []
+
+          Rectangle {
+            id: choiceItem
+            required property var modelData
+            required property int index
+            width: eventColumn.width
+            height: choiceColumn.implicitHeight + Style.space(14)
+            radius: Style.space(4)
+            color: choiceMouse.containsMouse ? Color.menu.selectedBackground : "transparent"
+            border.width: 1
+            border.color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.25)
+
+            Column {
+              id: choiceColumn
+              anchors.fill: parent
+              anchors.margins: Style.space(7)
+              spacing: Style.space(2)
+
+              Text {
+                width: parent.width
+                text: choiceItem.modelData.label
+                color: choiceMouse.containsMouse ? Color.menu.selectedText : Color.menu.text
+                font.bold: true
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              Text {
+                width: parent.width
+                text: choiceItem.modelData.hint
+                wrapMode: Text.WordWrap
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.65)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            MouseArea {
+              id: choiceMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: if (root.cityService && root.currentEvent)
+                root.cityService.resolveEvent(root.currentEvent.id, choiceItem.index)
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          visible: root.pendingEvents.length > 1
+          text: (root.pendingEvents.length - 1) + " more decision"
+            + (root.pendingEvents.length > 2 ? "s" : "") + " waiting"
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
+  }
+}
