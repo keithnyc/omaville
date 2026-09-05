@@ -166,6 +166,17 @@ Item {
   readonly property real budgetNet: root.budgetIncome - root.budgetUpkeep
   readonly property var upkeepBill: root.serviceReady
     ? Model.upkeepBreakdown(root.budgetStats, root.cityService.funding) : []
+  // Active map data overlay ("" = off). The advisors name a problem; this is
+  // how the player finds it on a 4096-tile map instead of hunting by hand.
+  property string overlayMode: ""
+  readonly property var overlayDef: root.overlayMode !== "" ? Model.overlayDef(root.overlayMode) : null
+  function setOverlay(mode) { root.overlayMode = root.overlayMode === mode ? "" : mode }
+  readonly property string overlayLegend: {
+    if (!root.overlayDef) return ""
+    if (root.overlayMode === "growth") return "Red: blocked from growing · dim: fully grown"
+    if (root.overlayMode === "value") return "Brighter: higher land value from parks, water and landscaping"
+    return "Green: in range · red: built but uncovered"
+  }
   // Advisors run off the figures already computed above rather than rescanning
   // the grid themselves — the panel is only ever as expensive as one summarize.
   readonly property var cityAdvice: root.serviceReady ? Model.cityAdvice({
@@ -293,6 +304,7 @@ Item {
   property bool settingsOpen: false
   property bool budgetOpen: false
   property bool advisorsOpen: false
+  property bool overlayMenuOpen: false
   readonly property bool editingTownName: root.settingsOpen && townNameInput.activeFocus
   Shortcut {
     sequence: "F2"
@@ -700,6 +712,63 @@ Item {
     T: { scale: 1.08, baseline: 0.97 },
     B: { scale: 1.10, baseline: 0.93 }
   })
+
+  // Data overlay painted over the finished map. Lives on its own thin Canvas
+  // (see overlayCanvas) rather than inside the tile canvas, so toggling it
+  // never forces every building on screen to re-render — the same rule the
+  // hover-preview circle had to learn.
+  function drawDataOverlay(ctx, data, cellSize, offsetX, offsetY, width, height) {
+    var def = root.overlayDef
+    if (!def) return
+    var startCol = Math.max(0, Math.floor(offsetX / cellSize))
+    var endCol = Math.min(root.gridSize - 1, Math.ceil((offsetX + width) / cellSize))
+    var startRow = Math.max(0, Math.floor(offsetY / cellSize))
+    var endRow = Math.min(root.gridSize - 1, Math.ceil((offsetY + height) / cellSize))
+    var utilities = root.utilities
+    var funding = root.serviceReady ? root.cityService.funding : null
+
+    for (var row = startRow; row <= endRow; row++) {
+      for (var col = startCol; col <= endCol; col++) {
+        var idx = row * root.gridSize + col
+        var gx = col * cellSize - offsetX
+        var gy = row * cellSize - offsetY
+        var fill = ""
+
+        if (root.overlayMode === "value") {
+          var v = Model.landValueFraction(data, root.gridSize, idx)
+          if (v > 0.02) fill = Qt.rgba(0.36 + v * 0.5, 0.82, 0.45, 0.12 + v * 0.45)
+        } else if (root.overlayMode === "growth") {
+          var reason = Model.growthBlocker(data, root.gridSize, idx, utilities, root.happiness)
+          if (reason === "max") fill = Qt.rgba(0.55, 0.62, 0.55, 0.22)
+          else if (reason !== "") fill = Qt.rgba(0.92, 0.34, 0.28, 0.5)
+        } else {
+          var state = Model.overlayCoverageState(data, root.gridSize, idx, def, utilities, funding)
+          if (state === "gap") fill = Qt.rgba(0.92, 0.34, 0.28, 0.55)
+          else if (state === "covered") fill = Qt.rgba(0.35, 0.78, 0.42, 0.34)
+          else if (state === "idle") fill = Qt.rgba(0.35, 0.78, 0.42, 0.13)
+        }
+
+        if (fill !== "") {
+          ctx.fillStyle = fill
+          ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+        }
+      }
+    }
+
+    // Mark the sources themselves so it is obvious what is projecting cover.
+    if (def.service) {
+      var plants = utilities[def.service] || []
+      for (var p = 0; p < plants.length; p++) {
+        var pi = plants[p].index
+        var pcol = pi % root.gridSize, prow = Math.floor(pi / root.gridSize)
+        if (pcol < startCol || pcol > endCol || prow < startRow || prow > endRow) continue
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.85)"
+        ctx.lineWidth = Math.max(1, cellSize * 0.08)
+        ctx.strokeRect(pcol * cellSize - offsetX + 1, prow * cellSize - offsetY + 1,
+          cellSize - 2, cellSize - 2)
+      }
+    }
+  }
 
   function drawSpriteLot(ctx, gx, gy, cellSize, type, index) {
     // Sprite PNGs are cutouts. This is map terrain beneath them, deliberately
@@ -3240,6 +3309,24 @@ Item {
           foreground: root.bar ? root.bar.foreground : Color.foreground
           onClicked: { root.zoom = 1; root.centerOnGrid() }
         }
+
+        // Overlay picker. A single toggle rather than a row of eight chips —
+        // the map is the scarce space here, and the list is only needed at
+        // the moment of choosing.
+        Button {
+          iconText: root.overlayMode === "" ? "◔" : "◉"
+          foreground: root.overlayMode === ""
+            ? (root.bar ? root.bar.foreground : Color.foreground) : Color.accent
+          onClicked: root.overlayMenuOpen = !root.overlayMenuOpen
+        }
+        Text {
+          visible: root.overlayMode !== ""
+          text: root.overlayDef ? root.overlayDef.label : ""
+          color: Color.accent
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          anchors.verticalCenter: parent.verticalCenter
+        }
       }
 
       // Palette-beside-map, SimCity-2000-style, instead of a horizontal
@@ -3694,6 +3781,45 @@ Item {
         // the utility-warning one: split the thing that changes constantly
         // (a hover position) onto its own cheap layer instead of dragging
         // the whole tile grid along with it.
+        // Data overlay: its own layer above the tiles so switching modes or
+        // panning repaints a few translucent rects instead of every building.
+        Canvas {
+          id: overlayCanvas
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.viewportWidth
+          height: root.viewportHeight
+          visible: root.overlayMode !== ""
+
+          property var gridData: root.grid
+          property real cellSize: root.effectiveCellSize
+          property real offsetX: root.panX
+          property real offsetY: root.panY
+          property string mode: root.overlayMode
+          onGridDataChanged: requestPaint()
+          onCellSizeChanged: requestPaint()
+          onOffsetXChanged: requestPaint()
+          onOffsetYChanged: requestPaint()
+          onModeChanged: requestPaint()
+          onWidthChanged: requestPaint()
+          onHeightChanged: requestPaint()
+
+          // Coverage reach moves with department funding, and the growth view
+          // depends on happiness, so both have to repaint the overlay.
+          Connections {
+            target: root.cityService
+            enabled: root.serviceReady
+            function onFundingChanged() { overlayCanvas.requestPaint() }
+            function onHappinessChanged() { overlayCanvas.requestPaint() }
+          }
+
+          onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+            if (root.overlayMode === "") return
+            root.drawDataOverlay(ctx, gridData, cellSize, offsetX, offsetY, width, height)
+          }
+        }
+
         Canvas {
           id: coverageHoverCanvas
           anchors.horizontalCenter: parent.horizontalCenter
@@ -4007,12 +4133,12 @@ Item {
   // useless the moment the map pushed it out of view.
   Item {
     anchors.fill: parent
-    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen
+    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen
 
     MouseArea {
       anchors.fill: parent
-      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen
-      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false }
+      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen
+      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false }
     }
 
     Rectangle {
@@ -4210,6 +4336,82 @@ Item {
       }
     }
 
+    // Overlay picker: which data view to paint over the map.
+    Rectangle {
+      id: overlayMenuCard
+      visible: root.overlayMenuOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(300))
+      height: overlayColumn.implicitHeight + Style.space(28)
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      MouseArea { anchors.fill: parent }
+
+      Column {
+        id: overlayColumn
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        spacing: Style.space(6)
+
+        Text {
+          text: "Map view"
+          color: Color.menu.text
+          font.bold: true
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        Repeater {
+          model: [{ key: "", label: "None" }].concat(Model.OVERLAYS)
+
+          Rectangle {
+            id: overlayOption
+            required property var modelData
+            readonly property bool active: root.overlayMode === modelData.key
+            width: overlayColumn.width
+            height: Style.space(26)
+            radius: Style.space(4)
+            color: active ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.3) : "transparent"
+            border.width: 1
+            border.color: active ? Color.accent
+              : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.18)
+
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              text: overlayOption.modelData.label
+              color: overlayOption.active ? Color.accent : Color.menu.text
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                root.overlayMode = overlayOption.modelData.key
+                root.overlayMenuOpen = false
+              }
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          text: root.overlayLegend
+          visible: text !== ""
+          wrapMode: Text.WordWrap
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
+
     // Advisors: five department heads, each reporting on what they can
     // actually see in the simulation. The Treasurer is also where loans are
     // taken, since "you are short of money" and "here is how to borrow some"
@@ -4285,10 +4487,23 @@ Item {
                 width: adviceRow.width - Style.space(14)
                 x: Style.space(14)
                 text: adviceRow.modelData.detail
+                  + (adviceRow.modelData.overlay !== "" ? "  — click to show on the map" : "")
                 wrapMode: Text.WordWrap
                 color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.65)
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
                 font.pixelSize: Style.font.caption
+              }
+
+              // Naming a problem and then making the player hunt for it is
+              // half a tool — an advisor with a map view hands them straight to it.
+              MouseArea {
+                anchors.fill: parent
+                enabled: adviceRow.modelData.overlay !== ""
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  root.overlayMode = adviceRow.modelData.overlay
+                  root.advisorsOpen = false
+                }
               }
             }
           }

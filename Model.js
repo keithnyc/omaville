@@ -1493,10 +1493,14 @@ function residentialCeiling(stats) {
   return stats.resCount * 3 * RES_CAP_PER_LEVEL
 }
 
-function advice(advisor, severity, headline, detail) {
+// `overlay` names the map view that shows where the problem is, so the
+// advisor panel can hand the player straight to it instead of describing a
+// location they then have to hunt for.
+function advice(advisor, severity, headline, detail, overlay) {
   return {
     advisor: advisor, name: ADVISOR_NAMES[advisor],
-    severity: severity, headline: headline, detail: detail
+    severity: severity, headline: headline, detail: detail,
+    overlay: overlay || ""
   }
 }
 
@@ -1514,7 +1518,7 @@ function planningAdvice(stats, demand) {
     return advice("planning", SEVERITY_URGENT, "Housing is full",
       "Residential is at " + Math.round(stats.population / ceiling * 100) + "% of its zoned ceiling ("
       + stats.population + " of " + ceiling + "). Growth has stopped because there is nowhere left to "
-      + "build up — zone more residential land.")
+      + "build up — zone more residential land.", "growth")
   var jobs = stats.jobsCommercial + stats.jobsIndustrial
   if (jobs > stats.population * 1.6 && stats.population > 0)
     return advice("planning", SEVERITY_WATCH, "More jobs than workers",
@@ -1536,7 +1540,8 @@ function utilitiesAdvice(coverage) {
   if (worst.unmet > 0)
     return advice("utilities", SEVERITY_URGENT, label + " is not reaching everyone",
       worst.unmet + " residents have no " + label.toLowerCase() + " (" + worst.coverage
-      + "% covered). Uncovered zones cannot grow at all until this is fixed.")
+      + "% covered). Uncovered zones cannot grow at all until this is fixed.",
+      worst === power ? "power" : "water")
   return advice("utilities", SEVERITY_OK, "Everyone is connected",
     "Power and water both reach the whole city.")
 }
@@ -1553,7 +1558,8 @@ function safetyAdvice(coverage, funding) {
       : ""
     return advice("safety", SEVERITY_WATCH, label + " has gaps",
       worst.unmet + " residents are outside cover (" + worst.coverage
-      + "%). Uncovered buildings risk losing a level." + starved)
+      + "%). Uncovered buildings risk losing a level." + starved,
+      isFire ? "fire" : "police")
   }
   if (fundingLevel(funding, "F") < 1 || fundingLevel(funding, "S") < 1)
     return advice("safety", SEVERITY_WATCH, "Running lean",
@@ -1570,7 +1576,7 @@ function wellbeingAdvice(coverage, stats, funding) {
   if (worst.unmet > 0 && stats.population >= 100)
     return advice("wellbeing", SEVERITY_WATCH, label + " is short",
       worst.unmet + " residents are not served (" + worst.coverage
-      + "%). Homes without it grow more slowly.")
+      + "%). Homes without it grow more slowly.", isSchool ? "schools" : "medical")
   if (worst.unmet > 0)
     return advice("wellbeing", SEVERITY_OK, "Not needed yet",
       "A town this small grows fine without full " + label.toLowerCase()
@@ -1628,4 +1634,71 @@ function topAdvice(list) {
   for (var i = 0; i < list.length; i++)
     if (!best || list[i].severity > best.severity) best = list[i]
   return best
+}
+
+// --- map data overlays ----------------------------------------------------
+// The advisors say what is wrong; these say where. Both read the same
+// helpers the tick does, so an overlay can never highlight a tile the
+// simulation disagrees about.
+var OVERLAYS = [
+  { key: "power", label: "Power", service: "power", radius: POWER_RADIUS },
+  { key: "water", label: "Water", service: "water", radius: WATER_RADIUS },
+  { key: "fire", label: "Fire", service: "fire", radius: FIRE_RADIUS, funding: "F" },
+  { key: "police", label: "Police", service: "police", radius: POLICE_RADIUS, funding: "S" },
+  { key: "schools", label: "Schools", service: "schools", radius: SCHOOL_RADIUS, funding: "N" },
+  { key: "medical", label: "Health", service: "medical", radius: MEDICAL_RADIUS, funding: "H" },
+  { key: "value", label: "Land value" },
+  { key: "growth", label: "Growth" }
+]
+
+function overlayDef(key) {
+  for (var i = 0; i < OVERLAYS.length; i++) if (OVERLAYS[i].key === key) return OVERLAYS[i]
+  return null
+}
+
+// The effective radius an overlay should draw, including whatever the
+// department's funding level is currently buying (see fundingRadiusScale) —
+// so the picture matches the reach the tick actually uses.
+function overlayRadius(def, funding) {
+  if (!def || !def.radius) return 0
+  return def.radius * (def.funding ? fundingRadiusScale(fundingLevel(funding, def.funding)) : 1)
+}
+
+// Per-tile verdict for a coverage overlay:
+//   "gap"     a built zone outside cover — the actionable case
+//   "covered" inside cover
+//   "idle"    inside cover but nothing there to benefit
+//   ""        outside cover and nothing there either
+function overlayCoverageState(grid, gridSize, index, def, utilities, funding) {
+  var covered = isCovered(gridSize, utilities[def.service] || [], index, overlayRadius(def, funding))
+  var tile = parseTile(grid[index])
+  var built = (tile.type === TILE_RES || tile.type === TILE_COM || tile.type === TILE_IND)
+    && tile.level > 0
+  if (!covered) return built ? "gap" : ""
+  return built ? "covered" : "idle"
+}
+
+// Why this tile is not growing, in exactly the terms tickGrid uses to decide
+// — same helpers, same order, so the overlay cannot claim a tile is blocked
+// on something the simulation isn't actually blocking it on. "" means
+// nothing is stopping it.
+var GROWTH_BLOCKER_LABELS = {
+  max: "Fully grown", road: "No road", power: "No power",
+  water: "No water", unhappy: "City too unhappy"
+}
+
+function growthBlocker(grid, gridSize, index, utilities, happiness) {
+  var tile = parseTile(grid[index])
+  if (tile.type !== TILE_RES && tile.type !== TILE_COM && tile.type !== TILE_IND) return ""
+  if (tile.level >= 3) return "max"
+  if (!isRoadAdjacent(grid, gridSize, index)) return "road"
+  if (!isCovered(gridSize, utilities.power, index, POWER_RADIUS)) return "power"
+  if (!isCovered(gridSize, utilities.water, index, WATER_RADIUS)) return "water"
+  if (happiness < 20) return "unhappy"
+  return ""
+}
+
+// 0..1 for the land-value heatmap, against the bonus cap a tile can reach.
+function landValueFraction(grid, gridSize, index) {
+  return clamp(propertyValueBonus(grid, gridSize, index) / (MAX_PROPERTY_BONUS + 12), 0, 1)
 }

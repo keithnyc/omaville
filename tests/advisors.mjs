@@ -129,5 +129,80 @@ assert.equal(M.totalLoanDebt(M.takeLoan([], seed, 0)), seed.principal * (1 + see
 const indebted = by(M.cityAdvice(ctxFor(full, { loans: M.takeLoan([], seed, 0) })), 'finance');
 assert.ok(/debt|short/i.test(indebted.headline), 'the treasurer mentions the debt');
 
-console.log('PASS: advisor coverage/zoning/budget reactions, stable ordering, and loan ' +
-  'eligibility, schedule, burden cap and exact payoff.');
+
+// --- map overlays ---------------------------------------------------------
+// The overlays exist to show where an advisor's problem is, so the thing
+// worth pinning is that they agree with the simulation rather than
+// re-deriving it. A red tile the tick disagrees about is worse than no view.
+for (const def of M.OVERLAYS) assert.ok(def.key && def.label, 'every overlay is pickable');
+assert.equal(M.overlayDef('nope'), null);
+assert.equal(M.overlayDef('power').service, 'power');
+
+// growthBlocker must match tickGrid's own reasons, in tickGrid's own order.
+const blocked = M.emptyGrid(size);
+const spot = 40 * size + 40;
+blocked[spot] = 'R1';
+let u = M.findUtilities(blocked);
+assert.equal(M.growthBlocker(blocked, size, spot, u, 70), 'road', 'no road is the first blocker');
+blocked[spot + 1] = '#0';
+u = M.findUtilities(blocked);
+assert.equal(M.growthBlocker(blocked, size, spot, u, 70), 'power');
+blocked[spot + 2] = 'E1';
+u = M.findUtilities(blocked);
+assert.equal(M.growthBlocker(blocked, size, spot, u, 70), 'water');
+blocked[spot + 3] = 'W1';
+u = M.findUtilities(blocked);
+assert.equal(M.growthBlocker(blocked, size, spot, u, 70), '', 'fully connected: nothing blocking');
+assert.equal(M.growthBlocker(blocked, size, spot, u, 10), 'unhappy',
+  'and it agrees with tickGrid that growth needs happiness >= 20');
+blocked[spot] = 'R3';
+assert.equal(M.growthBlocker(blocked, size, spot, u, 70), 'max');
+assert.equal(M.growthBlocker(blocked, size, spot + 1, u, 70), '', 'roads are not zones');
+for (const reason of ['max', 'road', 'power', 'water', 'unhappy'])
+  assert.ok(M.GROWTH_BLOCKER_LABELS[reason], `${reason} is displayable`);
+
+// A blocked tile the overlay paints red must be one the tick really refuses
+// to grow: run the real tickGrid with growth forced and confirm it stays put.
+const stuck = M.emptyGrid(size);
+stuck[spot] = 'R1';
+stuck[spot + 1] = '#0';
+const stuckU = M.findUtilities(stuck);
+assert.notEqual(M.growthBlocker(stuck, size, spot, stuckU, 70), '');
+const forced = vm.createContext({ Math: Object.assign(Object.create(Math), { random: () => 0 }) });
+vm.runInContext(
+  fs.readFileSync(new URL('../Model.js', import.meta.url), 'utf8').replace('.pragma library', ''),
+  forced);
+// random() === 0 makes every roll maximally favourable to growth, so if the
+// tile still never rises the block is real and not just unlucky. (It in fact
+// decays, since an unconnected tile is also a decay candidate — which is the
+// same verdict, only harsher.)
+const after = forced.tickGrid(stuck, size, { population: 50 }, 70, stuckU, { R: 9, C: 1, I: 1 });
+assert.ok(M.parseTile(after[spot]).level <= M.parseTile(stuck[spot]).level,
+  'the tick agrees: a tile the overlay marks blocked never grows');
+
+// Coverage overlay states line up with isCovered itself.
+const covered = M.emptyGrid(size);
+covered[spot] = 'R2';
+covered[spot + 1] = 'E1';
+const cu = M.findUtilities(covered);
+const pdef = M.overlayDef('power');
+assert.equal(M.overlayCoverageState(covered, size, spot, pdef, cu, null), 'covered');
+assert.equal(M.overlayCoverageState(covered, size, spot + 2, pdef, cu, null), 'idle',
+  'in range but nothing built there');
+const lonely = M.emptyGrid(size);
+lonely[spot] = 'R2';
+assert.equal(M.overlayCoverageState(lonely, size, spot, pdef, M.findUtilities(lonely), null), 'gap',
+  'built and uncovered is the actionable case');
+assert.equal(M.overlayCoverageState(lonely, size, spot + 9, pdef, M.findUtilities(lonely), null), '');
+
+// Funding widens what the overlay draws, exactly as it widens real coverage.
+const fdef = M.overlayDef('fire');
+assert.ok(M.overlayRadius(fdef, { F: M.FUNDING_MAX }) > M.overlayRadius(fdef, { F: 1 }));
+assert.equal(M.overlayRadius(pdef, { F: 0.5 }), M.POWER_RADIUS, 'power has no department budget');
+
+// Every advisor that names a locatable problem points at a real overlay.
+for (const a of M.cityAdvice(ctxFor(dark)))
+  if (a.overlay) assert.ok(M.overlayDef(a.overlay), `${a.advisor} points at a real overlay`);
+
+console.log('PASS: advisor coverage/zoning/budget reactions, stable ordering, loan ' +
+  'eligibility, schedule, burden cap and exact payoff, and overlays that agree with tickGrid.');
