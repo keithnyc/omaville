@@ -649,6 +649,20 @@ Item {
   readonly property var infrastructureGroundColors: ({ E: "#2e2b1c", W: "#1e2c33", F: "#2a1614", S: "#141c2a", P: "#416b43" })
   readonly property var spriteLotTints: ({ R: "rgba(80, 120, 78, 0.08)", C: "rgba(92, 122, 148, 0.12)", I: "rgba(122, 115, 97, 0.11)", E: "rgba(201, 162, 39, 0.10)", W: "rgba(47, 111, 148, 0.10)", F: "rgba(193, 67, 54, 0.08)", S: "rgba(58, 111, 224, 0.10)", P: "rgba(80, 132, 77, 0.08)" })
 
+  // Decoration sprites are trimmed and then bottom-centred inside a 256px
+  // frame (see assets/decorations/PROMPTS.md), so how much of that frame each
+  // one actually paints differs a lot: the tree fills its full height, while
+  // the flowerbed is a wide flat oval covering only the bottom ~73%. Drawing
+  // both as the same bottom-anchored square left the bed visibly undersized,
+  // ringed by bare terrain. Each decoration therefore carries its own scale
+  // (fraction of the tile the sprite square spans) and baseline (how far down
+  // the tile that square's bottom edge sits) — tuned so the painted pixels,
+  // not the frame, end up filling the lot.
+  readonly property var decorationMetrics: ({
+    T: { scale: 1.08, baseline: 0.97 },
+    B: { scale: 1.10, baseline: 0.93 }
+  })
+
   function drawSpriteLot(ctx, gx, gy, cellSize, type, index) {
     // Sprite PNGs are cutouts. This is map terrain beneath them, deliberately
     // shared across categories so a building does not look like a square decal.
@@ -2795,9 +2809,10 @@ Item {
       root.drawSpriteLot(ctx, gx, gy, cellSize, tile.type)
       var decorationSource = root.decorationSpriteUrls[tile.type]
       if (cityCanvas.isImageLoaded(decorationSource)) {
-        var decorationSize = cellSize * (tile.type === Model.TILE_TREE ? 1.08 : 0.78)
+        var metrics = root.decorationMetrics[tile.type] || root.decorationMetrics.T
+        var decorationSize = cellSize * metrics.scale
         ctx.drawImage(decorationSource, gx + (cellSize - decorationSize) / 2,
-          gy + cellSize * 0.97 - decorationSize, decorationSize, decorationSize)
+          gy + cellSize * metrics.baseline - decorationSize, decorationSize, decorationSize)
       } else {
         ctx.fillStyle = tile.type === Model.TILE_TREE ? "#6c9a4d" : "#c58794"
         ctx.beginPath(); ctx.arc(gx + cellSize * 0.5, gy + cellSize * 0.6, cellSize * 0.22, 0, Math.PI * 2); ctx.fill()
