@@ -3526,16 +3526,53 @@ Item {
   // meet. Drawn once, after every tile, so it isn't painted over. Only the
   // boundaries crossing the current viewport are drawn — with a 64x64 grid
   // there's no reason to stroke thousands of off-screen lines every paint.
-  function drawGridOverlay(ctx, startCol, endCol, startRow, endRow, cellSize, offsetX, offsetY, viewW, viewH) {
+  // Lot boundaries, drawn as one shared overlay rather than a border per tile.
+  //
+  // Segmented so a line never crosses a road. Drawn edge to edge it put a
+  // faint light stripe across the asphalt at every tile join — the seams that
+  // survived the gradient fix were this, not the road rendering: they measured
+  // *lighter* than the surrounding asphalt, which no darkening could explain.
+  // Roads carry their own curbs, so the grid has nothing to add there.
+  function drawGridOverlay(ctx, data, startCol, endCol, startRow, endRow, cellSize, offsetX, offsetY, viewW, viewH) {
     ctx.strokeStyle = root.neutralTint(0.04)
     ctx.lineWidth = 1
+    var size = root.gridSize
+    function roadAt(col, row) {
+      if (col < 0 || row < 0 || col >= size || row >= size) return false
+      var t = data[row * size + col]
+      return !!t && t[0] === Model.TILE_ROAD
+    }
+
     for (var c = startCol; c <= endCol + 1; c++) {
       var x = c * cellSize - offsetX + 0.5
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, viewH); ctx.stroke()
+      var vStart = -1
+      for (var r = startRow; r <= endRow + 1; r++) {
+        var vSkip = r > endRow || roadAt(c - 1, r) || roadAt(c, r)
+        if (!vSkip && vStart < 0) vStart = r
+        else if (vSkip && vStart >= 0) {
+          ctx.beginPath()
+          ctx.moveTo(x, vStart * cellSize - offsetY)
+          ctx.lineTo(x, r * cellSize - offsetY)
+          ctx.stroke()
+          vStart = -1
+        }
+      }
     }
-    for (var r = startRow; r <= endRow + 1; r++) {
-      var y = r * cellSize - offsetY + 0.5
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(viewW, y); ctx.stroke()
+
+    for (var row = startRow; row <= endRow + 1; row++) {
+      var y = row * cellSize - offsetY + 0.5
+      var hStart = -1
+      for (var col = startCol; col <= endCol + 1; col++) {
+        var hSkip = col > endCol || roadAt(col, row - 1) || roadAt(col, row)
+        if (!hSkip && hStart < 0) hStart = col
+        else if (hSkip && hStart >= 0) {
+          ctx.beginPath()
+          ctx.moveTo(hStart * cellSize - offsetX, y)
+          ctx.lineTo(col * cellSize - offsetX, y)
+          ctx.stroke()
+          hStart = -1
+        }
+      }
     }
   }
 
@@ -4109,7 +4146,7 @@ Item {
                 root.drawTile(ctx, tile, gx, gy, size, data, idx)
               }
             }
-            root.drawGridOverlay(ctx, startCol, endCol, startRow, endRow, size, offsetX, offsetY, width, height)
+            root.drawGridOverlay(ctx, data, startCol, endCol, startRow, endRow, size, offsetX, offsetY, width, height)
             root.drawNeighbors(ctx, size, offsetX, offsetY, width, height)
             for (var detailRow = startRow; detailRow <= endRow; detailRow++) {
               for (var detailCol = startCol; detailCol <= endCol; detailCol++) {
