@@ -322,6 +322,7 @@ Item {
   property bool confirmNewGameOpen: false
   property bool settingsOpen: false
   property bool budgetOpen: false
+  property string budgetTab: "bill"
   property bool advisorsOpen: false
   property bool overlayMenuOpen: false
   property bool historyOpen: false
@@ -5043,7 +5044,10 @@ Item {
       visible: root.budgetOpen
       anchors.centerIn: parent
       width: Math.min(parent.width - Style.space(32), Style.space(360))
-      height: budgetColumn.implicitHeight + Style.space(28)
+      // Clamped to the panel and scrollable, like the other cards. Without
+      // this the card grew to its content and ran clean off the screen once
+      // ordinances were added to it.
+      height: Math.min(parent.height - Style.space(32), budgetColumn.implicitHeight + Style.space(28))
       radius: Style.cornerRadius
       color: Color.menu.background
       border.width: 1
@@ -5051,10 +5055,16 @@ Item {
 
       MouseArea { anchors.fill: parent }
 
-      Column {
-        id: budgetColumn
+      Flickable {
         anchors.fill: parent
         anchors.margins: Style.space(16)
+        contentHeight: budgetColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+
+      Column {
+        id: budgetColumn
+        width: parent.width
         spacing: Style.space(10)
 
         Text {
@@ -5063,6 +5073,50 @@ Item {
           font.bold: true
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.body
+        }
+
+        // Three genuinely separate things share one budget — the bill you are
+        // paying, the departments you set, and the policies you have passed.
+        // Tabs keep each one readable instead of stacking all three into a
+        // card taller than the screen.
+        Row {
+          width: parent.width
+          spacing: Style.space(5)
+
+          Repeater {
+            model: [
+              { key: "bill", label: "Bill" },
+              { key: "funding", label: "Funding" },
+              { key: "policy", label: "Ordinances" }
+            ]
+
+            Rectangle {
+              id: budgetTab
+              required property var modelData
+              readonly property bool current: root.budgetTab === modelData.key
+              width: (budgetColumn.width - Style.space(10)) / 3
+              height: Style.space(26)
+              radius: Style.space(4)
+              color: current ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.3) : "transparent"
+              border.width: 1
+              border.color: current ? Color.accent
+                : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.22)
+
+              Text {
+                anchors.centerIn: parent
+                text: budgetTab.modelData.label
+                color: budgetTab.current ? Color.accent : Color.menu.text
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.budgetTab = budgetTab.modelData.key
+              }
+            }
+          }
         }
 
         Text {
@@ -5105,6 +5159,7 @@ Item {
         Column {
           width: parent.width
           spacing: Style.space(1)
+          visible: root.budgetTab === "bill"
 
           Repeater {
             model: root.upkeepBill
@@ -5154,7 +5209,7 @@ Item {
         }
 
         Repeater {
-          model: root.serviceReady ? Model.FUNDABLE_SERVICES : []
+          model: root.budgetTab === "funding" && root.serviceReady ? Model.FUNDABLE_SERVICES : []
 
           Column {
             id: deptRow
@@ -5229,6 +5284,7 @@ Item {
 
         Text {
           width: parent.width
+          visible: root.budgetTab === "funding"
           text: "Departments are paid per resident served, so their cost grows with the city. "
             + "Funding buys coverage range; fire and police also see fewer incidents. "
             + "Starve one to save money and you'll feel it."
@@ -5238,15 +5294,11 @@ Item {
           font.pixelSize: Style.font.caption
         }
 
-        Rectangle {
-          width: parent.width; height: 1
-          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.15)
-        }
-
         // Ordinances sit in the budget rather than a screen of their own:
         // every one of them is a standing line on the same monthly bill.
         Row {
           width: parent.width
+          visible: root.budgetTab === "policy"
           Text {
             text: "Ordinances"
             color: Color.menu.text
@@ -5267,7 +5319,7 @@ Item {
         }
 
         Repeater {
-          model: root.serviceReady ? Model.ORDINANCES : []
+          model: root.budgetTab === "policy" && root.serviceReady ? Model.ORDINANCES : []
 
           Rectangle {
             id: policyRow
@@ -5330,6 +5382,7 @@ Item {
         }
 
         Button { text: "Done"; onClicked: root.budgetOpen = false }
+      }
       }
     }
 

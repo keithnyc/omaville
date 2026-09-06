@@ -122,5 +122,34 @@ assert.match(advise(2, 4).headline, /2 neighbours still unconnected/);
 assert.ok(!/highway|neighbour/i.test(advise(4, 4).headline),
   'once every highway is open the planner moves on to something else');
 
+
+// --- an already-open highway is not news ----------------------------------
+// Regression: which highways are open was tracked in memory but never
+// persisted, so every shell restart came back thinking each existing
+// connection was brand new and re-announced roads built hours earlier. The
+// fix derives it from the grid at load, so this asserts the derivation is
+// stable across a save/reload round trip rather than trusting stored state.
+const stable = M.emptyGrid(size);
+const nbs = M.makeNeighbors(size, 8080);
+const target = nbs.find(n => n.edge === 'north');
+const lane = target.index % size;
+for (let row = 0; row <= 18; row++) stable[row * size + lane] = '#0';
+stable[18 * size + lane + 1] = 'R2';
+
+const openNow = M.connectedNeighbors(stable, size, nbs);
+assert.equal(openNow.length, 1, 'the highway is open');
+
+// Round-trip the grid exactly as the save does, then re-derive.
+const reloaded = M.unpackGrid(M.packGrid(stable));
+const openAfter = M.connectedNeighbors(reloaded, size, nbs);
+assert.equal(openAfter.length, openNow.length, 'still open after a reload');
+assert.equal(openAfter[0].name, openNow[0].name, 'and it is the same highway');
+
+// Derivation is pure: repeating it never changes the answer, so a restart can
+// never manufacture a "newly opened" highway that was already there.
+for (let again = 0; again < 3; again++)
+  assert.equal(M.connectedNeighbors(reloaded, size, nbs).length, 1,
+    'deriving repeatedly is stable');
+
 console.log('PASS: stable distinct generation over the whole name pool, edge placement, ' +
-  'route-home connection detection, bounded bonuses, demand lift, and planner advice.');
+  'route-home connection detection, bounded bonuses, demand lift, planner advice, and connection state that survives a reload.');

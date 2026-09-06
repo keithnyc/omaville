@@ -95,6 +95,9 @@ Item {
   readonly property bool outOfOffice: root.ageMinutes < root.outOfOfficeUntil
   property int lastApproval: 0
   property var neighbors: []
+  // Highways already open, so a newly-opened one can be told apart from one
+  // that has been open for hours. Seeded from the grid on load rather than
+  // persisted, so it can never disagree with the roads actually on the map.
   property var connectedNeighborNames: []
   // Bounded history for the graphs, and a newest-first event log. Both are
   // capped in Model — they live in the save file, which has a hard read cap.
@@ -754,6 +757,15 @@ Item {
     // An existing save predates neighbours entirely; seed them off its own
     // founding time so the same city always gets the same four towns.
     if (!neighbors) neighbors = Model.makeNeighbors(gridSize, foundedAtMs || Date.now())
+
+    // Which highways are open is derived from the grid, never restored from
+    // the save — the roads *are* the truth. Persisting it separately meant a
+    // shell restart came back thinking every existing connection was brand
+    // new, and re-announced roads the player had built long ago.
+    var alreadyOpen = Model.connectedNeighbors(grid, gridSize, neighbors)
+    var openNames = []
+    for (var c = 0; c < alreadyOpen.length; c++) openNames.push(alreadyOpen[c].name)
+    connectedNeighborNames = openNames
 
     var founded = false
     if (foundedAtMs === 0) {
