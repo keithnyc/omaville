@@ -374,7 +374,7 @@ Item {
     { action: "advisors", label: "Advisors", enabled: root.serviceReady },
     { action: "history", label: "History", enabled: root.serviceReady },
     { action: "name", label: "Name Town", enabled: root.serviceReady },
-    { action: "", label: "Game", enabled: false, heading: true },
+    { action: "", label: "", enabled: false, heading: true },
     { action: "settings", label: "Settings", enabled: true },
     { action: "save", label: "Save Game", enabled: false },
     { action: "new", label: "New Game", enabled: true }
@@ -3697,70 +3697,11 @@ Item {
           spacing: Style.space(6)
 
           Grid {
-            id: viewControls
-            columns: root.detached ? 1 : 2
-            spacing: Style.space(6)
-
-            Button {
-              iconText: "\u2212"
-              foreground: root.bar ? root.bar.foreground : Color.foreground
-              onClicked: root.setZoom(root.zoom / 1.2)
-            }
-            Button {
-              iconText: "+"
-              foreground: root.bar ? root.bar.foreground : Color.foreground
-              onClicked: root.setZoom(root.zoom * 1.2)
-            }
-            Button {
-              iconText: "\u2302"
-              foreground: root.bar ? root.bar.foreground : Color.foreground
-              onClicked: { root.zoom = 1; root.centerOnGrid() }
-            }
-            // Overlay picker. A single toggle rather than a row of eight
-            // chips — the map is the scarce space here, and the list is only
-            // needed at the moment of choosing.
-            Button {
-              iconText: root.overlayMode === "" ? "\u25d4" : "\u25c9"
-              foreground: root.overlayMode === ""
-                ? (root.bar ? root.bar.foreground : Color.foreground) : Color.accent
-              onClicked: root.overlayMenuOpen = !root.overlayMenuOpen
-            }
-          }
-
-          // Which overlay is on has to stay legible once the picker closes,
-          // and the accent-coloured toggle alone does not say which one.
-          Text {
-            width: paletteColumn.width
-            visible: root.overlayMode !== ""
-            text: root.overlayDef ? root.overlayDef.label : ""
-            horizontalAlignment: Text.AlignHCenter
-            elide: Text.ElideRight
-            color: Color.accent
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.caption
-          }
-
-          Text {
-            width: paletteColumn.width
-            text: Math.round(root.zoom * 100) + "%"
-            horizontalAlignment: Text.AlignHCenter
-            color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.3)
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.caption
-          }
-
-          // The rule is the whole point of the rearrangement: it says the
-          // things above it change what you see and the things below it
-          // change the city.
-          Rectangle {
-            width: paletteColumn.width
-            height: 1
-            color: root.neutralTint(0.3)
-          }
-
-          Grid {
             id: toolPalette
-            columns: root.detached ? 1 : 2
+            // Always two abreast. A single column in the detached window ran
+            // longer than the window itself, which is the opposite of what
+            // the vertical palette was for.
+            columns: 2
             spacing: Style.space(6)
 
             Repeater {
@@ -4039,6 +3980,68 @@ Item {
                 }
               }
             }
+          }
+
+          // The rule is the whole point of the rearrangement: the tools above
+          // it change the city, the controls below it only change how you are
+          // looking at it.
+          Rectangle {
+            width: paletteColumn.width
+            height: 1
+            color: root.neutralTint(0.3)
+          }
+
+          Grid {
+            id: viewControls
+            columns: 2
+            spacing: Style.space(6)
+
+            Button {
+              iconText: "\u2212"
+              foreground: root.bar ? root.bar.foreground : Color.foreground
+              onClicked: root.setZoom(root.zoom / 1.2)
+            }
+            Button {
+              iconText: "+"
+              foreground: root.bar ? root.bar.foreground : Color.foreground
+              onClicked: root.setZoom(root.zoom * 1.2)
+            }
+            Button {
+              iconText: "\u2302"
+              foreground: root.bar ? root.bar.foreground : Color.foreground
+              onClicked: { root.zoom = 1; root.centerOnGrid() }
+            }
+            // Overlay picker. A single toggle rather than a row of eight
+            // chips — the map is the scarce space here, and the list is only
+            // needed at the moment of choosing.
+            Button {
+              iconText: root.overlayMode === "" ? "\u25d4" : "\u25c9"
+              foreground: root.overlayMode === ""
+                ? (root.bar ? root.bar.foreground : Color.foreground) : Color.accent
+              onClicked: root.overlayMenuOpen = !root.overlayMenuOpen
+            }
+          }
+
+          Text {
+            width: paletteColumn.width
+            text: Math.round(root.zoom * 100) + "%"
+            horizontalAlignment: Text.AlignHCenter
+            color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.3)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          // Which overlay is on has to stay legible once the picker closes,
+          // and the accent-coloured toggle alone does not say which one.
+          Text {
+            width: paletteColumn.width
+            visible: root.overlayMode !== ""
+            text: root.overlayDef ? root.overlayDef.label : ""
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+            color: Color.accent
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
           }
         }
 
@@ -4648,22 +4651,23 @@ Item {
             required property var modelData
             readonly property bool heading: menuRow.modelData.heading === true
             width: menuColumn.width
-            height: heading ? Style.space(22) : Style.space(26)
+            height: heading ? Style.space(11) : Style.space(26)
             radius: Style.space(3)
             color: menuRowMouse.containsMouse && modelData.enabled
               ? Color.menu.selectedBackground : "transparent"
 
-            // A group heading rather than an item: a rule with the group name
-            // sitting on it, so the split reads as a division and not as one
-            // more thing to click.
+            // A plain rule, centred in its own short row: everything above it
+            // acts on the city, everything below it on the game. A named
+            // heading was tried here first and read as cramped — at caption
+            // size beside full-size items it looked like a broken entry
+            // rather than a divider.
             Rectangle {
               visible: menuRow.heading
               anchors.left: parent.left
               anchors.right: parent.right
-              anchors.leftMargin: Style.space(8)
-              anchors.rightMargin: Style.space(8)
-              anchors.bottom: parent.bottom
-              anchors.bottomMargin: Style.space(3)
+              anchors.leftMargin: Style.space(6)
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
               height: 1
               color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.18)
             }
@@ -4673,15 +4677,13 @@ Item {
               anchors.right: parent.right
               anchors.leftMargin: Style.space(8)
               anchors.verticalCenter: parent.verticalCenter
-              anchors.verticalCenterOffset: menuRow.heading ? Style.space(2) : 0
+              visible: !menuRow.heading
               text: menuRow.modelData.label
-              color: menuRow.heading
-                ? Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.45)
-                : menuRow.modelData.enabled
-                  ? (menuRowMouse.containsMouse ? Color.menu.selectedText : Color.menu.text)
-                  : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.4)
+              color: menuRow.modelData.enabled
+                ? (menuRowMouse.containsMouse ? Color.menu.selectedText : Color.menu.text)
+                : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.4)
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: menuRow.heading ? Style.font.caption : Style.font.bodySmall
+              font.pixelSize: Style.font.bodySmall
             }
 
             Text {
