@@ -138,8 +138,12 @@ Item {
   // every lot's road access, which costs milliseconds on a mature city — fine
   // once a month, ruinous on every tile of a road drag. It refreshes on the
   // tick, and on demand when something is about to show it.
-  property var traffic: Model.trafficSurvey(root.grid, root.gridSize)
-  function refreshTraffic() { root.traffic = Model.trafficSurvey(root.grid, root.gridSize) }
+  property var traffic: Model.trafficSurvey(root.grid, root.gridSize,
+    Model.findUtilities(root.grid), root.funding, root.policy)
+  function refreshTraffic() {
+    root.traffic = Model.trafficSurvey(root.grid, root.gridSize,
+      Model.findUtilities(root.grid), root.funding, root.policy)
+  }
   readonly property real income: Model.computeIncome(root.cityStats.taxablePopulation, root.taxRatePercent)
   readonly property real upkeep: Model.computeUpkeep(root.cityStats, root.funding, root.ordinances)
   readonly property var linkedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
@@ -523,7 +527,10 @@ Item {
   function advanceDisasters() {
     var utilities = Model.findUtilities(root.grid)
     if (root.fires.length > 0) {
-      var result = Model.advanceFires(root.grid, root.gridSize, root.fires, utilities, root.funding)
+      // Traffic is passed in so a jammed city genuinely responds more slowly,
+      // using the survey the rest of the tick already computed.
+      var result = Model.advanceFires(root.grid, root.gridSize, root.fires, utilities,
+        root.funding, root.traffic)
       root.grid = result.grid
       var wasBurning = root.fires.length
       root.fires = result.fires
@@ -539,7 +546,8 @@ Item {
     }
 
     if (root.crimes.length > 0) {
-      var crimeResult = Model.advanceCrime(root.grid, root.gridSize, root.crimes, utilities, root.funding, root.policy)
+      var crimeResult = Model.advanceCrime(root.grid, root.gridSize, root.crimes, utilities,
+        root.funding, root.policy, root.traffic)
       root.grid = crimeResult.grid
       var wasRunning = root.crimes.length
       root.crimes = crimeResult.crimes

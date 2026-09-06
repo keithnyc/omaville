@@ -10,12 +10,20 @@ vm.runInContext(
   fs.readFileSync(new URL('../Model.js', import.meta.url), 'utf8').replace('.pragma library', ''),
   M);
 
-const all = level => ({ F: level, S: level, N: level, H: level });
+// Derived from FUNDABLE_SERVICES rather than listed, so adding a department
+// extends the coverage here instead of silently going stale.
+const services = Array.from(M.FUNDABLE_SERVICES);
+const all = level => Object.fromEntries(services.map(k => [k, level]));
 
 // --- clamping and defaults ------------------------------------------------
 // Spread to a host object: values built inside the vm context carry that
 // realm's prototype, which deepStrictEqual treats as a mismatch.
-assert.deepEqual({ ...M.defaultFunding() }, { F: 1, S: 1, N: 1, H: 1 });
+assert.deepEqual({ ...M.defaultFunding() }, all(M.FUNDING_DEFAULT),
+  'every fundable department starts at the neutral default');
+for (const key of services) {
+  assert.ok(M.DEPARTMENT_RATE[key] > 0, `${key} has a per-resident rate`);
+  assert.ok(M.DEPARTMENT_NAMES[key], `${key} has a display name`);
+}
 assert.equal(M.fundingLevel(undefined, 'F'), M.FUNDING_DEFAULT, 'missing budget reads as default');
 assert.equal(M.fundingLevel({}, 'F'), M.FUNDING_DEFAULT, 'missing department reads as default');
 assert.equal(M.fundingLevel({ F: 'nonsense' }, 'F'), M.FUNDING_DEFAULT);

@@ -147,7 +147,20 @@ function spawn(data, size, roads, pool, colors) {
   return null
 }
 
-function update(cars, dtMs, data, size, count, roads, colors, burning) {
+// `congestion` is optional: { map, watch, jam } where map is roadIndex ->
+// load/capacity. Passed in rather than imported so the thresholds stay defined
+// once, in Model.js, instead of being duplicated here where they could drift.
+function congestionScale(congestion, tile) {
+  if (!congestion || !congestion.map) return 1
+  var value = congestion.map[tile] || 0
+  if (value <= congestion.watch) return 1
+  var over = (value - congestion.watch) / Math.max(0.001, congestion.jam - congestion.watch)
+  // Floors at a crawl rather than a standstill: parked cars would read as a
+  // rendering bug, while a visibly crawling street reads as the jam it is.
+  return Math.max(0.3, 1 - 0.7 * Math.min(1.4, over))
+}
+
+function update(cars, dtMs, data, size, count, roads, colors, burning, congestion) {
   var dt = Math.max(0, Math.min(60, dtMs)) / 1000
   var hasPolice = data.some(function(tile) { return tile && tile[0] === "S" })
   var hasMedical = data.some(function(tile) { return tile && tile[0] === "H" })
@@ -197,6 +210,9 @@ function update(cars, dtMs, data, size, count, roads, colors, burning) {
   for (var i = 0; i < pool.length; i++) {
     var car = pool[i], free = limits[i]
     var target = car.cruise * (car.path.uturn ? 0.48 : car.path.turning ? 0.72 : 1)
+    // Traffic you can see: cars crawl where the road is over its capacity, so
+    // a jam is legible on the map before anyone opens the overlay.
+    target *= congestionScale(congestion, car.tile)
     if (emergencyActive(car)) target *= 1.3
     // Anticipate the next curve instead of braking only after crossing into it.
     if (car.path.length - car.distance < 0.35 && neighbors(data, size, car.next).length !== 2)

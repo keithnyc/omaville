@@ -25,7 +25,16 @@ its lots growing and makes the city miserable. Three things fix it, and only
 one costs money: zone shops among the houses so fewer trips start at all, lay
 a connected grid so the same trips spread over more streets, or widen a street
 into an Avenue ($20 to widen, 2.5x the capacity, more upkeep). The Traffic
-overlay shows which roads are at their limit.
+overlay shows which roads are at their limit, and cars visibly crawl where a
+road is over capacity.
+
+When planning runs out, you can buy your way down: a Bus Depot / Tram Line /
+Transit Hub ($130, then upgrades) takes a share of the car trips around it off
+the road, billed monthly per resident like the other departments. Carpool,
+telecommuting and road-toll ordinances cut trips city-wide. None of them ever
+empties a road completely, and even a Transit Hub relieves less traffic than a
+genuinely walkable neighbourhood does — planning beats spending. Gridlock also
+slows the fire and police response, so a jammed city burns longer.
 
 ## Install
 

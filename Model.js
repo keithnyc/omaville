@@ -28,14 +28,20 @@ var SCHOOL_UPKEEP = 1.2
 var TILE_MEDICAL = "H"
 var MEDICAL_RADIUS = 10
 var MEDICAL_UPKEEP = 1.5
+// Mass transit: the answer to congestion you buy rather than plan around.
+// Same radius machinery as schools and clinics (6/10/15 by tier), and like
+// them it is a staffed department billed per resident rather than per
+// building — a bus network for 5000 people costs more than one for 500.
+var TILE_TRANSIT = "M"
+var TRANSIT_RADIUS = 10
 var TILE_TREE = "T"
 var TILE_FLOWERS = "B"
 
-var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "T": 12, "B": 18, "N": 100, "H": 110, "L": 4, "Q": 30 }
+var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "T": 12, "B": 18, "N": 100, "H": 110, "M": 130, "L": 4, "Q": 30 }
 var TILE_LABELS = {
   "_": "Clear", "#": "Road", "A": "Avenue", "R": "Residential", "C": "Commercial",
   "I": "Industrial", "P": "Playground", "E": "Generator", "W": "Well",
-  "F": "Firehouse", "S": "Substation", "T": "Tree", "B": "Flowerbed", "N": "Elementary School", "H": "Clinic", "L": "Water", "Q": "Waterfront Park"
+  "F": "Firehouse", "S": "Substation", "T": "Tree", "B": "Flowerbed", "N": "Elementary School", "H": "Clinic", "M": "Bus Depot", "L": "Water", "Q": "Waterfront Park"
 }
 
 var DECORATION_RADIUS = 3
@@ -140,7 +146,7 @@ var POLICE_UPKEEP = 2
 // purchase it keeps scaling for as long as the city grows. Modelled on
 // SimCity's department budget rather than invented, since that is the game
 // this one is chasing.
-var FUNDABLE_SERVICES = ["F", "S", "N", "H"]
+var FUNDABLE_SERVICES = ["F", "S", "N", "H", "M"]
 var FUNDING_MIN = 0.5
 var FUNDING_MAX = 1.5
 var FUNDING_DEFAULT = 1
@@ -148,11 +154,12 @@ var FUNDING_DEFAULT = 1
 // Cost per 100 residents per tick at 100% funding. Tuned (see
 // tests/funding.mjs) so a mature city at default funding runs a modest
 // surplus, while the 50%-150% range swings the budget by enough to matter.
-var DEPARTMENT_RATE = { F: 2.7, S: 2.7, N: 3.4, H: 3.7 }
-var DEPARTMENT_NAMES = { F: "Fire", S: "Police", N: "Education", H: "Health" }
+var DEPARTMENT_RATE = { F: 2.7, S: 2.7, N: 3.4, H: 3.7, M: 3.2 }
+var DEPARTMENT_NAMES = { F: "Fire", S: "Police", N: "Education", H: "Health", M: "Transit" }
 
 function defaultFunding() {
-  return { F: FUNDING_DEFAULT, S: FUNDING_DEFAULT, N: FUNDING_DEFAULT, H: FUNDING_DEFAULT }
+  return { F: FUNDING_DEFAULT, S: FUNDING_DEFAULT, N: FUNDING_DEFAULT,
+    H: FUNDING_DEFAULT, M: FUNDING_DEFAULT }
 }
 
 function fundingLevel(funding, type) {
@@ -203,7 +210,8 @@ var UPGRADE_TIER_NAMES = {
   F: ["Firehouse", "Fire Station", "Battalion HQ"],
   S: ["Substation", "Police Station", "SWAT HQ"],
   N: ["Elementary School", "High School", "University"],
-  H: ["Clinic", "Hospital", "Medical Center"]
+  H: ["Clinic", "Hospital", "Medical Center"],
+  M: ["Bus Depot", "Tram Line", "Transit Hub"]
 }
 
 // Cost to upgrade INTO tier index 1 or 2 (index 0 is the initial COSTS
@@ -216,7 +224,8 @@ var UPGRADE_COSTS = {
   F: [0, 100, 240],
   S: [0, 100, 240],
   N: [0, 180, 420],
-  H: [0, 200, 450]
+  H: [0, 200, 450],
+  M: [0, 260, 620]
 }
 
 // A bigger tier covers more ground but also costs more to run — indexed
@@ -424,7 +433,7 @@ function isCovered(gridSize, plants, index, baseRadius) {
 // checking "is this zone covered" against a short list of plants is far
 // cheaper than precomputing a coverage mask for every tile on a 64x64 grid.
 function findUtilities(grid) {
-  var power = [], water = [], fire = [], police = [], schools = [], medical = []
+  var power = [], water = [], fire = [], police = [], schools = [], medical = [], transit = []
   for (var i = 0; i < grid.length; i++) {
     var t = parseTile(grid[i])
     if (t.type === TILE_POWER) power.push({ index: i, level: t.level })
@@ -433,8 +442,10 @@ function findUtilities(grid) {
     else if (t.type === TILE_POLICE) police.push({ index: i, level: t.level })
     else if (t.type === TILE_SCHOOL) schools.push({ index: i, level: t.level })
     else if (t.type === TILE_MEDICAL) medical.push({ index: i, level: t.level })
+    else if (t.type === TILE_TRANSIT) transit.push({ index: i, level: t.level })
   }
-  return { power: power, water: water, fire: fire, police: police, schools: schools, medical: medical }
+  return { power: power, water: water, fire: fire, police: police, schools: schools,
+    medical: medical, transit: transit }
 }
 
 function educationStats(grid, gridSize) {
@@ -449,7 +460,8 @@ function serviceCoverageStats(grid, gridSize) {
     { name: "Fire protection", key: "fire", radius: FIRE_RADIUS },
     { name: "Police", key: "police", radius: POLICE_RADIUS },
     { name: "Education", key: "schools", radius: SCHOOL_RADIUS },
-    { name: "Healthcare", key: "medical", radius: MEDICAL_RADIUS }
+    { name: "Healthcare", key: "medical", radius: MEDICAL_RADIUS },
+    { name: "Transit", key: "transit", radius: TRANSIT_RADIUS }
   ]
   for (var r = 0; r < rows.length; r++) { rows[r].residents = 0; rows[r].served = 0 }
   for (var i = 0; i < grid.length; i++) {
@@ -480,8 +492,8 @@ function summarize(grid) {
     parkHappinessBonus: 0, serviceUpkeep: 0,
     // Split out so the monthly bill can itemise where the money goes.
     powerUpkeep: 0, waterUpkeep: 0, decorationUpkeep: 0,
-    departmentPresent: { F: false, S: false, N: false, H: false },
-    treeCount: 0, flowerCount: 0, decorationPoints: 0, taxablePopulation: 0
+    departmentPresent: { F: false, S: false, N: false, H: false, M: false },
+    treeCount: 0, flowerCount: 0, decorationPoints: 0, taxablePopulation: 0, transitCount: 0
   }
   for (var i = 0; i < grid.length; i++) {
     var tile = parseTile(grid[i])
@@ -526,6 +538,10 @@ function summarize(grid) {
       break
     case TILE_MEDICAL:
       stats.departmentPresent.H = true
+      break
+    case TILE_TRANSIT:
+      stats.transitCount++
+      stats.departmentPresent.M = true
       break
     case TILE_RES:
       stats.resCount++
@@ -670,6 +686,12 @@ var TRIP_LOCAL_RADIUS = 5
 var TRIP_LOCAL_TARGET = 70
 var TRIP_LOCAL_RELIEF = 0.55
 
+// Share of a covered lot's remaining car trips that transit takes off the
+// road, by station tier. Never all of them, and deliberately less than the
+// walkability relief a well-mixed neighbourhood earns for free — transit is
+// the fix you buy when you have already run out of planning.
+var TRANSIT_RELIEF = [0.28, 0.40, 0.50]
+
 // Below WATCH a road flows freely; between WATCH and JAM growth tapers; at or
 // above JAM the lot cannot grow at all until someone fixes the road.
 var CONGESTION_WATCH = 0.7
@@ -713,26 +735,52 @@ function localOpportunity(grid, gridSize, index, type) {
   return total
 }
 
-// Trips one lot puts onto the network this tick, after whatever its own
-// neighbourhood absorbs on foot.
-function tileTrips(grid, gridSize, index, tile) {
+// The best relief any transit station in range offers this tile. Uses the
+// same radius machinery as every other service, so funding widens a transit
+// network exactly the way it widens fire cover.
+function transitRelief(gridSize, transit, index, funding) {
+  if (!transit || transit.length === 0) return 0
+  var radius = TRANSIT_RADIUS * fundingRadiusScale(fundingLevel(funding, "M"))
+  var best = 0
+  for (var i = 0; i < transit.length; i++) {
+    if (!withinRadius(gridSize, transit[i].index, index,
+        radius * INFRA_RADIUS_SCALE[transit[i].level])) continue
+    var relief = TRANSIT_RELIEF[transit[i].level] || 0
+    if (relief > best) best = relief
+  }
+  return best
+}
+
+// Trips one lot puts onto the network this tick, after everything that takes
+// them off it first. Walking, transit and policy compound rather than add:
+// each removes a share of what the one before it left, so no combination can
+// ever drive a lot's traffic to zero.
+function tileTrips(grid, gridSize, index, tile, transitShare, tripRate) {
   var base = 0
   if (tile.type === TILE_RES) base = tile.level * RES_CAP_PER_LEVEL * TRIPS_PER_RESIDENT
   else if (tile.type === TILE_COM) base = tile.level * COM_JOBS_PER_LEVEL * TRIPS_PER_JOB
   else if (tile.type === TILE_IND) base = tile.level * IND_JOBS_PER_LEVEL * TRIPS_PER_JOB
   if (base <= 0) return 0
   var local = localOpportunity(grid, gridSize, index, tile.type)
-  return base * (1 - TRIP_LOCAL_RELIEF * Math.min(1, local / TRIP_LOCAL_TARGET))
+  return base
+    * (1 - TRIP_LOCAL_RELIEF * Math.min(1, local / TRIP_LOCAL_TARGET))
+    * (1 - (transitShare || 0))
+    * (tripRate === undefined ? 1 : tripRate)
 }
 
-function trafficSurvey(grid, gridSize) {
-  var roadLoad = {}, lotRoads = {}, totalTrips = 0, unservedTrips = 0
+function trafficSurvey(grid, gridSize, utilities, funding, effects) {
+  var roadLoad = {}, lotRoads = {}, totalTrips = 0, unservedTrips = 0, savedTrips = 0
+  var transit = utilities && utilities.transit ? utilities.transit : []
+  var tripRate = effects && effects.tripRate !== undefined ? effects.tripRate : 1
 
   for (var i = 0; i < grid.length; i++) {
     var tile = parseTile(grid[i])
     if (tile.level < 1) continue
     if (tile.type !== TILE_RES && tile.type !== TILE_COM && tile.type !== TILE_IND) continue
-    var trips = tileTrips(grid, gridSize, i, tile)
+    var relief = transitRelief(gridSize, transit, i, funding)
+    var trips = tileTrips(grid, gridSize, i, tile, relief, tripRate)
+    if (relief > 0 || tripRate !== 1)
+      savedTrips += tileTrips(grid, gridSize, i, tile) - trips
     if (trips <= 0) continue
     totalTrips += trips
     // The same set of roads that lets this lot grow at all is the set that
@@ -769,7 +817,7 @@ function trafficSurvey(grid, gridSize) {
 
   return {
     roadCongestion: roadCongestion, lotCongestion: lotCongestion,
-    totalTrips: totalTrips, unservedTrips: unservedTrips,
+    totalTrips: totalTrips, unservedTrips: unservedTrips, savedTrips: savedTrips,
     jammedRoads: jammed, busyRoads: busy, usedRoads: used,
     worst: worst, stuckTrips: stuck,
     stuckShare: totalTrips > 0 ? stuck / totalTrips : 0
@@ -998,11 +1046,11 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
   var policy = ordinanceEffects(ordinances)
   incomeMultiplier = incomeMultiplier === undefined ? 1 : incomeMultiplier
   var stats = summarize(grid)
-  var traffic = trafficSurvey(grid, gridSize)
+  var utilities = findUtilities(grid)
+  var traffic = trafficSurvey(grid, gridSize, utilities, funding, policy)
   var happiness = Math.round(clamp(
     computeHappiness(taxRatePercent, stats, trafficHappinessPenalty(traffic))
       + happinessModifier + policy.happiness, 0, 100))
-  var utilities = findUtilities(grid)
   var connected = connectedNeighbors(grid, gridSize, neighbors)
   var demand = computeDemand(stats, connected.length, policy)
   var load = utilityLoad(grid, stats, policy)
@@ -1766,8 +1814,9 @@ function planningAdvice(stats, demand, neighborsLinked, neighborsTotal, traffic)
   if (stuckShare >= 0.25)
     return advice("planning", SEVERITY_URGENT, "The city is gridlocked",
       Math.round(stuckShare * 100) + "% of built lots sit on jammed roads and cannot grow. "
-      + "Widen the worst streets into avenues, open a second route so the traffic has "
-      + "somewhere else to go, or zone shops among the houses so fewer trips start at all.",
+      + "Zone shops among the houses so fewer trips start at all, open a second route so the "
+      + "traffic has somewhere else to go, widen the worst streets into avenues, or build "
+      + "transit to take cars off them.",
       "traffic")
   if (stuckShare >= 0.08)
     return advice("planning", SEVERITY_WATCH, "Traffic is building up",
@@ -1935,6 +1984,7 @@ var OVERLAYS = [
   { key: "police", label: "Police", service: "police", radius: POLICE_RADIUS, funding: "S" },
   { key: "schools", label: "Schools", service: "schools", radius: SCHOOL_RADIUS, funding: "N" },
   { key: "medical", label: "Health", service: "medical", radius: MEDICAL_RADIUS, funding: "H" },
+  { key: "transit", label: "Transit", service: "transit", radius: TRANSIT_RADIUS, funding: "M" },
   { key: "value", label: "Land value" },
   { key: "growth", label: "Growth" },
   { key: "traffic", label: "Traffic" }
@@ -2063,7 +2113,7 @@ function rollFireStart(grid, gridSize, fires, utilities, funding, effects) {
 // One tick of every active fire: contain, damage, spread. Returns the new
 // grid and fire list plus what happened, so the caller can notify without
 // re-deriving it.
-function advanceFires(grid, gridSize, fires, utilities, funding) {
+function advanceFires(grid, gridSize, fires, utilities, funding, traffic) {
   var next = grid.slice()
   var stillBurning = []
   var contained = 0, destroyed = 0, spread = []
@@ -2078,7 +2128,7 @@ function advanceFires(grid, gridSize, fires, utilities, funding) {
 
     var covered = isCovered(gridSize, utilities.fire, fire.index, radius)
     // Funding buys a faster response, not just a wider one.
-    var containChance = fireContainChance(gridSize, utilities, fire.index, funding)
+    var containChance = fireContainChance(gridSize, utilities, fire.index, funding, traffic)
     if (Math.random() < containChance) { contained++; continue }
 
     if (Math.random() < FIRE_DAMAGE_CHANCE) {
@@ -2268,12 +2318,26 @@ function fireFuel(tile) {
 
 // Full containment speed at the station's doorstep, tapering to the base rate
 // at the edge of its reach, and a token effort beyond it.
-function fireContainChance(gridSize, utilities, index, funding) {
+// A fire engine stuck in traffic is a fire engine that is not there yet.
+// Congestion around an incident slows the response rather than cancelling it:
+// even a gridlocked city still puts the fire out, it just takes longer, which
+// with spreading fires is quite bad enough.
+var RESPONSE_MIN_SCALE = 0.45
+
+function responseScale(traffic, index) {
+  var congestion = lotCongestion(traffic, index)
+  if (congestion <= CONGESTION_WATCH) return 1
+  var over = Math.min(1, (congestion - CONGESTION_WATCH) / (CONGESTION_JAM - CONGESTION_WATCH))
+  return 1 - (1 - RESPONSE_MIN_SCALE) * over
+}
+
+function fireContainChance(gridSize, utilities, index, funding, traffic) {
   var radius = FIRE_RADIUS * fundingRadiusScale(fundingLevel(funding, "F"))
   var distance = nearestPlantDistance(gridSize, utilities.fire || [], index)
   if (!isFinite(distance) || distance > radius) return FIRE_CONTAIN_UNCOVERED
   var proximity = 1 - (distance / radius) * 0.55
   return FIRE_CONTAIN_COVERED * fundingLevel(funding, "F") * proximity
+    * responseScale(traffic, index)
 }
 
 // --- crime waves ----------------------------------------------------------
@@ -2344,7 +2408,7 @@ function crimeTheft(grid, gridSize, crimes) {
   return total
 }
 
-function advanceCrime(grid, gridSize, crimes, utilities, funding, effects) {
+function advanceCrime(grid, gridSize, crimes, utilities, funding, effects, traffic) {
   var policy = effects || ordinanceEffects([])
   var next = grid.slice()
   var stillRunning = [], suppressed = 0, drivenOut = 0
@@ -2355,7 +2419,7 @@ function advanceCrime(grid, gridSize, crimes, utilities, funding, effects) {
     var wave = crimes[c]
     var covered = isCovered(gridSize, utilities.police, wave.index, radius)
     var suppressChance = (covered ? CRIME_SUPPRESS_COVERED * level : CRIME_SUPPRESS_UNCOVERED)
-      * policy.crimeSuppress
+      * policy.crimeSuppress * responseScale(traffic, wave.index)
     if (Math.random() < suppressChance) { suppressed++; continue }
 
     // Residents give up on a block long before a building falls down.
@@ -2519,6 +2583,15 @@ var ORDINANCES = [
   { id: "subsidy", name: "Industrial subsidy", rate: 2.2,
     blurb: "Factories expand faster. The air is worse for it.",
     effects: { industrialDemand: 1.35, happiness: -4 } },
+  { id: "carpool", name: "Carpool incentive", rate: 1.1,
+    blurb: "Fewer cars for the same journeys. Nobody loves sharing a ride.",
+    effects: { tripRate: 0.88, happiness: -1 } },
+  { id: "telecommute", name: "Telecommuting grant", rate: 2.4,
+    blurb: "Many of the trips simply stop happening. The shops notice.",
+    effects: { tripRate: 0.8, commercialDemand: 0.93 } },
+  { id: "tolls", name: "Road tolls", rate: -2.0,
+    blurb: "Pays the city and thins the traffic. Drivers will not forgive it.",
+    effects: { tripRate: 0.9, happiness: -6 } },
   { id: "gambling", name: "Legalised gambling", rate: -3.2,
     blurb: "Pays for itself several times over. Brings the trouble you'd expect.",
     effects: { crimeChance: 1.5, happiness: -3 } }
@@ -2546,7 +2619,7 @@ function ordinanceEffects(active) {
   var out = {
     happiness: 0, fireChance: 1, crimeChance: 1, crimeSuppress: 1,
     waterDemand: 1, residentialDemand: 1, commercialDemand: 1,
-    industrialDemand: 1, industrialNuisance: 1
+    industrialDemand: 1, industrialNuisance: 1, tripRate: 1
   }
   for (var i = 0; i < (active || []).length; i++) {
     var o = ordinance(active[i])

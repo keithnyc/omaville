@@ -387,10 +387,11 @@ console.log('PASS: trips from density and both commute ends, all three counter-l
   assert.match(bad.headline, /gridlocked/i);
   assert.equal(bad.severity, M.SEVERITY_URGENT, 'a gridlocked city is urgent');
   assert.equal(bad.overlay, 'traffic');
-  // All three counter-strategies are named, since none is obvious from the map.
-  assert.match(bad.detail, /avenue/i);
-  assert.match(bad.detail, /route/i);
-  assert.match(bad.detail, /shops/i);
+  // Every counter-strategy is named, since none is obvious from the map.
+  assert.match(bad.detail, /shops/i, 'mixing zones');
+  assert.match(bad.detail, /route/i, 'a connected grid');
+  assert.match(bad.detail, /avenue/i, 'widening');
+  assert.match(bad.detail, /transit/i, 'and transit');
 
   console.log('PASS: the planner escalates traffic and points at the overlay.');
 }

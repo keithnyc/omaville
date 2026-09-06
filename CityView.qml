@@ -164,7 +164,7 @@ Item {
 
   // Remember the exact selected infrastructure tier for direct placement
   // and upgrading matching buildings to that tier in a single action.
-  readonly property var upgradeableTypes: [Model.TILE_PARK, Model.TILE_POWER, Model.TILE_WATER, Model.TILE_FIRE, Model.TILE_POLICE, Model.TILE_SCHOOL, Model.TILE_MEDICAL]
+  readonly property var upgradeableTypes: [Model.TILE_PARK, Model.TILE_POWER, Model.TILE_WATER, Model.TILE_FIRE, Model.TILE_POLICE, Model.TILE_SCHOOL, Model.TILE_MEDICAL, Model.TILE_TRANSIT]
   property string upgradeTarget: ""
   property int selectedTier: 0
   property string flyoutType: ""
@@ -229,6 +229,7 @@ Item {
     if (type === Model.TILE_WATERFRONT_PARK) return "Waterfront Park · $30\nPlace on empty land beside water for a garden and pier. Adds park happiness."
     if (type === Model.TILE_ROAD) return "Road · $10 on land / $35 bridge on water\nServes zones up to 2 steps away through lots, gardens or open land. Water and service buildings block access. Removing a bridge restores water."
     if (type === Model.TOOL_AVENUE) return "Avenue · $30 new / $20 to widen a street\nCarries about two and a half times a street. Costs more to maintain."
+    if (type === Model.TILE_TRANSIT) return "Transit · $130\nTakes car trips off the roads nearby. Costs a monthly per-resident budget like the other departments."
     if (type === "decorations") return "Decorations · hover for trees and flowerbeds\nRaise nearby home values and residential demand."
     if (type === "inspect") return "Inspect · click a tile for services, property value and upgrades."
     if (type === "bulldoze") return "Bulldoze · remove a tile and reclaim its construction cost."
@@ -495,9 +496,15 @@ Item {
 
   readonly property var trafficRoadTiles: Traffic.roadTiles(root.grid, root.gridSize)
 
+  // Rebuilt per call rather than bound: the survey object changes only on the
+  // tick, and this is three property reads against a 33ms timer.
   function updateCars(dt, data, gridSize) {
+    var survey = root.serviceReady ? root.cityService.traffic : null
     root.cars = Traffic.update(root.cars, dt, data, gridSize, root.carCount, root.trafficRoadTiles,
-      root.carColors, root.cityBurning)
+      root.carColors, root.cityBurning,
+      survey && survey.roadCongestion
+        ? { map: survey.roadCongestion, watch: Model.CONGESTION_WATCH, jam: Model.CONGESTION_JAM }
+        : null)
   }
 
   function drawCar(ctx, car, cellSize, offsetX, offsetY, gridSize, viewW, viewH) {
@@ -694,6 +701,7 @@ Item {
     { type: Model.TILE_POLICE, label: "Substation" },
     { type: Model.TILE_SCHOOL, label: "Elementary School" },
     { type: Model.TILE_MEDICAL, label: "Clinic" },
+    { type: Model.TILE_TRANSIT, label: "Bus Depot" },
     { type: "decorations", label: "Decorations" },
     { type: "inspect", label: "Info" },
     { type: "bulldoze", label: "Bulldoze" }
@@ -3245,6 +3253,28 @@ Item {
     ctx.fillRect(gx + cellSize * 0.33, gy + cellSize * 0.53, cellSize * 0.34, cellSize * 0.12)
   }
 
+  function drawTransit(ctx, gx, gy, cellSize, level) {
+    root.drawSpriteLot(ctx, gx, gy, cellSize, Model.TILE_TRANSIT)
+    // A shelter canopy over a bus, gaining a second vehicle and a taller
+    // canopy with each tier so the three read apart at a glance.
+    ctx.fillStyle = "#4a5560"
+    ctx.fillRect(gx + cellSize * 0.08, gy + cellSize * (0.30 - level * 0.04),
+      cellSize * 0.84, cellSize * 0.10)
+    ctx.fillStyle = "#6d7a86"
+    ctx.fillRect(gx + cellSize * 0.10, gy + cellSize * 0.40, cellSize * 0.05, cellSize * 0.44)
+    ctx.fillRect(gx + cellSize * 0.85, gy + cellSize * 0.40, cellSize * 0.05, cellSize * 0.44)
+    var buses = 1 + Math.max(0, Math.min(2, level))
+    for (var b = 0; b < buses; b++) {
+      var by = gy + cellSize * (0.46 + b * 0.15)
+      ctx.fillStyle = b % 2 === 0 ? "#d8a33f" : "#c8712f"
+      ctx.fillRect(gx + cellSize * 0.18, by, cellSize * 0.58, cellSize * 0.12)
+      ctx.fillStyle = "#2f3a44"
+      ctx.fillRect(gx + cellSize * 0.22, by + cellSize * 0.02, cellSize * 0.34, cellSize * 0.05)
+      ctx.fillRect(gx + cellSize * 0.24, by + cellSize * 0.11, cellSize * 0.07, cellSize * 0.03)
+      ctx.fillRect(gx + cellSize * 0.62, by + cellSize * 0.11, cellSize * 0.07, cellSize * 0.03)
+    }
+  }
+
   function drawSchool(ctx, gx, gy, cellSize, level) {
     root.drawSpriteLot(ctx, gx, gy, cellSize, Model.TILE_SCHOOL)
     ctx.fillStyle = "#a46a4b"
@@ -3307,6 +3337,9 @@ Item {
     case Model.TILE_MEDICAL:
       if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawMedical(ctx, gx, gy, cellSize, tile.level)
       break
+    case Model.TILE_TRANSIT:
+      if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawTransit(ctx, gx, gy, cellSize, tile.level)
+      break
     case Model.TILE_RES:
       if (tile.level <= 0) root.drawUndeveloped(ctx, gx, gy, cellSize, tile.type)
       else if (!root.drawResidentialSprite(ctx, gx, gy, cellSize, tile.level, index))
@@ -3358,7 +3391,7 @@ Item {
     E: Model.POWER_RADIUS, W: Model.WATER_RADIUS,
     F: Model.FIRE_RADIUS, S: Model.POLICE_RADIUS
   })
-  readonly property var coverageTypes: [Model.TILE_POWER, Model.TILE_WATER, Model.TILE_FIRE, Model.TILE_POLICE, Model.TILE_SCHOOL, Model.TILE_MEDICAL]
+  readonly property var coverageTypes: [Model.TILE_POWER, Model.TILE_WATER, Model.TILE_FIRE, Model.TILE_POLICE, Model.TILE_SCHOOL, Model.TILE_MEDICAL, Model.TILE_TRANSIT]
 
   // Shows a plant's actual reach: while a coverage-building tool (power,
   // water, fire, police) is active, previews what placing one *here* would
@@ -3758,6 +3791,7 @@ Item {
                   case Model.TILE_POLICE: root.drawPolice(ctx, 0, 0, width, 0); break
                   case Model.TILE_SCHOOL: root.drawSchool(ctx, 0, 0, width, 0); break
                   case Model.TILE_MEDICAL: root.drawMedical(ctx, 0, 0, width, 0); break
+                  case Model.TILE_TRANSIT: root.drawTransit(ctx, 0, 0, width, 0); break
                   case "decorations": root.drawPark(ctx, 0, 0, width, 0); break
                   case "inspect": root.drawInfoIcon(ctx, 0, 0, width); break
                   default: root.drawBulldozeIcon(ctx, 0, 0, width); break
@@ -3910,6 +3944,7 @@ Item {
                               case Model.TILE_POLICE: root.drawPolice(ctx, 0, 0, width, tierEntry.tierIndex); break
                               case Model.TILE_SCHOOL: root.drawSchool(ctx, 0, 0, width, tierEntry.tierIndex); break
                               case Model.TILE_MEDICAL: root.drawMedical(ctx, 0, 0, width, tierEntry.tierIndex); break
+                              case Model.TILE_TRANSIT: root.drawTransit(ctx, 0, 0, width, tierEntry.tierIndex); break
                               case Model.TILE_TREE:
                               case Model.TILE_FLOWERS: root.drawPark(ctx, 0, 0, width, 0); break
                               }
