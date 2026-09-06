@@ -1059,8 +1059,19 @@ Item {
       // Industry gets a working yard, not a garden: hardstanding, pallets and
       // a skip. Greys, rust and pale timber only — green here would read as
       // landscaping and blur the line with residential frontage.
-      ctx.fillStyle = "#4c4f4a"
-      ctx.fillRect(0.07, 0.855, 0.60, 0.105)
+      //
+      // The hardstanding covers most of the lot rather than a strip along the
+      // frontage. In game a factory reaches the top of its tile, so a strip is
+      // almost entirely hidden behind it and the district still reads as sheds
+      // standing on a lawn. The inset varies per lot so a row of yards does not
+      // become one flat slab with seams.
+      var inset = 0.035 + ((seed >>> 14) % 3) * 0.012
+      var far = 0.965 - ((seed >>> 17) % 3) * 0.012
+      ctx.fillStyle = "#43473f"
+      ctx.fillRect(inset, 0.30, far - inset, 0.665)
+      ctx.fillStyle = "#5c6058"
+      ctx.fillRect(inset + 0.012, 0.315, far - inset - 0.024, 0.635)
+      // A darker apron across the frontage, where deliveries actually stand.
       ctx.fillStyle = "#6d6f66"
       ctx.fillRect(0.08, 0.862, 0.58, 0.075)
 
