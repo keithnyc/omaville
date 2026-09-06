@@ -364,6 +364,32 @@ function isRoadAdjacent(grid, gridSize, index) {
   return false
 }
 
+// Local shared access: at most two orthogonal steps to an actual road.
+// Gardens and zone setbacks are passable; water and service compounds are not.
+// Never recurse through other served buildings, which would give infinite reach.
+function roadAccessIndices(grid, gridSize, index) {
+  var roads = []
+  var neighbors = neighborIndices(gridSize, index)
+  for (var i = 0; i < neighbors.length; i++) {
+    var next = neighbors[i]
+    var type = (grid[next] || "")[0]
+    if (type === TILE_ROAD) roads.push(next)
+    else if (type && "_RCIPQTB".indexOf(type) >= 0) {
+      var outer = neighborIndices(gridSize, next)
+      for (var j = 0; j < outer.length; j++) {
+        var candidate = outer[j]
+        if (candidate !== index && (grid[candidate] || "")[0] === TILE_ROAD
+            && roads.indexOf(candidate) < 0) roads.push(candidate)
+      }
+    }
+  }
+  return roads
+}
+
+function hasRoadAccess(grid, gridSize, index) {
+  return roadAccessIndices(grid, gridSize, index).length > 0
+}
+
 // True circular range (compared squared to skip the sqrt) — matches the
 // circle Panel.qml draws as the coverage preview, so what you see hovering
 // a plant is exactly what governs growth, not an approximation of it.
@@ -626,7 +652,7 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
     // Coverage says a plant reaches this tile; load says whether the network
     // can actually serve it this month. An overloaded grid browns out tile by
     // tile rather than failing citywide, so growth slows before it stops.
-    var connected = isRoadAdjacent(grid, gridSize, i)
+    var connected = hasRoadAccess(grid, gridSize, i)
       && isCovered(gridSize, utilities.power, i, POWER_RADIUS)
       && (powerSatisfaction >= 1 || Math.random() < powerSatisfaction)
       && isCovered(gridSize, utilities.water, i, WATER_RADIUS)
@@ -667,7 +693,7 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
 
 // Everything a player might want to know about one tile, for the Info tool
 // — deliberately built from the exact same helpers tickGrid itself uses
-// (isCovered, isRoadAdjacent, nearbyZoneEffect, computeDemand's output) so
+// (isCovered, hasRoadAccess, nearbyZoneEffect, computeDemand's output) so
 // what the tooltip reports can never drift out of sync with what's actually
 // governing growth.
 function inspectTile(grid, gridSize, index, utilities, demand, population, treasury) {
@@ -675,7 +701,7 @@ function inspectTile(grid, gridSize, index, utilities, demand, population, treas
   var info = {
     type: tile.type,
     level: tile.level,
-    roadAdjacent: isRoadAdjacent(grid, gridSize, index),
+    roadAdjacent: hasRoadAccess(grid, gridSize, index),
     powerCovered: isCovered(gridSize, utilities.power, index, POWER_RADIUS),
     waterCovered: isCovered(gridSize, utilities.water, index, WATER_RADIUS),
     fireCovered: isCovered(gridSize, utilities.fire, index, FIRE_RADIUS),
@@ -1732,7 +1758,7 @@ function growthBlocker(grid, gridSize, index, utilities, happiness) {
   var tile = parseTile(grid[index])
   if (tile.type !== TILE_RES && tile.type !== TILE_COM && tile.type !== TILE_IND) return ""
   if (tile.level >= 3) return "max"
-  if (!isRoadAdjacent(grid, gridSize, index)) return "road"
+  if (!hasRoadAccess(grid, gridSize, index)) return "road"
   if (!isCovered(gridSize, utilities.power, index, POWER_RADIUS)) return "power"
   if (!isCovered(gridSize, utilities.water, index, WATER_RADIUS)) return "water"
   if (happiness < 20) return "unhappy"
@@ -2194,7 +2220,7 @@ function makeNeighbors(gridSize, seed) {
   return out
 }
 
-// Roads that actually reach the city, flood-filled from every road touching a
+// Roads that actually reach the city, flood-filled from every road serving a
 // built zone. A lone road out at the map edge is not "connected" to anything,
 // so a connector only counts once there is a continuous route home.
 function cityRoadNetwork(grid, gridSize) {
@@ -2202,15 +2228,11 @@ function cityRoadNetwork(grid, gridSize) {
   var queue = []
   for (var i = 0; i < grid.length; i++) {
     var tile = parseTile(grid[i])
-    if (tile.type !== TILE_ROAD) continue
-    var neighbors = neighborIndices(gridSize, i)
-    for (var n = 0; n < neighbors.length; n++) {
-      var near = parseTile(grid[neighbors[n]])
-      if ((near.type === TILE_RES || near.type === TILE_COM || near.type === TILE_IND)
-          && near.level > 0) {
-        if (!reached[i]) { reached[i] = true; queue.push(i) }
-        break
-      }
+    if ("RCI".indexOf(tile.type) < 0 || tile.level < 1) continue
+    var roads = roadAccessIndices(grid, gridSize, i)
+    for (var n = 0; n < roads.length; n++) {
+      var road = roads[n]
+      if (!reached[road]) { reached[road] = true; queue.push(road) }
     }
   }
   while (queue.length > 0) {

@@ -15,7 +15,8 @@ in, upkeep goes out, and population/happiness are recalculated.
 
 Click the bar icon to open the city panel. Pick a tool (Road, Res, Com, Ind,
 Park, Clear) and click or drag on the grid to build. Roads are required —
-zones only grow when they're adjacent to one. Population milestones and
+zones can grow within two orthogonal steps of one, via open land, other zones,
+parks, or decorations (not across water or service buildings). Population milestones and
 budget crises show up as desktop notifications.
 
 ## Install

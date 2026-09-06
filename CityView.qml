@@ -219,7 +219,7 @@ Item {
   function toolHint(type) {
     if (type === Model.TILE_LAKE) return "Water · $4 per tile\nPaint rivers and lakes on empty land. Roads over water become $35 bridges."
     if (type === Model.TILE_WATERFRONT_PARK) return "Waterfront Park · $30\nPlace on empty land beside water for a garden and pier. Adds park happiness."
-    if (type === Model.TILE_ROAD) return "Road · $10 on land / $35 bridge on water\nRemoving a bridge restores the water below."
+    if (type === Model.TILE_ROAD) return "Road · $10 on land / $35 bridge on water\nServes zones up to 2 steps away through lots, gardens or open land. Water and service buildings block access. Removing a bridge restores water."
     if (type === "decorations") return "Decorations · hover for trees and flowerbeds\nRaise nearby home values and residential demand."
     if (type === "inspect") return "Inspect · click a tile for services, property value and upgrades."
     if (type === "bulldoze") return "Bulldoze · remove a tile and reclaim its construction cost."
@@ -699,13 +699,13 @@ Item {
   readonly property var residentialSpriteUrls: [
     [Qt.resolvedUrl("assets/residential/r1.png").toString(), Qt.resolvedUrl("assets/residential/r1b.png").toString()],
     [Qt.resolvedUrl("assets/residential/r2.png").toString(), Qt.resolvedUrl("assets/residential/r2b.png").toString()],
-    [Qt.resolvedUrl("assets/residential/r3.png").toString(), Qt.resolvedUrl("assets/residential/r3b.png").toString()]
+    [Qt.resolvedUrl("assets/residential/r3.png").toString(), Qt.resolvedUrl("assets/residential/r3b.png").toString(), Qt.resolvedUrl("assets/residential/r3c.png").toString(), Qt.resolvedUrl("assets/residential/r3d.png").toString()]
   ]
   property bool useCommercialSprites: true
   readonly property var commercialSpriteUrls: [
     [Qt.resolvedUrl("assets/commercial/c1a.png").toString(), Qt.resolvedUrl("assets/commercial/c1b.png").toString()],
     [Qt.resolvedUrl("assets/commercial/c2a.png").toString(), Qt.resolvedUrl("assets/commercial/c2b.png").toString()],
-    [Qt.resolvedUrl("assets/commercial/c3a.png").toString(), Qt.resolvedUrl("assets/commercial/c3b.png").toString()]
+    [Qt.resolvedUrl("assets/commercial/c3a.png").toString(), Qt.resolvedUrl("assets/commercial/c3b.png").toString(), Qt.resolvedUrl("assets/commercial/c3c.png").toString(), Qt.resolvedUrl("assets/commercial/c3d.png").toString()]
   ]
   property bool useIndustrialSprites: true
   readonly property var industrialSpriteUrls: [
@@ -946,6 +946,47 @@ Item {
       ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
     }
     if (index >= 0) root.drawEntrancePath(ctx, gx, gy, cellSize, index)
+  }
+
+  function drawLotDressing(ctx, gx, gy, size, type, index) {
+    // Cosmetic only. Independent coordinate hash leaves a third of lots plain
+    // and never shuffles on repaint, zoom, growth, or reopening the city.
+    if (index < 0 || (type !== "R" && type !== "C")) return
+    var seed = Math.imul((index | 0) ^ 0x5bd1e995, 0x45d9f3b)
+    seed = (seed ^ (seed >>> 16)) >>> 0
+    if (seed % 3 === 0) return
+    ctx.save()
+    ctx.translate(gx, gy)
+    ctx.scale(size, size)
+    // A small doorstep, not a slab beneath the whole building. Existing
+    // road-oriented entrance paths remain visible and unchanged.
+    ctx.fillStyle = type === "C" ? "#74796a" : "#81816b"
+    ctx.fillRect(0.25, 0.88, 0.33, 0.105)
+    ctx.fillStyle = type === "C" ? "#a0a28e" : "#a6a184"
+    ctx.fillRect(0.26, 0.88, 0.31, 0.08)
+    ctx.fillStyle = "#565e4d"
+    ctx.fillRect(0.41, 0.88, 0.012, 0.105)
+    // Keep planting in exposed corners, clear of the central entrance.
+    // The building is drawn afterwards, naturally occluding anything behind it.
+    var right = (seed >>> 4) % 2 === 0
+    var x = right ? 0.855 : 0.035
+    var y = (seed >>> 6) % 2 === 0 ? 0.83 : 0.70
+    var hedge = type === "R" && (seed >>> 8) % 2 === 0
+    var h = hedge ? 0.20 : 0.11
+    if (hedge) y = Math.min(y, 0.75)
+    ctx.fillStyle = "rgba(20, 28, 19, 0.30)"
+    ctx.fillRect(x + 0.015, y + 0.025, 0.11, h)
+    if (type === "C") {
+      ctx.fillStyle = "#a08f70"
+      ctx.fillRect(x - 0.01, y + 0.015, 0.125, h + 0.015)
+    }
+    ctx.fillStyle = "#29452c"
+    ctx.fillRect(x, y, 0.105, h)
+    ctx.fillStyle = "#587b3d"
+    ctx.fillRect(x + 0.007, y, 0.09, h - 0.018)
+    ctx.fillStyle = "#81964f"
+    ctx.fillRect(x + 0.012, y, 0.055, 0.035)
+    ctx.restore()
   }
 
   function drawEntrancePath(ctx, gx, gy, size, index) {
@@ -1462,6 +1503,27 @@ Item {
     return choices[hash % choices.length]
   }
 
+  // Bounds of the painted cutouts, excluding transparent export padding.
+  // Keep the original generated alpha/files intact; crop only while drawing.
+  // Uniform fit preserves each building's natural proportions and lot gaps.
+  readonly property var matureSpriteFrames: ({
+    "r3c.png": [208, 49, 831, 1155],
+    "r3d.png": [99, 59, 1055, 1105],
+    "c3c.png": [217, 13, 800, 1186],
+    "c3d.png": [70, 21, 1119, 1173]
+  })
+
+  function drawMatureVariant(ctx, source, gx, gy, cellSize) {
+    var name = source.substring(source.lastIndexOf("/") + 1)
+    var frame = root.matureSpriteFrames[name]
+    if (!frame) return false
+    var scale = Math.min(cellSize * 0.84 / frame[2], cellSize * 0.88 / frame[3])
+    var w = frame[2] * scale, h = frame[3] * scale
+    ctx.drawImage(source, frame[0], frame[1], frame[2], frame[3],
+                  gx + (cellSize - w) / 2, gy + cellSize * 0.94 - h, w, h)
+    return true
+  }
+
   function drawResidentialSprite(ctx, gx, gy, cellSize, level, index) {
     if (!root.useResidentialSprites || level < 1 || level > 3) return false
     var source = root.spriteSourceFor(root.residentialSpriteUrls, level, index)
@@ -1469,16 +1531,20 @@ Item {
     if (!cityCanvas.isImageLoaded(source)) return false
 
     root.drawSpriteLot(ctx, gx, gy, cellSize, "R", index)
+    root.drawLotDressing(ctx, gx, gy, cellSize, "R", index)
+
+    if (root.drawMatureVariant(ctx, source, gx, gy, cellSize)) return true
 
     // Source aspect ratios after transparent-edge trimming. Width is the
     // gameplay control: R2 reads denser laterally; R3 uses its narrower source
-    // to gain height without spilling far into either neighboring lot.
+    // to gain height while staying inside its own lot.
     var sourceAspect = [256 / 244, 256 / 216, 220 / 256][level - 1]
-    var widthScale = [0.92, 1.05, 1.0][level - 1]
+    // Leave real daylight between silhouettes, including the row behind.
+    var widthScale = [0.76, 0.84, 0.75][level - 1]
     var drawW = cellSize * widthScale
     var drawH = drawW / sourceAspect
     var drawX = gx + (cellSize - drawW) / 2
-    var baseline = gy + cellSize * 0.97
+    var baseline = gy + cellSize * 0.94
     ctx.drawImage(source, drawX, baseline - drawH, drawW, drawH)
     return true
   }
@@ -1494,12 +1560,15 @@ Item {
     if (!cityCanvas.isImageLoaded(source)) return false
 
     root.drawSpriteLot(ctx, gx, gy, cellSize, "C", index)
+    root.drawLotDressing(ctx, gx, gy, cellSize, "C", index)
 
-    var widthScale = [0.9, 1.08, 1.12][level - 1]
+    if (root.drawMatureVariant(ctx, source, gx, gy, cellSize)) return true
+
+    var widthScale = [0.76, 0.84, 0.88][level - 1]
     var drawW = cellSize * widthScale
     var drawH = drawW
     var drawX = gx + (cellSize - drawW) / 2
-    var baseline = gy + cellSize * 0.98
+    var baseline = gy + cellSize * 0.94
     ctx.drawImage(source, drawX, baseline - drawH, drawW, drawH)
     return true
   }
@@ -1515,11 +1584,11 @@ Item {
 
     root.drawSpriteLot(ctx, gx, gy, cellSize, "I", index)
 
-    var widthScale = [0.9, 1.08, 1.16][level - 1]
+    var widthScale = [0.78, 0.86, 0.90][level - 1]
     var drawW = cellSize * widthScale
     var drawH = drawW
     var drawX = gx + (cellSize - drawW) / 2
-    var baseline = gy + cellSize * 0.98
+    var baseline = gy + cellSize * 0.94
     ctx.drawImage(source, drawX, baseline - drawH, drawW, drawH)
     return true
   }
