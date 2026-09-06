@@ -31,6 +31,10 @@ Item {
 
   // --- persistent city facts --------------------------------------------
   property string cityName: "Omaville"
+  // Who the city addresses when it has something to say. Empty is allowed and
+  // degrades to a bare "Mayor" via Model.mayorTitle, so an older save or a
+  // player who skips the field never sees a dangling honorific.
+  property string mayorName: ""
   property double foundedAtMs: 0
   property real ageMinutes: 0
   property real treasury: 500
@@ -290,13 +294,17 @@ Item {
     root.lastElectionTick = root.ageMinutes
     if (score >= Model.ELECTION_THRESHOLD) {
       root.notify(root.cityName + " — re-elected",
-        "You keep the mayor's office with " + score + "% approval.")
-      root.logEvent("election", "Re-elected with " + score + "% approval.")
+        Model.mayorTitle(root.mayorName) + " keeps the office with "
+          + score + "% approval.")
+      root.logEvent("election", Model.mayorTitle(root.mayorName)
+        + " re-elected with " + score + "% approval.")
     } else {
       root.outOfOfficeUntil = root.ageMinutes + Model.TERM_OUT_TICKS
       root.notify(root.cityName + " — voted out",
-        score + "% approval. An interim administration runs the city for a year.")
-      root.logEvent("election", "Voted out with " + score + "% approval.")
+        Model.mayorTitle(root.mayorName) + " loses the office on " + score
+          + "% approval. An interim administration runs the city for a year.")
+      root.logEvent("election", Model.mayorTitle(root.mayorName)
+        + " voted out with " + score + "% approval.")
     }
     flushState()
   }
@@ -310,10 +318,22 @@ Item {
   }
 
   function renameCity(value) {
-    var name = String(value).replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim()
-    if (!root.initialized || name.length === 0 || name.length > 40) return false
+    var name = Model.sanitizeName(value)
+    if (!root.initialized || !Model.validName(name)) return false
     if (name !== root.cityName) {
       root.cityName = name
+      flushState()
+    }
+    return true
+  }
+
+  // The mayor's name may be cleared, unlike the city's — a player who does not
+  // want to be named should not be forced into one.
+  function renameMayor(value) {
+    var name = Model.sanitizeName(value)
+    if (!root.initialized) return false
+    if (name !== root.mayorName) {
+      root.mayorName = name
       flushState()
     }
     return true
@@ -322,7 +342,11 @@ Item {
   // Wipes the grid and every stat back to a fresh city's defaults, keeping
   // the city's name (editable in Settings). foundedAtMs resets
   // too, so the calendar starts back at month 1 of a new founding year.
-  function resetCity() {
+  // newCityName/newMayorName are optional: the new-city dialog supplies both,
+  // and anything else keeps the names the city already had.
+  function resetCity(newCityName, newMayorName) {
+    if (Model.validName(newCityName)) root.cityName = Model.sanitizeName(newCityName)
+    if (newMayorName !== undefined) root.mayorName = Model.sanitizeName(newMayorName)
     root.grid = Model.emptyGrid(root.gridSize)
     root.treasury = 500
     root.taxRatePercent = 10
@@ -558,7 +582,8 @@ Item {
       root.advanceDisasters()
       if (root.outOfOfficeUntil > 0 && root.ageMinutes >= root.outOfOfficeUntil) {
         root.outOfOfficeUntil = 0
-        root.notify(root.cityName, "Your term begins. The city is yours again.")
+        root.notify(root.cityName, Model.mayorTitle(root.mayorName)
+          + " returns to office. The city is yours again.")
         root.logEvent("election", "Returned to office.")
       }
       if (Model.electionDue(root.ageMinutes, root.lastElectionTick)) root.runElection()
@@ -713,6 +738,7 @@ Item {
   function flushState() {
     stateFile.setText(JSON.stringify({
       cityName: root.cityName,
+      mayorName: root.mayorName,
       foundedAtMs: root.foundedAtMs,
       ageMinutes: root.ageMinutes,
       treasury: root.treasury,
@@ -763,6 +789,7 @@ Item {
     try {
       var saved = loadedStateText !== "" ? JSON.parse(loadedStateText) : {}
       cityName = typeof saved.cityName === "string" && saved.cityName !== "" ? saved.cityName : "Omaville"
+      mayorName = Model.sanitizeName(saved.mayorName)
       foundedAtMs = num(saved.foundedAtMs, 0)
       ageMinutes = Math.max(0, num(saved.ageMinutes, 0))
       treasury = Math.max(Model.TREASURY_FLOOR, num(saved.treasury, 500))

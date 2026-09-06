@@ -2916,3 +2916,30 @@ function civicLabel(civic) {
   var n = Math.floor(clamp(civic || CIVIC_MIN, CIVIC_MIN, CIVIC_MAX))
   return ["", "Township", "Educated city", "University city"][n] || "Township"
 }
+
+// --- names ----------------------------------------------------------------
+// One sanitiser for every name the player types, so the new-city dialog and
+// the rename fields cannot disagree about what is acceptable and then reject
+// something the other just allowed.
+var NAME_MAX = 40
+
+function sanitizeName(value) {
+  if (value === null || value === undefined) return ""
+  return String(value)
+    .replace(/[\x00-\x1f\x7f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .substring(0, NAME_MAX)
+}
+
+function validName(value) {
+  return sanitizeName(value).length > 0
+}
+
+// "Mayor Robinson" for messages the city addresses to the player. Kept here
+// rather than interpolated at each call site so the honorific stays consistent
+// and a blank name degrades to something sensible instead of "Mayor ".
+function mayorTitle(name) {
+  var clean = sanitizeName(name)
+  return clean.length === 0 ? "Mayor" : "Mayor " + clean
+}

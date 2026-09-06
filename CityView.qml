@@ -377,7 +377,10 @@ Item {
   property bool overlayMenuOpen: false
   property bool historyOpen: false
   property bool goalOpen: false
-  readonly property bool editingTownName: root.settingsOpen && townNameInput.activeFocus
+  readonly property bool editingTownName:
+    (root.settingsOpen && townNameInput.activeFocus)
+    || (root.confirmNewGameOpen
+        && (newCityInput.activeFocus || newMayorInput.activeFocus))
   Shortcut {
     sequence: "F2"
     enabled: root.active && root.serviceReady
@@ -385,6 +388,15 @@ Item {
   }
   onSettingsOpenChanged: {
     if (settingsOpen) townNameInput.text = root.serviceReady ? root.cityService.cityName : ""
+  }
+  onConfirmNewGameOpenChanged: {
+    if (!confirmNewGameOpen) return
+    // Carried over rather than blanked: starting again with the same names is
+    // the common case, and retyping them is the annoying one.
+    newCityInput.text = root.serviceReady ? root.cityService.cityName : ""
+    newMayorInput.text = root.serviceReady ? root.cityService.mayorName : ""
+    newCityInput.forceActiveFocus()
+    newCityInput.selectAll()
   }
   // Two groups, not one list. Everything above the rule acts on the city you
   // are playing; everything below it acts on the game itself. New Game sat at
@@ -5899,18 +5911,117 @@ Item {
       }
     }
 
-    ConfirmDialog {
-      anchors.fill: parent
-      opened: root.confirmNewGameOpen
-      message: "Start a new city? This clears "
-        + (root.serviceReady ? root.cityService.cityName : "this city")
-        + "'s grid, population, and treasury."
-      cancelText: "Cancel"
-      confirmText: "New Game"
-      onCanceled: root.confirmNewGameOpen = false
-      onConfirmed: {
+    // Founding a city is the one moment where naming it belongs, so this is a
+    // form rather than a bare confirmation. Both names can still be changed
+    // later in Settings; only the town's is required.
+    Rectangle {
+      id: newCityCard
+      visible: root.confirmNewGameOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(360))
+      height: newCityColumn.implicitHeight + Style.space(28)
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      MouseArea { anchors.fill: parent }
+
+      function start() {
+        if (!root.serviceReady || !Model.validName(newCityInput.text)) return
         root.confirmNewGameOpen = false
-        if (root.cityService) root.cityService.resetCity()
+        root.cityService.resetCity(newCityInput.text, newMayorInput.text)
+      }
+
+      Column {
+        id: newCityColumn
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        spacing: Style.space(10)
+
+        Text {
+          text: "Found a new city"
+          color: Color.menu.text
+          font.bold: true
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          width: parent.width
+          wrapMode: Text.WordWrap
+          text: "This clears " + (root.serviceReady ? root.cityService.cityName : "this city")
+            + "'s grid, population and treasury. Both names can be changed later."
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          text: "Town name"
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+        Rectangle {
+          width: parent.width
+          height: Style.space(34)
+          radius: Style.space(4)
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.06)
+          border.color: newCityInput.activeFocus ? Color.accent : Color.menu.border
+          TextInput {
+            id: newCityInput
+            anchors.fill: parent
+            anchors.margins: Style.space(7)
+            color: Color.menu.text
+            selectionColor: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            maximumLength: Model.NAME_MAX
+            clip: true
+            selectByMouse: true
+            onAccepted: newMayorInput.forceActiveFocus()
+            Keys.onEscapePressed: { root.confirmNewGameOpen = false; event.accepted = true }
+          }
+        }
+
+        Text {
+          text: "Mayor (optional)"
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+        Rectangle {
+          width: parent.width
+          height: Style.space(34)
+          radius: Style.space(4)
+          color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.06)
+          border.color: newMayorInput.activeFocus ? Color.accent : Color.menu.border
+          TextInput {
+            id: newMayorInput
+            anchors.fill: parent
+            anchors.margins: Style.space(7)
+            color: Color.menu.text
+            selectionColor: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+            maximumLength: Model.NAME_MAX
+            clip: true
+            selectByMouse: true
+            onAccepted: newCityCard.start()
+            Keys.onEscapePressed: { root.confirmNewGameOpen = false; event.accepted = true }
+          }
+        }
+
+        Row {
+          spacing: Style.space(8)
+          Button {
+            text: "Found city"
+            enabled: root.serviceReady && Model.validName(newCityInput.text)
+            onClicked: newCityCard.start()
+          }
+          Button { text: "Cancel"; onClicked: root.confirmNewGameOpen = false }
+        }
       }
     }
   }
