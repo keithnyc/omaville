@@ -5302,7 +5302,11 @@ Item {
       id: budgetCard
       visible: root.budgetOpen
       anchors.centerIn: parent
-      width: Math.min(parent.width - Style.space(32), Style.space(360))
+      // Wider on the ordinances tab so twelve policies can sit two abreast
+      // rather than in one column taller than the screen. The other tabs are
+      // short and read better narrow.
+      width: Math.min(parent.width - Style.space(32),
+        Style.space(root.budgetTab === "policy" ? 520 : 360))
       // Clamped to the panel and scrollable, like the other cards. Without
       // this the card grew to its content and ran clean off the screen once
       // ordinances were added to it.
@@ -5555,18 +5559,23 @@ Item {
 
         // Ordinances sit in the budget rather than a screen of their own:
         // every one of them is a standing line on the same monthly bill.
-        Row {
+        Item {
           width: parent.width
+          height: root.budgetTab === "policy" ? policyHeading.implicitHeight : 0
           visible: root.budgetTab === "policy"
           Text {
+            id: policyHeading
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
             text: "Ordinances"
             color: Color.menu.text
             font.bold: true
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.bodySmall
           }
-          Item { width: budgetColumn.width - 200; height: 1 }
           Text {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
             text: root.serviceReady
               ? (Model.ordinanceCost(root.ordinances, root.population) < 0 ? "+$" : "$")
                 + Math.abs(Math.round(Model.ordinanceCost(root.ordinances, root.population))) + " a month"
@@ -5577,65 +5586,90 @@ Item {
           }
         }
 
-        Repeater {
-          model: root.budgetTab === "policy" && root.serviceReady ? Model.ORDINANCES : []
+        // Two abreast when there is room, one when there is not, so the same
+        // list works in the docked panel and in a small detached window.
+        // Every row is the same height — the blurb is capped at two lines —
+        // which keeps the grid from going ragged.
+        Grid {
+          id: policyGrid
+          width: parent.width
+          visible: root.budgetTab === "policy"
+          columns: width >= Style.space(360) ? 2 : 1
+          spacing: Style.space(6)
 
-          Rectangle {
-            id: policyRow
-            required property var modelData
-            readonly property bool enacted: root.ordinances.indexOf(policyRow.modelData.id) >= 0
-            readonly property real cost: Model.ordinanceCost([policyRow.modelData.id], root.population)
-            width: budgetColumn.width
-            height: policyText.implicitHeight + Style.space(12)
-            radius: Style.space(4)
-            color: enacted ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16) : "transparent"
-            border.width: 1
-            border.color: enacted ? Color.accent
-              : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.18)
-            opacity: root.outOfOffice ? 0.45 : 1
+          Repeater {
+            model: root.budgetTab === "policy" && root.serviceReady ? Model.ORDINANCES : []
 
-            Column {
-              id: policyText
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.margins: Style.space(7)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(1)
+            Rectangle {
+              id: policyRow
+              required property var modelData
+              readonly property bool enacted: root.ordinances.indexOf(policyRow.modelData.id) >= 0
+              readonly property real cost: Model.ordinanceCost([policyRow.modelData.id], root.population)
+              width: (policyGrid.width - policyGrid.spacing * (policyGrid.columns - 1))
+                / policyGrid.columns
+              height: policyText.implicitHeight + Style.space(12)
+              radius: Style.space(4)
+              color: enacted ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.16) : "transparent"
+              border.width: 1
+              border.color: enacted ? Color.accent
+                : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.18)
+              opacity: root.outOfOffice ? 0.45 : 1
 
-              Row {
-                width: parent.width
-                Text {
-                  text: policyRow.modelData.name
-                  color: policyRow.enacted ? Color.accent : Color.menu.text
-                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                  font.pixelSize: Style.font.caption
+              Column {
+                id: policyText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Style.space(7)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(1)
+
+                // Anchored rather than spaced with a fixed-width filler: the
+                // old one was budgetColumn.width - 210, which goes negative in
+                // a narrow column and shoves the price off the card.
+                Item {
+                  width: parent.width
+                  height: policyName.implicitHeight
+                  Text {
+                    id: policyName
+                    anchors.left: parent.left
+                    anchors.right: policyCost.left
+                    anchors.rightMargin: Style.space(6)
+                    elide: Text.ElideRight
+                    text: policyRow.modelData.name
+                    color: policyRow.enacted ? Color.accent : Color.menu.text
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    id: policyCost
+                    anchors.right: parent.right
+                    // A negative rate is revenue, which is exactly how the
+                    // devil's-bargain policies should read.
+                    text: (policyRow.cost < 0 ? "+$" : "$") + Math.abs(Math.round(policyRow.cost))
+                    color: policyRow.cost < 0 ? "#7fbf7f"
+                      : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
                 }
-                Item { width: policyText.width - 210; height: 1 }
                 Text {
-                  // A negative rate is revenue, which is exactly how the
-                  // devil's-bargain policies should read.
-                  text: (policyRow.cost < 0 ? "+$" : "$") + Math.abs(Math.round(policyRow.cost))
-                  color: policyRow.cost < 0 ? "#7fbf7f"
-                    : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+                  width: policyText.width
+                  text: policyRow.modelData.blurb
+                  wrapMode: Text.WordWrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                  color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.55)
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.caption
                 }
               }
-              Text {
-                width: policyText.width
-                text: policyRow.modelData.blurb
-                wrapMode: Text.WordWrap
-                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.55)
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.caption
-              }
-            }
 
-            MouseArea {
-              anchors.fill: parent
-              enabled: !root.outOfOffice
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.cityService.toggleOrdinance(policyRow.modelData.id)
+              MouseArea {
+                anchors.fill: parent
+                enabled: !root.outOfOffice
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.cityService.toggleOrdinance(policyRow.modelData.id)
+              }
             }
           }
         }
