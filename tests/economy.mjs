@@ -191,3 +191,57 @@ console.log('PASS: businesses taxed with commerce ahead of industry, a capped se
 
 console.log('PASS: a sustainability goal that must be held, resets on any lapse, ' +
   'and is never blocked by an optional service.');
+
+// --- coverage must never claim 100% while anyone is unserved -------------
+// Reported from a live city: "Education 100% covered · 30 residents unserved".
+// 8,070 of 8,100 is 99.6%, which rounded up. The percentage and the headcount
+// are read side by side on the status line, so they have to agree.
+{
+  const rows = () => {
+    const g = M.emptyGrid(size);
+    // A big well-served block, plus one lone house far outside every radius.
+    for (let r = 10; r < 20; r++) for (let c = 10; c < 30; c++) g[r * size + c] = 'R3';
+    g[15 * size + 20] = 'N2';
+    g[60 * size + 60] = 'R1';
+    return M.serviceCoverageStats(g, size);
+  };
+  const edu = rows().find(r => r.key === 'schools');
+  assert.ok(edu.unmet > 0, 'somebody is genuinely unserved');
+  assert.ok(edu.coverage < 100,
+    `coverage must not read 100% with ${edu.unmet} unserved (got ${edu.coverage}%)`);
+  assert.ok(edu.coverage > 90, 'but it should still read as nearly complete');
+  assert.equal(edu.coverage, 99,
+    'a near-miss caps at 99 rather than being floored somewhere lower');
+
+  // Ordinary percentages are still rounded, not floored — only the top is
+  // capped, so a two-thirds-covered city still reads 67%.
+  const twoThirds = (() => {
+    const g = M.emptyGrid(size);
+    g[15 * size + 20] = 'R3'; g[15 * size + 21] = 'R3'; g[50 * size + 50] = 'R3';
+    g[15 * size + 22] = 'N0';
+    return M.serviceCoverageStats(g, size).find(r => r.key === 'schools');
+  })();
+  assert.equal(twoThirds.coverage, 67, '2 of 3 rounds to 67, not 66');
+
+  // The two directions that must stay exact.
+  const empty = M.serviceCoverageStats(M.emptyGrid(size), size);
+  for (const r of empty) {
+    assert.equal(r.unmet, 0, 'nobody to serve');
+    assert.equal(r.coverage, 100, 'and an empty city is not a failure');
+  }
+
+  const served = (() => {
+    const g = M.emptyGrid(size);
+    g[15 * size + 20] = 'R3';
+    for (const [t, at] of [['E2', 0], ['W2', 1], ['F2', 2], ['S2', 3],
+                           ['N2', 4], ['H2', 5], ['M2', 6]])
+      g[15 * size + 21 + at] = t;
+    return M.serviceCoverageStats(g, size);
+  })();
+  for (const r of served) {
+    assert.equal(r.unmet, 0, `${r.name} reaches everyone`);
+    assert.equal(r.coverage, 100, `${r.name} therefore reads exactly 100%`);
+  }
+}
+
+console.log('PASS: coverage percentages agree with the headcount beside them.');

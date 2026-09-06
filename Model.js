@@ -479,7 +479,14 @@ function serviceCoverageStats(grid, gridSize) {
   }
   for (var r = 0; r < rows.length; r++) {
     rows[r].unmet = rows[r].residents - rows[r].served
-    rows[r].coverage = rows[r].residents ? Math.round(rows[r].served / rows[r].residents * 100) : 100
+    // Never round up to 100 while anyone is still unserved. At 8,070 of 8,100
+    // the true figure is 99.6%, and "100% covered · 30 residents unserved" is
+    // a contradiction a player reads straight off the status line.
+    // Rounded as normal, but capped below 100 while anyone is unserved: the
+    // only misleading value is the one that claims completeness.
+    rows[r].coverage = rows[r].unmet > 0
+      ? Math.min(99, Math.round(rows[r].served / Math.max(1, rows[r].residents) * 100))
+      : 100
   }
   return rows
 }
