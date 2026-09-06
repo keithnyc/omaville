@@ -5,7 +5,11 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 const base = new URL('../', import.meta.url);
 const qml = fs.readFileSync(new URL('CityView.qml', base), 'utf8');
-const root = { grid: [], gridSize: 64, useInfrastructureSprites: true, useResidentialSprites: true,
+// roadConnCache is a QML binding rather than a function, so the harness
+// supplies it directly. Empty here, which is what an empty grid produces and
+// which exercises connectionsAt's out-of-range fallback.
+const root = { grid: [], gridSize: 64, roadConnCache: [],
+  useInfrastructureSprites: true, useResidentialSprites: true,
   useCommercialSprites: true, useIndustrialSprites: true };
 const Model = { TILE_RES: 'R', TILE_COM: 'C', TILE_IND: 'I', TILE_PARK: 'P',
   TILE_POWER: 'E', TILE_WATER: 'W', TILE_FIRE: 'F', TILE_POLICE: 'S', TILE_SCHOOL: 'N', TILE_MEDICAL: 'H', TILE_ROAD: '#', TILE_TREE: 'T', TILE_FLOWERS: 'B' };
@@ -20,7 +24,7 @@ for (const key of ['residentialSpriteUrls', 'commercialSpriteUrls', 'industrialS
   const expression = qml.match(new RegExp('readonly property var ' + key + ': (\\[[\\s\\S]*?\\n  \\])'))[1];
   root[key] = vm.runInContext(expression, context);
 }
-for (const name of ['roadConnections', 'drawEntrancePath', 'drawSpriteLot', 'infrastructureSpriteSource', 'previewSpriteSource', 'drawInfrastructureSprite', 'drawTile']) {
+for (const name of ['roadConnections', 'connectionsAt', 'drawEntrancePath', 'drawSpriteLot', 'infrastructureSpriteSource', 'previewSpriteSource', 'drawInfrastructureSprite', 'drawTile']) {
   const fn = qml.match(new RegExp('  function ' + name + '\\([\\s\\S]*?\\n  \\}'))[0];
   root[name] = vm.runInContext('(' + fn + ')', context);
 }

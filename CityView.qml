@@ -1040,7 +1040,7 @@ Item {
   }
 
   function drawEntrancePath(ctx, gx, gy, size, index) {
-    var conn = root.roadConnections(root.grid, root.gridSize, index)
+    var conn = root.connectionsAt(index)
     if (!conn.down && !conn.left && !conn.right && !conn.up) return
     ctx.save()
     ctx.translate(gx, gy)
@@ -1194,6 +1194,40 @@ Item {
       up: y > 0 && isRoad(index - gridSize),
       down: y < gridSize - 1 && isRoad(index + gridSize)
     }
+  }
+
+  // Which neighbours of a tile are roads is a pure function of the grid, and
+  // the grid does not change at all while the map is being panned — but the
+  // canvas repaints on every pixel of the drag, and three separate draw passes
+  // asked this question per tile per frame. That allocated a closure, four
+  // parsed-tile objects and a result object every time: thousands of
+  // short-lived objects a second, all to re-derive an answer that had not
+  // changed. Computed once per grid change instead, it allocates none.
+  //
+  // Deliberately reads the raw tile character rather than going through
+  // Model.parseTile — the type is the first character, and this runs 4096
+  // times per rebuild.
+  readonly property var roadConnCache: {
+    var data = root.grid
+    var size = root.gridSize
+    var road = Model.TILE_ROAD
+    var out = new Array(data.length)
+    for (var i = 0; i < data.length; i++) {
+      var x = i % size, y = (i / size) | 0
+      out[i] = {
+        left: x > 0 && data[i - 1] && data[i - 1][0] === road,
+        right: x < size - 1 && data[i + 1] && data[i + 1][0] === road,
+        up: y > 0 && data[i - size] && data[i - size][0] === road,
+        down: y < size - 1 && data[i + size] && data[i + size][0] === road
+      }
+    }
+    return out
+  }
+  // Safe for any index, including one from a grid that has since shrunk.
+  function connectionsAt(index) {
+    var cache = root.roadConnCache
+    return (index >= 0 && index < cache.length) ? cache[index]
+      : { left: false, right: false, up: false, down: false }
   }
 
   function roadTextureHash(value) {
@@ -3245,7 +3279,7 @@ Item {
       }
       break
     case Model.TILE_ROAD:
-      var roadConn = root.roadConnections(data, root.gridSize, index)
+      var roadConn = root.connectionsAt(index)
       if (tile.level % 2 === 1) {
         Waterfront.drawWater(ctx, gx, gy, cellSize, data, root.gridSize, index)
         Waterfront.drawBridge(ctx, gx, gy, cellSize, roadConn)
@@ -4020,7 +4054,7 @@ Item {
                 var detailTile = Model.parseTile(data[detailIndex])
                 if (detailTile.type === Model.TILE_ROAD && detailTile.level % 2 === 0)
                   root.drawStreetDetails(ctx, detailCol * size - offsetX, detailRow * size - offsetY,
-                    size, root.roadConnections(data, root.gridSize, detailIndex))
+                    size, root.connectionsAt(detailIndex))
               }
             }
           }
@@ -4085,16 +4119,22 @@ Item {
               }
             }
             onPositionChanged: function(mouse) {
-              hoverIndex = tileIndexAt(mouse.x, mouse.y)
               if (panning) {
+                // Deliberately not updating hoverIndex here. A coverage
+                // preview under the cursor is meaningless while the map is
+                // being dragged, and recomputing it fired a second
+                // full-viewport canvas repaint on every event of the drag —
+                // on top of the tile repaint the pan itself already costs.
+                if (hoverIndex !== -1) hoverIndex = -1
                 root.panX -= (mouse.x - lastX)
                 root.panY -= (mouse.y - lastY)
                 root.clampPan()
                 lastX = mouse.x
                 lastY = mouse.y
-              } else if (painting) {
-                applyAt(mouse.x, mouse.y)
+                return
               }
+              hoverIndex = tileIndexAt(mouse.x, mouse.y)
+              if (painting) applyAt(mouse.x, mouse.y)
             }
             onReleased: function(mouse) { painting = false; panning = false }
             onCanceled: { painting = false; panning = false }
@@ -4128,10 +4168,13 @@ Item {
           property real offsetX: root.panX
           property real offsetY: root.panY
           property string mode: root.overlayMode
-          onGridDataChanged: requestPaint()
-          onCellSizeChanged: requestPaint()
-          onOffsetXChanged: requestPaint()
-          onOffsetYChanged: requestPaint()
+          // Guarded on the same condition as `visible` above: a hidden layer
+          // must not spend a full-viewport repaint on every pan event.
+          readonly property bool showing: root.overlayMode !== ""
+          onGridDataChanged: if (showing) requestPaint()
+          onCellSizeChanged: if (showing) requestPaint()
+          onOffsetXChanged: if (showing) requestPaint()
+          onOffsetYChanged: if (showing) requestPaint()
           onModeChanged: requestPaint()
           onWidthChanged: requestPaint()
           onHeightChanged: requestPaint()
@@ -4163,9 +4206,11 @@ Item {
           property real offsetY: root.panY
           property real cellSize: root.effectiveCellSize
           property int hoverIndex: gridMouse.hoverIndex
-          onOffsetXChanged: requestPaint()
-          onOffsetYChanged: requestPaint()
-          onCellSizeChanged: requestPaint()
+          // drawCoverageOverlay draws nothing without a hovered tile, so a
+          // pan with no cursor on the map has nothing to redraw.
+          onOffsetXChanged: if (hoverIndex >= 0) requestPaint()
+          onOffsetYChanged: if (hoverIndex >= 0) requestPaint()
+          onCellSizeChanged: if (hoverIndex >= 0) requestPaint()
           onHoverIndexChanged: requestPaint()
           onWidthChanged: requestPaint()
           onHeightChanged: requestPaint()
@@ -4238,8 +4283,8 @@ Item {
           property var fireTiles: root.fires
           property var crimeTiles: root.crimes
           property real phase: 0
-          onOffsetXChanged: requestPaint()
-          onOffsetYChanged: requestPaint()
+          onOffsetXChanged: if (visible) requestPaint()
+          onOffsetYChanged: if (visible) requestPaint()
           onCellSizeChanged: requestPaint()
           onFireTilesChanged: requestPaint()
           onCrimeTilesChanged: requestPaint()
@@ -4277,9 +4322,9 @@ Item {
           // every grid mutation (a road placed on the far side of the city
           // doesn't add or remove any warnings).
           property var warningTiles: root.utilityWarningTiles
-          onOffsetXChanged: requestPaint()
-          onOffsetYChanged: requestPaint()
-          onCellSizeChanged: requestPaint()
+          onOffsetXChanged: if (warningTiles.length) requestPaint()
+          onOffsetYChanged: if (warningTiles.length) requestPaint()
+          onCellSizeChanged: if (warningTiles.length) requestPaint()
           onWarningTilesChanged: requestPaint()
           onWidthChanged: requestPaint()
           onHeightChanged: requestPaint()
@@ -4304,9 +4349,9 @@ Item {
           property real offsetX: root.panX
           property real offsetY: root.panY
           property real cellSize: root.effectiveCellSize
-          onOffsetXChanged: requestPaint()
-          onOffsetYChanged: requestPaint()
-          onCellSizeChanged: requestPaint()
+          onOffsetXChanged: if (root.growthFlashes.length) requestPaint()
+          onOffsetYChanged: if (root.growthFlashes.length) requestPaint()
+          onCellSizeChanged: if (root.growthFlashes.length) requestPaint()
           onWidthChanged: requestPaint()
           onHeightChanged: requestPaint()
 
