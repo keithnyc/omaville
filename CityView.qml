@@ -167,7 +167,23 @@ Item {
   readonly property var upgradeableTypes: [Model.TILE_PARK, Model.TILE_POWER, Model.TILE_WATER, Model.TILE_FIRE, Model.TILE_POLICE, Model.TILE_SCHOOL, Model.TILE_MEDICAL, Model.TILE_TRANSIT]
   property string upgradeTarget: ""
   property int selectedTier: 0
+  // The tier flyout lives at the root of CityView, not inside the 34px tool
+  // button it belongs to. A child drawn outside its parent's bounds is not in
+  // the hit-test path there, so the flyout rendered correctly over the map and
+  // the map's own MouseArea took every pointer event inside it — the flyout
+  // was visible and completely unreachable. These carry the identity and
+  // position the shared instance needs.
   property string flyoutType: ""
+  property real flyoutAnchorX: 0
+  property real flyoutAnchorY: 0
+  readonly property bool flyoutDecorations: root.flyoutType === "decorations"
+  readonly property bool flyoutUpgradeable: root.upgradeableTypes.indexOf(root.flyoutType) >= 0
+  function openFlyoutFor(button, type) {
+    var p = button.mapToItem(root, button.width, button.height / 2)
+    root.flyoutAnchorX = p.x
+    root.flyoutAnchorY = p.y
+    root.flyoutType = type
+  }
   property string decorationTool: Model.TILE_TREE
   // One shared summarize for everything that needs whole-city figures — the
   // Budget card's rows would otherwise each rescan the grid on every change.
@@ -3804,179 +3820,26 @@ Item {
                   }
                   onEntered: {
                     root.hoveredToolType = toolButton.modelData.type
-                    closeFlyout.stop()
+                    flyoutCloseTimer.stop()
                     if (toolButton.hasFlyout) openFlyout.restart()
                     else root.flyoutType = ""
                   }
                   onExited: {
                     if (root.hoveredToolType === toolButton.modelData.type) root.hoveredToolType = ""
                     openFlyout.stop()
-                    closeFlyout.restart()
+                    flyoutCloseTimer.restart()
                   }
                 }
 
                 Timer {
                   id: openFlyout
                   interval: 180
-                  onTriggered: if (toolMouse.containsMouse) root.flyoutType = toolButton.modelData.type
-                }
-                Timer {
-                  id: closeFlyout
-                  interval: 300
-                  onTriggered: if (!toolMouse.containsMouse && !flyoutHover.hovered
-                    && root.flyoutType === toolButton.modelData.type) root.flyoutType = ""
+                  onTriggered: if (toolMouse.containsMouse)
+                    root.openFlyoutFor(toolButton, toolButton.modelData.type)
                 }
                 ToolHint { visible: toolMouse.containsMouse; text: root.toolHint(toolButton.modelData.type) }
 
                 // A hover bridge and close grace period keep choices reachable.
-                Item {
-                  id: tierFlyout
-                  visible: root.flyoutType === toolButton.modelData.type
-                  anchors.left: parent.right
-                  anchors.leftMargin: 0
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: flyoutBg.width + Style.space(6)
-                  height: flyoutBg.height
-                  z: 200
-
-                  // Observe the actual ancestor of the choices. A sibling
-                  // hover bridge underneath them loses hover to their MouseAreas.
-                  HoverHandler {
-                    id: flyoutHover
-                    onHoveredChanged: {
-                      if (hovered) closeFlyout.stop()
-                      else closeFlyout.restart()
-                    }
-                  }
-
-                  Rectangle {
-                    id: flyoutBg
-                    x: Style.space(6)
-                    width: flyoutRow.implicitWidth + Style.space(12)
-                    height: flyoutRow.implicitHeight + Style.space(12)
-                    radius: Style.space(6)
-                    color: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 0.97)
-                    border.width: 1
-                    border.color: root.neutralTint(0.3)
-
-                    Row {
-                      id: flyoutRow
-                      anchors.centerIn: parent
-                      spacing: Style.space(8)
-
-                      Repeater {
-                        model: toolButton.decorations ? 2 : toolButton.upgradeable ? 3 : 0
-
-                        Column {
-                          id: tierEntry
-                          required property int index
-                          readonly property string ttype: toolButton.decorations
-                            ? [Model.TILE_TREE, Model.TILE_FLOWERS][index] : toolButton.modelData.type
-                          readonly property int tierIndex: toolButton.decorations ? 0 : index
-                          readonly property string tierName: toolButton.decorations
-                            ? Model.TILE_LABELS[ttype] : Model.UPGRADE_TIER_NAMES[ttype][tierIndex]
-                          readonly property int threshold: Model.UPGRADE_THRESHOLDS[tierIndex]
-                          readonly property bool unlocked: root.population >= threshold
-                          spacing: Style.space(2)
-                          width: Style.space(64)
-
-                          Rectangle {
-                            width: Style.space(30)
-                            height: Style.space(30)
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            radius: Style.space(4)
-                            opacity: tierEntry.unlocked ? 1.0 : 0.45
-                            color: root.activeTool === tierEntry.ttype
-                              && ((tierEntry.tierIndex === 0 && root.upgradeTarget === "")
-                                || (tierEntry.tierIndex > 0 && root.upgradeTarget === tierEntry.ttype
-                                  && root.selectedTier === tierEntry.tierIndex))
-                              ? Qt.rgba(0.88, 0.62, 0.22, 0.35) : "transparent"
-                            border.width: 1
-                            border.color: root.neutralTint(0.35)
-
-                            Canvas {
-                              anchors.fill: parent
-                              anchors.margins: Style.space(2)
-                              visible: tierSprite.status !== Image.Ready
-                              onPaint: {
-                                var ctx = getContext("2d")
-                                ctx.clearRect(0, 0, width, height)
-                                switch (tierEntry.ttype) {
-                                case Model.TILE_PARK: root.drawPark(ctx, 0, 0, width, tierEntry.tierIndex); break
-                                case Model.TILE_POWER: root.drawPower(ctx, 0, 0, width, tierEntry.tierIndex); break
-                                case Model.TILE_WATER: root.drawWater(ctx, 0, 0, width, tierEntry.tierIndex); break
-                                case Model.TILE_FIRE: root.drawFire(ctx, 0, 0, width, tierEntry.tierIndex); break
-                                case Model.TILE_POLICE: root.drawPolice(ctx, 0, 0, width, tierEntry.tierIndex); break
-                                case Model.TILE_SCHOOL: root.drawSchool(ctx, 0, 0, width, tierEntry.tierIndex); break
-                                case Model.TILE_MEDICAL: root.drawMedical(ctx, 0, 0, width, tierEntry.tierIndex); break
-                                case Model.TILE_TRANSIT: root.drawTransit(ctx, 0, 0, width, tierEntry.tierIndex); break
-                                case Model.TILE_TREE:
-                                case Model.TILE_FLOWERS: root.drawPark(ctx, 0, 0, width, 0); break
-                                }
-                              }
-                            }
-
-                            Image {
-                              id: tierSprite
-                              anchors.fill: parent
-                              anchors.margins: Style.space(2)
-                              source: root.previewSpriteSource(tierEntry.ttype, tierEntry.tierIndex)
-                              fillMode: Image.PreserveAspectFit
-                              smooth: true
-                              visible: status === Image.Ready
-                            }
-
-                            Text {
-                              visible: !tierEntry.unlocked
-                              anchors.centerIn: parent
-                              text: "🔒"
-                              font.pixelSize: Style.space(13)
-                            }
-
-                            MouseArea {
-                              id: tierMouse
-                              anchors.fill: parent
-                              hoverEnabled: true
-                              cursorShape: tierEntry.unlocked ? Qt.PointingHandCursor : Qt.ArrowCursor
-                              onClicked: {
-                                if (!tierEntry.unlocked) return
-                                if (toolButton.decorations) root.decorationTool = tierEntry.ttype
-                                root.upgradeTarget = tierEntry.tierIndex === 0 ? "" : tierEntry.ttype
-                                root.selectedTier = tierEntry.tierIndex
-                                root.activeTool = tierEntry.ttype
-                                root.flyoutType = ""
-                              }
-                            }
-                            ToolHint {
-                              visible: tierMouse.containsMouse
-                              text: toolButton.decorations ? root.toolHint(tierEntry.ttype)
-                                : tierEntry.tierName + " · " + (tierEntry.unlocked
-                                  ? "$" + Model.totalInvestment(tierEntry.ttype, tierEntry.tierIndex) + " new; upgrades pay the difference"
-                                  : "Unlocks at population " + tierEntry.threshold)
-                            }
-                          }
-
-                          Text {
-                            width: parent.width
-                            horizontalAlignment: Text.AlignHCenter
-                            wrapMode: Text.WordWrap
-                            text: tierEntry.tierName
-                            font.pixelSize: Style.space(8)
-                            color: Color.menu.text
-                          }
-                          Text {
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            text: tierEntry.unlocked
-                              ? "$" + Model.totalInvestment(tierEntry.ttype, tierEntry.tierIndex)
-                              : ("Pop " + tierEntry.threshold)
-                            font.pixelSize: Style.space(8)
-                            color: root.neutralTint(0.7)
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
               }
             }
           }
@@ -5843,6 +5706,174 @@ Item {
           color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
+        }
+      }
+    }
+  }
+
+  // Declared last and at the root so it paints above everything and, more to
+  // the point, so the pointer can actually reach it: positioned from the tool
+  // button via openFlyoutFor rather than anchored inside it.
+  Timer {
+    id: flyoutCloseTimer
+    interval: 300
+    onTriggered: if (!flyoutHover.hovered && !flyoutBlocker.containsMouse) root.flyoutType = ""
+  }
+
+  Item {
+    id: tierFlyout
+    visible: root.flyoutType !== ""
+    x: root.flyoutAnchorX
+    y: root.flyoutAnchorY - height / 2
+    width: flyoutBg.width + Style.space(6)
+    height: flyoutBg.height
+    z: 9000
+
+    // Input-opaque body, declared first so the choices drawn after it still
+    // get their own clicks. Without this, reaching across the flyout also
+    // hovered whatever sat beneath it — in two columns, the neighbouring
+    // tool button, whose onEntered clears flyoutType if it has no tiers.
+    MouseArea {
+      id: flyoutBlocker
+      anchors.fill: parent
+      hoverEnabled: true
+    }
+
+    // Observe the actual ancestor of the choices. A sibling
+    // hover bridge underneath them loses hover to their MouseAreas.
+    HoverHandler {
+      id: flyoutHover
+      onHoveredChanged: {
+        if (hovered) flyoutCloseTimer.stop()
+        else flyoutCloseTimer.restart()
+      }
+    }
+
+    Rectangle {
+      id: flyoutBg
+      x: Style.space(6)
+      width: flyoutRow.implicitWidth + Style.space(12)
+      height: flyoutRow.implicitHeight + Style.space(12)
+      radius: Style.space(6)
+      color: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 0.97)
+      border.width: 1
+      border.color: root.neutralTint(0.3)
+
+      Row {
+        id: flyoutRow
+        anchors.centerIn: parent
+        spacing: Style.space(8)
+
+        Repeater {
+          model: root.flyoutDecorations ? 2 : root.flyoutUpgradeable ? 3 : 0
+
+          Column {
+            id: tierEntry
+            required property int index
+            readonly property string ttype: root.flyoutDecorations
+              ? [Model.TILE_TREE, Model.TILE_FLOWERS][index] : root.flyoutType
+            readonly property int tierIndex: root.flyoutDecorations ? 0 : index
+            readonly property string tierName: root.flyoutDecorations
+              ? (Model.TILE_LABELS[ttype] || "")
+              : (Model.UPGRADE_TIER_NAMES[ttype] ? Model.UPGRADE_TIER_NAMES[ttype][tierIndex] : "")
+            readonly property int threshold: Model.UPGRADE_THRESHOLDS[tierIndex]
+            readonly property bool unlocked: root.population >= threshold
+            spacing: Style.space(2)
+            width: Style.space(64)
+
+            Rectangle {
+              width: Style.space(30)
+              height: Style.space(30)
+              anchors.horizontalCenter: parent.horizontalCenter
+              radius: Style.space(4)
+              opacity: tierEntry.unlocked ? 1.0 : 0.45
+              color: root.activeTool === tierEntry.ttype
+                && ((tierEntry.tierIndex === 0 && root.upgradeTarget === "")
+                  || (tierEntry.tierIndex > 0 && root.upgradeTarget === tierEntry.ttype
+                    && root.selectedTier === tierEntry.tierIndex))
+                ? Qt.rgba(0.88, 0.62, 0.22, 0.35) : "transparent"
+              border.width: 1
+              border.color: root.neutralTint(0.35)
+
+              Canvas {
+                anchors.fill: parent
+                anchors.margins: Style.space(2)
+                visible: tierSprite.status !== Image.Ready
+                onPaint: {
+                  var ctx = getContext("2d")
+                  ctx.clearRect(0, 0, width, height)
+                  switch (tierEntry.ttype) {
+                  case Model.TILE_PARK: root.drawPark(ctx, 0, 0, width, tierEntry.tierIndex); break
+                  case Model.TILE_POWER: root.drawPower(ctx, 0, 0, width, tierEntry.tierIndex); break
+                  case Model.TILE_WATER: root.drawWater(ctx, 0, 0, width, tierEntry.tierIndex); break
+                  case Model.TILE_FIRE: root.drawFire(ctx, 0, 0, width, tierEntry.tierIndex); break
+                  case Model.TILE_POLICE: root.drawPolice(ctx, 0, 0, width, tierEntry.tierIndex); break
+                  case Model.TILE_SCHOOL: root.drawSchool(ctx, 0, 0, width, tierEntry.tierIndex); break
+                  case Model.TILE_MEDICAL: root.drawMedical(ctx, 0, 0, width, tierEntry.tierIndex); break
+                  case Model.TILE_TRANSIT: root.drawTransit(ctx, 0, 0, width, tierEntry.tierIndex); break
+                  case Model.TILE_TREE:
+                  case Model.TILE_FLOWERS: root.drawPark(ctx, 0, 0, width, 0); break
+                  }
+                }
+              }
+
+              Image {
+                id: tierSprite
+                anchors.fill: parent
+                anchors.margins: Style.space(2)
+                source: root.previewSpriteSource(tierEntry.ttype, tierEntry.tierIndex)
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                visible: status === Image.Ready
+              }
+
+              Text {
+                visible: !tierEntry.unlocked
+                anchors.centerIn: parent
+                text: "🔒"
+                font.pixelSize: Style.space(13)
+              }
+
+              MouseArea {
+                id: tierMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: tierEntry.unlocked ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: {
+                  if (!tierEntry.unlocked) return
+                  if (root.flyoutDecorations) root.decorationTool = tierEntry.ttype
+                  root.upgradeTarget = tierEntry.tierIndex === 0 ? "" : tierEntry.ttype
+                  root.selectedTier = tierEntry.tierIndex
+                  root.activeTool = tierEntry.ttype
+                  root.flyoutType = ""
+                }
+              }
+              ToolHint {
+                visible: tierMouse.containsMouse
+                text: root.flyoutDecorations ? root.toolHint(tierEntry.ttype)
+                  : tierEntry.tierName + " · " + (tierEntry.unlocked
+                    ? "$" + Model.totalInvestment(tierEntry.ttype, tierEntry.tierIndex) + " new; upgrades pay the difference"
+                    : "Unlocks at population " + tierEntry.threshold)
+              }
+            }
+
+            Text {
+              width: parent.width
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+              text: tierEntry.tierName
+              font.pixelSize: Style.space(8)
+              color: Color.menu.text
+            }
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              text: tierEntry.unlocked
+                ? "$" + Model.totalInvestment(tierEntry.ttype, tierEntry.tierIndex)
+                : ("Pop " + tierEntry.threshold)
+              font.pixelSize: Style.space(8)
+              color: root.neutralTint(0.7)
+            }
+          }
         }
       }
     }

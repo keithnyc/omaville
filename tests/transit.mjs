@@ -389,3 +389,43 @@ console.log('PASS: optional coverage reports reach without costing approval or r
 
 console.log('PASS: transport advises on its own slot, gated by city size, and every ' +
   'advisor stays well-formed.');
+
+// --- the tier flyout must stay out of the tool button --------------------
+// It used to be a child of the 34px palette button while extending ~226px
+// past it. Qt renders a child outside its parent's bounds but will not
+// reliably deliver pointer events there, so the flyout was visible and
+// completely unclickable — every event inside it went to the map underneath.
+// The offscreen hover harness never reproduced this, so the guard is
+// structural: the flyout lives at CityView's root and is positioned from the
+// button, and it must stay that way.
+{
+  const qml = fs.readFileSync(new URL('../CityView.qml', import.meta.url), 'utf8');
+  const lines = qml.split('\n');
+  const flyoutAt = lines.findIndex(l => l.includes('id: tierFlyout'));
+  const paletteAt = lines.findIndex(l => l.includes('id: toolPalette'));
+  assert.ok(flyoutAt > 0 && paletteAt > 0, 'both still exist');
+
+  // Indentation is the cheapest reliable proxy for nesting depth here: a root
+  // child sits at two spaces, a Repeater delegate's child at eighteen.
+  const indent = i => lines[i].length - lines[i].trimStart().length;
+  assert.ok(indent(flyoutAt) <= 6,
+    `tierFlyout must be a root-level child, found at indent ${indent(flyoutAt)}`);
+  assert.ok(indent(flyoutAt) < indent(paletteAt),
+    'and shallower than the palette it belongs to');
+
+  // It must not reach back into the delegate, or it cannot live at the root.
+  const flyoutBlock = lines.slice(flyoutAt, flyoutAt + 170).join('\n');
+  assert.ok(!/\btoolButton\b/.test(flyoutBlock),
+    'the shared flyout must not reference the per-button delegate');
+
+  // Positioned from the button rather than anchored inside it.
+  assert.match(qml, /function openFlyoutFor\(/, 'a positioning helper exists');
+  assert.match(qml, /mapToItem\(root/, 'which maps the button into root coordinates');
+  assert.ok(!/anchors\.left:\s*parent\.right[\s\S]{0,200}id: flyoutBg/.test(qml),
+    'and it is not anchored to a button edge any more');
+
+  // One flyout, not one per tool.
+  assert.equal((qml.match(/id: tierFlyout/g) || []).length, 1, 'exactly one flyout instance');
+}
+
+console.log('PASS: the tier flyout stays reachable — root-level, button-positioned, single instance.');
