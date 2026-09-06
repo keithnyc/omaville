@@ -1032,16 +1032,67 @@ Item {
     if (index >= 0) root.drawEntrancePath(ctx, gx, gy, cellSize, index)
   }
 
+  // Cosmetic lot detail, drawn under the building so the centre is occluded
+  // and only the frontage and exposed corners read. Everything here is
+  // ctx.fillRect against a coordinate hash: no assets, no randomness, and
+  // nothing that shifts on repaint, zoom, growth or reopening the city.
+  //
+  // Deliberately one self-contained function rather than three: tests/
+  // lot-dressing.mjs extracts it by name and runs it in a bare context, so a
+  // call out to a sibling helper would be undefined there.
   function drawLotDressing(ctx, gx, gy, size, type, index) {
-    // Cosmetic only. Independent coordinate hash leaves a third of lots plain
-    // and never shuffles on repaint, zoom, growth, or reopening the city.
-    if (index < 0 || (type !== "R" && type !== "C")) return
+    if (index < 0) return
+    var yard = type === "I"
+    if (!yard && type !== "R" && type !== "C") return
     var seed = Math.imul((index | 0) ^ 0x5bd1e995, 0x45d9f3b)
     seed = (seed ^ (seed >>> 16)) >>> 0
     if (seed % 3 === 0) return
     ctx.save()
     ctx.translate(gx, gy)
     ctx.scale(size, size)
+
+    // Which side the loose detail sits on, shared by every category so a lot
+    // never stacks two things in the same corner.
+    var right = (seed >>> 4) % 2 === 0
+
+    if (yard) {
+      // Industry gets a working yard, not a garden: hardstanding, pallets and
+      // a skip. Greys, rust and pale timber only — green here would read as
+      // landscaping and blur the line with residential frontage.
+      ctx.fillStyle = "#4c4f4a"
+      ctx.fillRect(0.07, 0.855, 0.60, 0.105)
+      ctx.fillStyle = "#6d6f66"
+      ctx.fillRect(0.08, 0.862, 0.58, 0.075)
+
+      var yx = right ? 0.80 : 0.045
+      if ((seed >>> 6) % 2 === 0) {
+        // Stacked pallets: three pale boards with dark gaps between them.
+        for (var pallet = 0; pallet < 3; pallet++) {
+          ctx.fillStyle = pallet % 2 === 0 ? "#9b7f4e" : "#876b41"
+          ctx.fillRect(yx, 0.845 - pallet * 0.042, 0.145, 0.030)
+        }
+      } else {
+        // A skip, with a rusted rim so it does not read as a plain block.
+        ctx.fillStyle = "rgba(16, 18, 16, 0.30)"
+        ctx.fillRect(yx + 0.012, 0.800, 0.145, 0.115)
+        ctx.fillStyle = "#4a5a4c"
+        ctx.fillRect(yx, 0.785, 0.150, 0.115)
+        ctx.fillStyle = "#7d5a3a"
+        ctx.fillRect(yx, 0.785, 0.150, 0.020)
+      }
+
+      // A drum or two on the opposite side, on about half of yards.
+      if ((seed >>> 9) % 2 === 0) {
+        var dx = right ? 0.055 : 0.845
+        ctx.fillStyle = "#8a4f33"
+        ctx.fillRect(dx, 0.855, 0.058, 0.080)
+        ctx.fillStyle = "#b06a44"
+        ctx.fillRect(dx + 0.006, 0.855, 0.046, 0.026)
+      }
+      ctx.restore()
+      return
+    }
+
     // A small doorstep, not a slab beneath the whole building. Existing
     // road-oriented entrance paths remain visible and unchanged.
     ctx.fillStyle = type === "C" ? "#74796a" : "#81816b"
@@ -1050,9 +1101,8 @@ Item {
     ctx.fillRect(0.26, 0.88, 0.31, 0.08)
     ctx.fillStyle = "#565e4d"
     ctx.fillRect(0.41, 0.88, 0.012, 0.105)
+
     // Keep planting in exposed corners, clear of the central entrance.
-    // The building is drawn afterwards, naturally occluding anything behind it.
-    var right = (seed >>> 4) % 2 === 0
     var x = right ? 0.855 : 0.035
     var y = (seed >>> 6) % 2 === 0 ? 0.83 : 0.70
     var hedge = type === "R" && (seed >>> 8) % 2 === 0
@@ -1070,6 +1120,43 @@ Item {
     ctx.fillRect(x + 0.007, y, 0.09, h - 0.018)
     ctx.fillStyle = "#81964f"
     ctx.fillRect(x + 0.012, y, 0.055, 0.035)
+
+    // A second, smaller object on the far side from the planting, on about
+    // half of dressed lots — enough to break up a terrace without every
+    // frontage acquiring the same silhouette.
+    if ((seed >>> 11) % 2 === 0) {
+      var ox = right ? 0.055 : 0.855
+      if (type === "R") {
+        if ((seed >>> 13) % 2 === 0) {
+          // Wheelie bin: body and a lighter lid.
+          ctx.fillStyle = "#3f4a3d"
+          ctx.fillRect(ox, 0.862, 0.062, 0.082)
+          ctx.fillStyle = "#5d6b56"
+          ctx.fillRect(ox, 0.862, 0.062, 0.022)
+        } else {
+          // Mailbox on a post.
+          ctx.fillStyle = "#5a5348"
+          ctx.fillRect(ox + 0.024, 0.878, 0.014, 0.066)
+          ctx.fillStyle = "#7b6f5c"
+          ctx.fillRect(ox, 0.856, 0.062, 0.034)
+        }
+      } else if ((seed >>> 13) % 2 === 0) {
+        // Sandwich board leaning by the door.
+        ctx.fillStyle = "rgba(16, 18, 16, 0.28)"
+        ctx.fillRect(ox + 0.010, 0.905, 0.060, 0.038)
+        ctx.fillStyle = "#6b5a3e"
+        ctx.fillRect(ox, 0.860, 0.058, 0.070)
+        ctx.fillStyle = "#c8b98d"
+        ctx.fillRect(ox + 0.008, 0.868, 0.042, 0.042)
+      } else {
+        // A bench under the window.
+        ctx.fillStyle = "#7a6a4d"
+        ctx.fillRect(ox, 0.884, 0.082, 0.024)
+        ctx.fillStyle = "#4f4536"
+        ctx.fillRect(ox + 0.006, 0.906, 0.014, 0.032)
+        ctx.fillRect(ox + 0.062, 0.906, 0.014, 0.032)
+      }
+    }
     ctx.restore()
   }
 
@@ -1757,6 +1844,7 @@ Item {
     if (!cityCanvas.isImageLoaded(source)) return false
 
     root.drawSpriteLot(ctx, gx, gy, cellSize, "I", index)
+    root.drawLotDressing(ctx, gx, gy, cellSize, "I", index)
 
     var widthScale = [0.78, 0.86, 0.90][level - 1]
     var drawW = cellSize * widthScale
