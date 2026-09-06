@@ -377,6 +377,7 @@ Item {
   property bool overlayMenuOpen: false
   property bool historyOpen: false
   property bool goalOpen: false
+  property bool marketOpen: false
   readonly property bool editingTownName:
     (root.settingsOpen && townNameInput.activeFocus)
     || (root.confirmNewGameOpen
@@ -406,6 +407,7 @@ Item {
     { action: "budget", label: "Budget", enabled: root.serviceReady },
     { action: "advisors", label: "Advisors", enabled: root.serviceReady },
     { action: "history", label: "History", enabled: root.serviceReady },
+    { action: "market", label: "Market", enabled: root.serviceReady },
     { action: "goal", label: "City Goal", enabled: root.serviceReady },
     { action: "name", label: "Name Town", enabled: root.serviceReady },
     { action: "", label: "", enabled: false, heading: true },
@@ -420,6 +422,7 @@ Item {
     else if (action === "advisors") root.advisorsOpen = true
     else if (action === "history") root.historyOpen = true
     else if (action === "goal") root.goalOpen = true
+    else if (action === "market") root.marketOpen = true
     else if (action === "settings") root.settingsOpen = true
     else if (action === "name") {
       root.settingsOpen = true
@@ -4665,12 +4668,12 @@ Item {
   // useless the moment the map pushed it out of view.
   Item {
     anchors.fill: parent
-    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
+    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
 
     MouseArea {
       anchors.fill: parent
-      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen
-      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false; root.goalOpen = false }
+      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen
+      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false; root.goalOpen = false; root.marketOpen = false }
     }
 
     Rectangle {
@@ -5120,6 +5123,164 @@ Item {
           }
 
           Button { text: "Done"; onClicked: root.historyOpen = false }
+        }
+      }
+    }
+
+    // Stakes in the neighbouring towns. Money here is money the treasury does
+    // not have — the trade-off is the mechanic, so the card leads with what is
+    // committed rather than with what it might be worth.
+    Rectangle {
+      id: marketCard
+      visible: root.marketOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(460))
+      height: Math.min(parent.height - Style.space(32), marketColumn.implicitHeight + Style.space(28))
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      MouseArea { anchors.fill: parent }
+
+      Flickable {
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        contentHeight: marketColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+
+        Column {
+          id: marketColumn
+          width: parent.width
+          spacing: Style.space(8)
+
+          Text {
+            text: "Neighbouring towns"
+            color: Color.menu.text
+            font.bold: true
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: root.serviceReady
+              ? "Invested $" + Math.round(root.cityService.portfolioCost)
+                + " · now worth $" + Math.round(root.cityService.portfolioValue)
+                + ". This money is not in the treasury: if the city cannot pay its "
+                + "bills it will be sold at a loss to cover the gap."
+              : ""
+            color: root.serviceReady && root.cityService.portfolioValue < root.cityService.portfolioCost
+              ? "#e0806a" : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Repeater {
+            model: root.serviceReady ? root.cityService.marketQuotes : []
+
+            Rectangle {
+              id: townRow
+              required property var modelData
+              width: marketColumn.width
+              height: townText.implicitHeight + Style.space(14)
+              radius: Style.space(4)
+              color: townRow.modelData.units > 0
+                ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.10) : "transparent"
+              border.width: 1
+              border.color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.18)
+              opacity: root.outOfOffice ? 0.45 : 1
+
+              Column {
+                id: townText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.margins: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
+
+                Item {
+                  width: parent.width
+                  height: townName.implicitHeight
+                  Text {
+                    id: townName
+                    anchors.left: parent.left
+                    text: townRow.modelData.name
+                      + (townRow.modelData.connected ? " · linked" : "")
+                    color: Color.menu.text
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    anchors.right: parent.right
+                    text: "$" + townRow.modelData.price.toFixed(2)
+                      + (townRow.modelData.price >= townRow.modelData.previous ? "  \u25b2" : "  \u25bc")
+                    color: townRow.modelData.price >= townRow.modelData.previous ? "#7fbf7f" : "#e0806a"
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Text {
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  text: townRow.modelData.temperament
+                    + (townRow.modelData.connected
+                        ? " · rises and falls with your own commerce"
+                        : " · unconnected, moves on its own")
+                    + (townRow.modelData.units > 0
+                        ? "\nHolding $" + Math.round(townRow.modelData.value)
+                          + " (" + (townRow.modelData.gain >= 0 ? "+" : "\u2212") + "$"
+                          + Math.abs(Math.round(townRow.modelData.gain)) + ")"
+                        : "")
+                  color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.55)
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+
+                Row {
+                  spacing: Style.space(6)
+                  Button {
+                    text: "Buy $1k"
+                    enabled: !root.outOfOffice && root.serviceReady
+                      && root.treasury > 1000 + Model.TREASURY_FLOOR
+                    onClicked: root.cityService.buyStake(townRow.modelData.id, 1000)
+                  }
+                  Button {
+                    text: "Buy $10k"
+                    enabled: !root.outOfOffice && root.serviceReady
+                      && root.treasury > 10000 + Model.TREASURY_FLOOR
+                    onClicked: root.cityService.buyStake(townRow.modelData.id, 10000)
+                  }
+                  Button {
+                    text: "Sell half"
+                    enabled: !root.outOfOffice && townRow.modelData.units > 0
+                    onClicked: root.cityService.sellStake(townRow.modelData.id, 0.5)
+                  }
+                  Button {
+                    text: "Sell all"
+                    enabled: !root.outOfOffice && townRow.modelData.units > 0
+                    onClicked: root.cityService.sellStake(townRow.modelData.id, 1)
+                  }
+                }
+              }
+            }
+          }
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: "Every trade pays " + Math.round(Model.MARKET_COMMISSION * 100)
+              + "% commission, so churning costs money. A forced sale loses "
+              + Math.round(Model.MARKET_DISTRESS * 100) + "% on top."
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.45)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Button { text: "Done"; onClicked: root.marketOpen = false }
         }
       }
     }

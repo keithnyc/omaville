@@ -177,6 +177,16 @@ Item {
   readonly property real civicTarget: root.initialized
     ? Model.civicTarget(root.coverage, root.funding, Model.findUtilities(root.grid))
     : Model.CIVIC_MIN
+  // Stakes in the neighbouring towns: { townName: { units, cost } }. Money
+  // here is money the treasury does not have, which is the entire point.
+  property var holdings: ({})
+  readonly property var marketQuotes: root.initialized
+    ? Model.marketQuotes(root.neighbors, root.connectedNeighborNames,
+        root.ageMinutes, root.cityStats, root.holdings) : []
+  readonly property real portfolioValue: root.initialized
+    ? Model.portfolioValue(root.neighbors, root.connectedNeighborNames,
+        root.ageMinutes, root.cityStats, root.holdings) : 0
+  readonly property real portfolioCost: Model.portfolioCost(root.holdings)
   property int sustainedTicks: 0
   // ageMinutes when the city first held it long enough; 0 means never.
   property int sustainableAt: 0
@@ -243,6 +253,38 @@ Item {
   // Borrowing is gated on the city being able to service the debt (see
   // Model.canBorrow), so a loan is a lever for a mayor with a plan rather
   // than an infinite hole for one without.
+  function buyStake(town, amount) {
+    if (!root.initialized || root.outOfOffice) return false
+    var quote = null
+    for (var i = 0; i < root.marketQuotes.length; i++)
+      if (root.marketQuotes[i].id === town) quote = root.marketQuotes[i]
+    if (!quote) return false
+    var spend = Math.min(amount, root.treasury - Model.TREASURY_FLOOR)
+    if (!(spend > 0)) return false
+    var result = Model.buyUnits(root.holdings, town, quote.price, spend)
+    if (!result) return false
+    root.holdings = result.holdings
+    root.treasury += result.cash
+    root.logEvent("market", "Bought $" + Math.round(spend) + " of " + town + ".")
+    flushState()
+    return true
+  }
+
+  function sellStake(town, fraction) {
+    if (!root.initialized || root.outOfOffice) return false
+    var quote = null
+    for (var i = 0; i < root.marketQuotes.length; i++)
+      if (root.marketQuotes[i].id === town) quote = root.marketQuotes[i]
+    if (!quote) return false
+    var result = Model.sellUnits(root.holdings, town, quote.price, fraction)
+    if (!result) return false
+    root.holdings = result.holdings
+    root.treasury += result.cash
+    root.logEvent("market", "Sold " + town + " for $" + Math.round(result.cash) + ".")
+    flushState()
+    return true
+  }
+
   function borrow(offerId) {
     if (!root.initialized || root.outOfOffice) return false
     var offer = Model.loanOffer(offerId)
@@ -369,6 +411,7 @@ Item {
     root.sustainedTicks = 0
     root.sustainableAt = 0
     root.civicLevel = Model.CIVIC_MIN
+    root.holdings = ({})
     root.outOfOfficeUntil = 0
     root.lastApproval = 0
     root.neighbors = Model.makeNeighbors(root.gridSize, Date.now())
@@ -533,6 +576,24 @@ Item {
           if (root.missedLoanTicks === 3)
             root.notify(root.cityName + " — missed payment",
               "The city cannot cover its loan repayments. Cut spending or raise taxes.")
+        }
+      }
+      // The teeth. Money in the market is money the city does not have, so a
+      // shortfall is covered by selling the portfolio at a distress price
+      // rather than being quietly absorbed by the treasury floor. This is the
+      // moment an over-committed mayor finds out what the gamble cost.
+      if (balance < 0 && root.portfolioValue > 0) {
+        var rescue = Model.liquidateFor(root.holdings, root.neighbors,
+          root.connectedNeighborNames, root.ageMinutes, root.cityStats, -balance)
+        if (rescue.raised > 0) {
+          root.holdings = rescue.holdings
+          balance += rescue.raised
+          var soldNames = rescue.sold.join(", ")
+          root.notify(root.cityName + " — forced sale",
+            "The books would not balance, so the city sold its stake in "
+              + soldNames + " at a loss to cover the shortfall.")
+          root.logEvent("loss", "Sold " + soldNames + " under duress for $"
+            + Math.round(rescue.raised) + ".")
         }
       }
       root.treasury = Math.max(Model.TREASURY_FLOOR, balance)
@@ -766,6 +827,7 @@ Item {
       ordinances: root.ordinances,
       lastElectionTick: root.lastElectionTick,
       civicLevel: root.civicLevel,
+      holdings: root.holdings,
       sustainedTicks: root.sustainedTicks,
       sustainableAt: root.sustainableAt,
       outOfOfficeUntil: root.outOfOfficeUntil,
@@ -838,6 +900,7 @@ Item {
       crimes = Array.isArray(saved.crimes) ? saved.crimes : []
       ordinances = Array.isArray(saved.ordinances) ? saved.ordinances : []
       lastElectionTick = Math.max(0, num(saved.lastElectionTick, 0))
+      holdings = (saved.holdings && typeof saved.holdings === "object") ? saved.holdings : ({})
       civicLevel = saved.civicLevel !== undefined
         ? Math.max(Model.CIVIC_MIN, Math.min(Model.CIVIC_MAX, num(saved.civicLevel, Model.CIVIC_MIN)))
         : -1   // resolved below, once coverage can be computed from the grid

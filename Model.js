@@ -2379,7 +2379,7 @@ var LOG_KIND_LABELS = {
   fire: "Fire", loss: "Destroyed", milestone: "Milestone",
   loan: "Borrowed", brownout: "Brownout", dilemma: "Decision", budget: "Budget",
   crime: "Crime", neighbor: "Highway",
-  ordinance: "Policy", election: "Election"
+  ordinance: "Policy", election: "Election", market: "Market"
 }
 
 // --- firefighting depth ---------------------------------------------------
@@ -2942,4 +2942,168 @@ function validName(value) {
 function mayorTitle(name) {
   var clean = sanitizeName(name)
   return clean.length === 0 ? "Mayor" : "Mayor " + clean
+}
+
+// --- the market -----------------------------------------------------------
+// Somewhere for a mature city's surplus to go that is a genuine trade-off
+// rather than a money sink. Cash put into the market leaves the treasury, so
+// it is not there when a fire needs a station or the water grid needs another
+// plant — and if the city cannot pay its bills it is sold out from under you
+// at a distress price. The gamble has to be able to hurt or it is just a
+// slower way of getting richer.
+//
+// Prices are DERIVED from (seed, tick), never accumulated and never stored.
+// Three things follow, all of them deliberate:
+//   - the save stays bounded, which is a hard constraint here (see packGrid),
+//   - reloading cannot reroll the market to dodge a loss,
+//   - and pricing is O(1) rather than O(ticks), so a year-200 city does not
+//     replay two hundred ticks of random walk on every repaint.
+// The shape comes from three overlapping cycles rather than a true random
+// walk, which also means prices oscillate instead of drifting to zero or to
+// the moon over a long idle game.
+var MARKET_TRADE_WEIGHT = 0.30
+var MARKET_COMMISSION = 0.01
+// What the city loses per unit when the market is liquidated to pay the bills.
+var MARKET_DISTRESS = 0.15
+var MARKET_MIN_PRICE = 0.15
+// How volatile a town can be, picked per town from its own index so each one
+// has a fixed character for the life of the city rather than a random mood.
+var MARKET_TEMPERAMENTS = [
+  { key: "steady", label: "Steady", amps: [0.05, 0.03, 0.02], noise: 0.010 },
+  { key: "mixed", label: "Mixed", amps: [0.14, 0.08, 0.05], noise: 0.028 },
+  { key: "volatile", label: "Volatile", amps: [0.30, 0.17, 0.11], noise: 0.065 }
+]
+
+// Deterministic 0..1 from any pair, mixed hard enough that neighbouring ticks
+// do not produce neighbouring values (the bug that made an earlier seeded
+// system emit forty near-identical "random" draws).
+function marketHash(a, b) {
+  var h = Math.imul((a | 0) ^ 0x9e3779b9, 0x85ebca6b)
+  h = Math.imul(h ^ (b | 0) ^ (h >>> 13), 0xc2b2ae35)
+  h = (h ^ (h >>> 16)) >>> 0
+  return h / 4294967296
+}
+
+// A town's fixed character, from its own connector index so it never changes.
+function townTemperament(neighbor) {
+  var pick = Math.floor(marketHash(neighbor.index, 7919) * MARKET_TEMPERAMENTS.length)
+  return MARKET_TEMPERAMENTS[clamp(pick, 0, MARKET_TEMPERAMENTS.length - 1)]
+}
+
+// Once a highway is open you are trading with the place, so its fortunes ride
+// partly on yours. That is the whole tension: a connected town is the safer
+// bet *and* the one that falls with you, while an unconnected town is pure
+// nerve and uncorrelated with everything you control.
+function townTradeFactor(connected, stats) {
+  if (!connected || !stats) return 1
+  var trade = (stats.jobsCommercial || 0) + (stats.population || 0) * 0.25
+  return 1 + MARKET_TRADE_WEIGHT * (clamp(trade / 2600, 0, 2) - 1)
+}
+
+function townPrice(neighbor, tick, stats, connected) {
+  if (!neighbor) return 0
+  var temper = townTemperament(neighbor)
+  var t = Math.max(0, tick || 0)
+  var periods = [67 + (neighbor.index % 29), 31 + (neighbor.index % 13), 11 + (neighbor.index % 7)]
+  var wave = 1
+  for (var i = 0; i < temper.amps.length; i++) {
+    var phase = marketHash(neighbor.index, i * 977) * Math.PI * 2
+    wave += temper.amps[i] * Math.sin(2 * Math.PI * t / periods[i] + phase)
+  }
+  var jitter = (marketHash(neighbor.index + t, periods[0]) - 0.5) * 2 * temper.noise
+  return Math.max(MARKET_MIN_PRICE, wave * (1 + jitter) * townTradeFactor(connected, stats))
+}
+
+// Every town priced at once, with what the city holds of each. connectedNames
+// is the list the service already derives from the grid for highway bonuses,
+// so a share price and a trade bonus can never disagree about who is linked.
+function marketQuotes(neighbors, connectedNames, tick, stats, holdings) {
+  var out = []
+  var linked = connectedNames || []
+  for (var i = 0; i < (neighbors || []).length; i++) {
+    var n = neighbors[i]
+    var connected = linked.indexOf(n.name) >= 0
+    var price = townPrice(n, tick, stats, connected)
+    var held = (holdings && holdings[n.name]) || { units: 0, cost: 0 }
+    var units = Math.max(0, held.units || 0)
+    var value = units * price
+    out.push({
+      id: n.name, name: n.name, edge: n.edge, connected: connected,
+      temperament: townTemperament(n).label,
+      price: price,
+      // Last tick's price, so the panel can show a direction without keeping
+      // any history of its own.
+      previous: townPrice(n, Math.max(0, tick - 1), stats, connected),
+      units: units, cost: held.cost || 0, value: value,
+      gain: value - (held.cost || 0)
+    })
+  }
+  return out
+}
+
+function portfolioValue(neighbors, connectedNames, tick, stats, holdings) {
+  var quotes = marketQuotes(neighbors, connectedNames, tick, stats, holdings)
+  var total = 0
+  for (var i = 0; i < quotes.length; i++) total += quotes[i].value
+  return total
+}
+
+function portfolioCost(holdings) {
+  var total = 0
+  for (var key in (holdings || {})) total += (holdings[key] || {}).cost || 0
+  return total
+}
+
+// Buying and selling are pure: they take holdings and return new holdings plus
+// the cash delta, so the service never has to reason about partial updates.
+function buyUnits(holdings, id, price, spend) {
+  if (!id || !(price > 0) || !(spend > 0)) return null
+  var fee = spend * MARKET_COMMISSION
+  var units = (spend - fee) / price
+  if (!(units > 0)) return null
+  var next = {}
+  for (var key in (holdings || {})) next[key] = { units: holdings[key].units, cost: holdings[key].cost }
+  var held = next[id] || { units: 0, cost: 0 }
+  next[id] = { units: held.units + units, cost: held.cost + spend }
+  return { holdings: next, cash: -spend, units: units }
+}
+
+// fraction 0..1 of the position. Cost basis is reduced proportionally so the
+// remaining holding still reports an honest gain.
+function sellUnits(holdings, id, price, fraction) {
+  var held = (holdings || {})[id]
+  if (!held || !(held.units > 0) || !(price > 0)) return null
+  var share = clamp(fraction === undefined ? 1 : fraction, 0, 1)
+  var units = held.units * share
+  if (!(units > 0)) return null
+  var gross = units * price
+  var proceeds = gross - gross * MARKET_COMMISSION
+  var next = {}
+  for (var key in holdings) next[key] = { units: holdings[key].units, cost: holdings[key].cost }
+  var remaining = held.units - units
+  if (remaining <= 1e-9) delete next[id]
+  else next[id] = { units: remaining, cost: held.cost * (1 - share) }
+  return { holdings: next, cash: proceeds, units: units }
+}
+
+// The teeth. When the city cannot pay its bills, the market is sold to cover
+// the gap at a discount — so an over-committed mayor does not merely miss an
+// opportunity, they crystallise a loss at the worst possible moment.
+function liquidateFor(holdings, neighbors, connectedNames, tick, stats, needed) {
+  var quotes = marketQuotes(neighbors, connectedNames, tick, stats, holdings)
+  quotes.sort(function(a, b) { return b.value - a.value })
+  var next = holdings, raised = 0, sold = []
+  for (var i = 0; i < quotes.length && raised < needed; i++) {
+    var q = quotes[i]
+    if (q.units <= 0) continue
+    var distressPrice = q.price * (1 - MARKET_DISTRESS)
+    var stillNeed = needed - raised
+    var fraction = clamp(stillNeed / Math.max(1e-9, q.units * distressPrice), 0, 1)
+    var result = sellUnits(next, q.id, distressPrice, fraction)
+    if (!result) continue
+    next = result.holdings
+    raised += result.cash
+    sold.push(q.name)
+  }
+  return { holdings: next, raised: raised, sold: sold }
 }
