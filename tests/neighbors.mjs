@@ -104,9 +104,10 @@ assert.ok(linkedUp.C > alone.C, 'trade raises commercial demand');
 assert.equal(linkedUp.I, alone.I, 'industry is unaffected by highways');
 assert.equal(M.computeDemand(stats).R, alone.R, 'omitting the count means unconnected');
 
-// --- the planner names it as an opportunity ------------------------------
-// A city with room to grow: at its zoned ceiling "housing is full" rightly
-// outranks anything about highways, so use a town that still has headroom.
+// --- the transport advisor names it as an opportunity --------------------
+// Highways live with transport rather than planning: both are about how the
+// city moves, and the planner only ever speaks once, so on a mature city
+// zoning advice permanently drowned this out.
 const roomy = M.emptyGrid(size);
 for (let i = 0; i < 20; i++) { roomy[500 + i] = 'R1'; roomy[560 + i] = 'C1'; roomy[620 + i] = 'I1'; }
 const roomyStats = M.summarize(roomy);
@@ -116,11 +117,12 @@ const advise = (linked, total) => M.cityAdvice({
   income: 500, upkeep: 100, treasury: 2000, funding: M.defaultFunding(),
   loans: [], taxRatePercent: 10, fires: [], crimes: [],
   load: M.utilityLoad(roomy, roomyStats), neighborsLinked: linked, neighborsTotal: total
-}).find(x => x.advisor === 'planning');
+}).find(x => x.advisor === 'transport');
 assert.match(advise(0, 4).headline, /No highways/);
+assert.equal(advise(0, 4).severity, M.SEVERITY_WATCH, 'and it is worth raising');
 assert.match(advise(2, 4).headline, /2 neighbours still unconnected/);
 assert.ok(!/highway|neighbour/i.test(advise(4, 4).headline),
-  'once every highway is open the planner moves on to something else');
+  'once every highway is open the advisor moves on to something else');
 
 
 // --- an already-open highway is not news ----------------------------------

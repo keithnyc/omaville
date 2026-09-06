@@ -351,7 +351,7 @@ console.log('PASS: trips from density and both commute ends, all three counter-l
   'the tick honours, bounded happiness cost, avenue placement/refund/bridges/upkeep, ' +
   'and a calibration gradient where planning pays and sprawl gridlocks.');
 
-// --- the planner names it, and points at the map -------------------------
+// --- the transport advisor names it, and points at the map ---------------
 // Appended after the summary above deliberately: this exercises the advisor
 // wiring rather than the traffic maths itself.
 {
@@ -363,10 +363,14 @@ console.log('PASS: trips from density and both commute ends, all three counter-l
     demand: M.computeDemand(stats, 0), income: 500, upkeep: 100, treasury: 2000,
     funding: M.defaultFunding(), loans: [], taxRatePercent: 10, fires: [], crimes: [],
     load: M.utilityLoad(roomy, stats), neighborsLinked: 4, neighborsTotal: 4, traffic
-  }).find(a => a.advisor === 'planning');
+  }).find(a => a.advisor === 'transport');
 
-  assert.ok(!/gridlock|traffic/i.test(plan(null).headline),
-    'with no survey the planner says nothing about traffic');
+  // Traffic has its own advisor rather than sharing the planner's single slot:
+  // on a mature city "Housing is full" permanently outranked it, so the whole
+  // system had no voice. Severity, not wording, is what says whether it is
+  // raising an alarm — its calm state still has "traffic" in the headline.
+  assert.equal(plan(null).severity, M.SEVERITY_OK,
+    'with no survey the advisor is calm rather than silent');
 
   const fake = share => ({
     totalTrips: 100, stuckShare: 0.1,
@@ -377,8 +381,8 @@ console.log('PASS: trips from density and both commute ends, all three counter-l
   assert.equal(M.jammedLotShare({ lotCongestion: {} }), 0, 'no lots, nothing jammed');
   assert.ok(Math.abs(M.jammedLotShare(fake(0.3)) - 0.3) < 1e-9, 'and it counts what is stuck');
 
-  assert.ok(!/gridlock|traffic/i.test(plan(fake(0.02)).headline),
-    'a couple of jammed lots is not worth the mayor\'s attention');
+  assert.equal(plan(fake(0.02)).severity, M.SEVERITY_OK,
+    'a couple of jammed lots is not worth raising');
   const building = plan(fake(0.12));
   assert.match(building.headline, /Traffic/);
   assert.equal(building.severity, M.SEVERITY_WATCH);

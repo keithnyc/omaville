@@ -1764,10 +1764,14 @@ function advanceLoans(loans) {
 // parallel heuristics. Same reasoning as inspectTile: advice derived from
 // different numbers than the simulation will eventually contradict it, and an
 // advisor that lies is worse than no advisor at all.
-var ADVISOR_ORDER = ["planning", "utilities", "safety", "wellbeing", "finance"]
+// Order is the tie-break when two advisors report the same severity, so it
+// runs roughly in the order a problem stops a city: you cannot fix traffic
+// before you have power, and neither matters with nowhere to live.
+var ADVISOR_ORDER = ["planning", "utilities", "transport", "safety", "wellbeing", "finance"]
 var ADVISOR_NAMES = {
   planning: "City Planner",
   utilities: "Utilities",
+  transport: "Transport",
   safety: "Public Safety",
   wellbeing: "Health & Education",
   finance: "Treasurer"
@@ -1799,9 +1803,7 @@ function coverageRow(coverage, key) {
   return { unmet: 0, coverage: 100, residents: 0 }
 }
 
-function planningAdvice(stats, demand, neighborsLinked, neighborsTotal, traffic) {
-  neighborsLinked = neighborsLinked || 0
-  neighborsTotal = neighborsTotal || 0
+function planningAdvice(stats, demand) {
   var ceiling = residentialCeiling(stats)
   if (stats.resCount === 0)
     return advice("planning", SEVERITY_URGENT, "Nowhere to live",
@@ -1811,21 +1813,6 @@ function planningAdvice(stats, demand, neighborsLinked, neighborsTotal, traffic)
       "Residential is at " + Math.round(stats.population / ceiling * 100) + "% of its zoned ceiling ("
       + stats.population + " of " + ceiling + "). Growth has stopped because there is nowhere left to "
       + "build up — zone more residential land.", "growth")
-  // Gridlock stops growth outright, so it ranks with the things that halt a
-  // city rather than with the balance advice further down. The three fixes are
-  // named explicitly because none of them is obvious from the map alone.
-  var stuckShare = jammedLotShare(traffic)
-  if (stuckShare >= 0.25)
-    return advice("planning", SEVERITY_URGENT, "The city is gridlocked",
-      Math.round(stuckShare * 100) + "% of built lots sit on jammed roads and cannot grow. "
-      + "Zone shops among the houses so fewer trips start at all, open a second route so the "
-      + "traffic has somewhere else to go, widen the worst streets into avenues, or build "
-      + "transit to take cars off them.",
-      "traffic")
-  if (stuckShare >= 0.08)
-    return advice("planning", SEVERITY_WATCH, "Traffic is building up",
-      Math.round(stuckShare * 100) + "% of built lots are on roads at capacity. Widening them "
-      + "into avenues or mixing shops into the housing will keep growth moving.", "traffic")
   var jobs = stats.jobsCommercial + stats.jobsIndustrial
   if (jobs > stats.population * 1.6 && stats.population > 0)
     return advice("planning", SEVERITY_WATCH, "More jobs than workers",
@@ -1833,17 +1820,64 @@ function planningAdvice(stats, demand, neighborsLinked, neighborsTotal, traffic)
   if (stats.population > Math.max(jobs, 0) * 2 && stats.population > 60)
     return advice("planning", SEVERITY_WATCH, "Not enough work",
       stats.population + " residents and only " + jobs + " jobs. Zone commercial or industrial.")
-  if (neighborsTotal > 0 && neighborsLinked < neighborsTotal)
-    return advice("planning", SEVERITY_WATCH,
-      neighborsLinked === 0 ? "No highways out of town"
-        : (neighborsTotal - neighborsLinked) + " neighbours still unconnected",
-      "Running a road to a marked connector at the map edge opens a highway: "
-      + "new arrivals raise housing demand and their trade lifts commerce and income.")
   if (demand && demand.R > 1.2)
     return advice("planning", SEVERITY_WATCH, "Demand for housing",
       "Residential demand is running high — more R zoning would fill quickly.")
   return advice("planning", SEVERITY_OK, "Zoning looks balanced",
     stats.resCount + " residential, " + stats.comCount + " commercial, " + stats.indCount + " industrial.")
+}
+
+// Everything about how the city moves: what the roads are carrying, what
+// relieves them, and the highways that connect the city to anywhere else.
+// Its own advisor rather than a branch of the planner because each advisor
+// speaks once, and on a mature city the planner is always already busy
+// saying something about zoning.
+function transportAdvice(stats, traffic, coverage, neighborsLinked, neighborsTotal) {
+  neighborsLinked = neighborsLinked || 0
+  neighborsTotal = neighborsTotal || 0
+  var stuckShare = jammedLotShare(traffic)
+  var transitRow = coverageRow(coverage || [], "transit")
+  var hasTransit = stats && stats.transitCount > 0
+
+  // Gridlock stops growth outright, so it outranks everything else here. All
+  // four fixes are named because none of them is obvious from the map.
+  if (stuckShare >= 0.25)
+    return advice("transport", SEVERITY_URGENT, "The city is gridlocked",
+      Math.round(stuckShare * 100) + "% of built lots sit on jammed roads and cannot grow. "
+      + "Zone shops among the houses so fewer trips start at all, open a second route so the "
+      + "traffic has somewhere else to go, widen the worst streets into avenues, or build "
+      + "transit to take cars off them.", "traffic")
+  if (stuckShare >= 0.08)
+    return advice("transport", SEVERITY_WATCH, "Traffic is building up",
+      Math.round(stuckShare * 100) + "% of built lots are on roads at capacity. Widening them "
+      + "into avenues, mixing shops into the housing, or a transit stop nearby will keep "
+      + "growth moving.", "traffic")
+
+  // A highway is the cheapest growth a city can buy, so an unopened one is
+  // worth raising even when the roads are flowing.
+  if (neighborsTotal > 0 && neighborsLinked < neighborsTotal)
+    return advice("transport", SEVERITY_WATCH,
+      neighborsLinked === 0 ? "No highways out of town"
+        : (neighborsTotal - neighborsLinked) + " neighbours still unconnected",
+      "Running a road to a marked connector at the map edge opens a highway: "
+      + "new arrivals raise housing demand and their trade lifts commerce and income.")
+
+  // Only once a city is big enough for it to be worth the monthly bill.
+  if (!hasTransit && stats && stats.population >= 1200)
+    return advice("transport", SEVERITY_WATCH, "No public transport",
+      "A city this size runs on its roads alone. A bus depot takes a share of the car trips "
+      + "around it off the streets, which buys room to grow without laying more asphalt.",
+      "transit")
+  if (hasTransit && transitRow.coverage < 40 && stats.population >= 1200)
+    return advice("transport", SEVERITY_OK, "Transit reaches "
+      + transitRow.coverage + "% of residents",
+      "Another stop, or an upgrade to an existing one, would widen that.", "transit")
+
+  return advice("transport", SEVERITY_OK, "Traffic is flowing",
+    stats && stats.avenueCount > 0
+      ? stats.roadCount + " road tiles, " + stats.avenueCount + " of them avenues."
+      : (stats ? stats.roadCount + " road tiles, no avenues yet." : "The roads are clear."),
+    "traffic")
 }
 
 function utilitiesAdvice(coverage, load) {
@@ -1960,8 +1994,10 @@ function financeAdvice(stats, income, upkeep, treasury, loans, taxRatePercent) {
 // rescans the grid.
 function cityAdvice(ctx) {
   return [
-    planningAdvice(ctx.stats, ctx.demand, ctx.neighborsLinked, ctx.neighborsTotal, ctx.traffic),
+    planningAdvice(ctx.stats, ctx.demand),
     utilitiesAdvice(ctx.coverage, ctx.load),
+    transportAdvice(ctx.stats, ctx.traffic, ctx.coverage,
+      ctx.neighborsLinked, ctx.neighborsTotal),
     safetyAdvice(ctx.coverage, ctx.funding, ctx.fires, ctx.crimes),
     wellbeingAdvice(ctx.coverage, ctx.stats, ctx.funding),
     financeAdvice(ctx.stats, ctx.income, ctx.upkeep, ctx.treasury, ctx.loans, ctx.taxRatePercent)

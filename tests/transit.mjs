@@ -324,3 +324,68 @@ console.log('PASS: transit as a funded, upgradeable, coverage-mapped service tha
 }
 
 console.log('PASS: optional coverage reports reach without costing approval or raising an alarm.');
+
+// --- the transport advisor speaks for itself -----------------------------
+{
+  const city = (pop, extra) => {
+    const g = M.emptyGrid(size);
+    // Low-density housing on a generous road grid, so this city clears the
+    // population gate without being gridlocked — gridlock rightly outranks
+    // anything about transit, and would mask what is being tested here.
+    const lots = Math.ceil(pop / M.RES_CAP_PER_LEVEL);
+    let n = 0;
+    for (let r = 8; r < 56 && n < lots; r++) {
+      if (r % 2 === 0) { for (let c = 8; c < 56; c++) g[r * size + c] = '#0'; continue; }
+      for (let c = 8; c < 56 && n < lots; c += 2) { g[r * size + c] = 'R1'; n++; }
+    }
+    if (extra) g[6 * size + 10] = extra;
+    return g;
+  };
+  const speak = g => {
+    const stats = M.summarize(g);
+    const u = M.findUtilities(g);
+    return M.cityAdvice({
+      stats, coverage: M.serviceCoverageStats(g, size),
+      demand: M.computeDemand(stats, 4), income: 900, upkeep: 300, treasury: 9000,
+      funding: M.defaultFunding(), loans: [], taxRatePercent: 10, fires: [], crimes: [],
+      load: M.utilityLoad(g, stats), neighborsLinked: 4, neighborsTotal: 4,
+      traffic: M.trafficSurvey(g, size, u, M.defaultFunding())
+    }).find(a => a.advisor === 'transport');
+  };
+
+  const small = city(300);
+  assert.ok(M.summarize(small).population < 1200);
+  assert.ok(!/public transport/i.test(speak(small).headline),
+    'a small town is not nagged to build a bus network it cannot afford');
+
+  const big = city(2000);
+  assert.ok(M.summarize(big).population >= 1200, 'the big city clears the gate');
+  const nagged = speak(big);
+  assert.match(nagged.headline, /No public transport/);
+  assert.equal(nagged.severity, M.SEVERITY_WATCH);
+  assert.equal(nagged.overlay, 'transit', 'and it points at the transit map');
+
+  // Building one answers it.
+  const served = speak(city(2000, 'M2'));
+  assert.ok(!/No public transport/i.test(served.headline),
+    'building a depot settles the question');
+  assert.ok(served.severity <= M.SEVERITY_WATCH);
+
+  // Every advisor is well-formed and named, transport included.
+  const all = M.cityAdvice({
+    stats: M.summarize(big), coverage: M.serviceCoverageStats(big, size),
+    demand: M.computeDemand(M.summarize(big), 0), income: 1, upkeep: 1, treasury: 1,
+    funding: M.defaultFunding(), loans: [], taxRatePercent: 10, fires: [], crimes: [],
+    load: M.utilityLoad(big, M.summarize(big)), neighborsLinked: 0, neighborsTotal: 4
+  });
+  assert.equal(all.length, M.ADVISOR_ORDER.length, 'one advisor speaks per slot');
+  for (const a of all) {
+    assert.ok(M.ADVISOR_ORDER.indexOf(a.advisor) >= 0, `${a.advisor} is a known advisor`);
+    assert.ok(a.name && a.headline && a.detail, `${a.advisor} is displayable`);
+    assert.ok(a.severity >= 0 && a.severity <= 2);
+  }
+  assert.ok(M.topAdvice(all), 'and one of them is always the headline');
+}
+
+console.log('PASS: transport advises on its own slot, gated by city size, and every ' +
+  'advisor stays well-formed.');
