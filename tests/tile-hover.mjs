@@ -18,3 +18,19 @@ assert.equal(root.inspectTitle({type:'#',level:1}),'Bridge');
 assert(root.inspectLines({type:'L',level:0}).join(' ').includes('Does not provide utility water'));
 assert(root.inspectLines({type:'R',level:2,propertyBonus:20,waterfrontBonus:12}).join(' ').includes('Waterfront contributes +12%'));
 console.log('PASS: hover/inspect descriptions for all tile families and infrastructure tiers, bridge identity and waterfront status.');
+
+// inspectTile must say which tile it describes. inspectLines is shared by the
+// hover card and the Inspect card, so a renderer that cannot ask the info
+// object for its own index has to be told out of band — which is how the road
+// congestion readout ended up reporting the inspected tile while describing
+// the hovered one.
+{
+  const g = M.emptyGrid(M.GRID_SIZE);
+  g[100] = '#0'; g[101] = 'R2';
+  for (const at of [100, 101]) {
+    const info = M.inspectTile(g, M.GRID_SIZE, at, M.findUtilities(g),
+      { R: 1, C: 1, I: 1 }, 500, 500);
+    assert.equal(info.index, at, 'the info object knows which tile it is');
+  }
+}
+console.log('PASS: inspect info identifies its own tile.');

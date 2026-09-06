@@ -349,7 +349,7 @@ Item {
         + (avenue ? "" : " · widen to an avenue for " + Model.roadCapacity(2)))
       var congestion = root.serviceReady && root.cityService.traffic
         && root.cityService.traffic.roadCongestion
-        ? (root.cityService.traffic.roadCongestion[root.inspectedIndex] || 0) : 0
+        ? (root.cityService.traffic.roadCongestion[info.index] || 0) : 0
       if (congestion > 0)
         lines.push("Currently at " + Math.round(congestion * 100) + "% of capacity"
           + (congestion >= Model.CONGESTION_JAM ? " — gridlocked"

@@ -958,6 +958,11 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
 function inspectTile(grid, gridSize, index, utilities, demand, population, treasury, civic) {
   var tile = parseTile(grid[index])
   var info = {
+    // Carried so anything rendering this tile's details can look the tile up
+    // for itself. Without it a shared renderer has to be told which tile it is
+    // describing out of band, which is exactly how the congestion readout came
+    // to report the inspected tile while describing the hovered one.
+    index: index,
     type: tile.type,
     level: tile.level,
     roadAdjacent: hasRoadAccess(grid, gridSize, index),
