@@ -273,3 +273,54 @@ console.log('PASS: transit as a funded, upgradeable, coverage-mapped service tha
 
   console.log('PASS: every coverage, upgradeable and funded type is complete in every table.');
 }
+
+// --- an optional service must never read as a failure --------------------
+// Regression: adding a Transit row to serviceCoverageStats silently cost every
+// city that had not built one about 4 points of approval, because
+// computeApproval averages unmet coverage across every row — and made the
+// coverage widget rotate a permanent "7,470 residents unserved" alarm for a
+// service nobody was owed.
+{
+  const town = M.emptyGrid(size);
+  for (let i = 0; i < 40; i++) town[500 + i] = 'R3';
+  town[400] = 'E2'; town[401] = 'W2'; town[402] = 'F2';
+  town[403] = 'S2'; town[404] = 'N2'; town[405] = 'H2';
+  const pop = M.summarize(town).population;
+
+  const rows = M.serviceCoverageStats(town, size);
+  const transit = rows.find(r => r.key === 'transit');
+  assert.ok(transit.optional, 'transit coverage is flagged optional');
+  for (const r of rows.filter(x => x.key !== 'transit'))
+    assert.ok(!r.optional, 'every other service is a real need');
+
+  assert.equal(transit.coverage, 0, 'this city has no transit at all');
+  assert.ok(transit.unmet > 0, 'and the row still reports the reach honestly');
+
+  // The whole point: not building it costs nothing at the ballot box.
+  const withRow = M.computeApproval(70, rows, 0, 0, 200, pop);
+  const withoutRow = M.computeApproval(70, rows.filter(r => !r.optional), 0, 0, 200, pop);
+  assert.equal(withRow, withoutRow,
+    'an unbuilt optional service costs no approval whatsoever');
+
+  // A real gap still does, so the skip is not just switching the term off.
+  const noWater = town.slice();
+  noWater[401] = '_0';
+  const gapRows = M.serviceCoverageStats(noWater, size);
+  assert.ok(M.computeApproval(70, gapRows, 0, 0, 200, pop) < withRow,
+    'a genuine coverage gap still costs approval');
+
+  // And building transit never *raises* approval either — it buys traffic
+  // relief, not popularity, so the two systems stay separable.
+  const served = town.slice();
+  served[406] = 'M2';
+  assert.equal(M.computeApproval(70, M.serviceCoverageStats(served, size), 0, 0, 200, pop),
+    withRow, 'building it does not buy approval either');
+
+  // Guard the divisor: a coverage list of nothing but optional rows must not
+  // divide by zero and hand back NaN.
+  assert.equal(M.computeApproval(70, [transit], 0, 0, 200, pop), 70,
+    'an all-optional coverage list is simply neutral');
+  assert.equal(M.computeApproval(70, [], 0, 0, 200, pop), 70, 'and so is an empty one');
+}
+
+console.log('PASS: optional coverage reports reach without costing approval or raising an alarm.');

@@ -6,7 +6,11 @@ FocusScope {
   id: root
   property var rows: []
   property bool active: true
-  readonly property var shortages: rows.filter(function(row) { return row.unmet > 0 })
+  // Optional services (transit) are shown in the full list but never rotated as
+  // a shortage — nobody is going unserved by a bus they were never promised.
+  readonly property var shortages: rows.filter(function(row) {
+    return row.unmet > 0 && !row.optional
+  })
   property int currentIndex: 0
   readonly property var current: shortages.length ? shortages[currentIndex % shortages.length] : null
   readonly property string summary: current
@@ -97,11 +101,17 @@ FocusScope {
           required property var modelData
           width: parent.width
           spacing: Style.space(3)
+          // An optional service reports reach, not shortfall: "42% reached" is
+          // a fact about the network, where "4300 unserved" would accuse the
+          // player of neglecting something nobody is owed.
+          readonly property bool lacking: modelData.unmet > 0 && !modelData.optional
           Text {
             width: parent.width
-            text: modelData.name + " · " + modelData.coverage + "% · " + modelData.unmet + " unserved"
+            text: modelData.optional
+              ? modelData.name + " · " + modelData.coverage + "% reached"
+              : modelData.name + " · " + modelData.coverage + "% · " + modelData.unmet + " unserved"
             wrapMode: Text.WordWrap
-            color: modelData.unmet ? "#e4bd78" : "#7ac4b1"
+            color: parent.lacking ? "#e4bd78" : "#7ac4b1"
             font.pixelSize: Style.font.caption
           }
           Rectangle {
@@ -109,7 +119,7 @@ FocusScope {
             color: Qt.rgba(0.5, 0.6, 0.6, 0.2)
             Rectangle {
               width: parent.width * modelData.coverage / 100; height: parent.height; radius: height / 2
-              color: modelData.unmet ? "#d5ab67" : "#7ac4b1"
+              color: parent.parent.lacking ? "#d5ab67" : "#7ac4b1"
             }
           }
         }

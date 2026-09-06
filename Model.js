@@ -461,7 +461,11 @@ function serviceCoverageStats(grid, gridSize) {
     { name: "Police", key: "police", radius: POLICE_RADIUS },
     { name: "Education", key: "schools", radius: SCHOOL_RADIUS },
     { name: "Healthcare", key: "medical", radius: MEDICAL_RADIUS },
-    { name: "Transit", key: "transit", radius: TRANSIT_RADIUS }
+    // optional: reported like the others, but not a need. A city with no
+    // transit is not failing anybody — it just has more cars. Anything that
+    // treats unmet coverage as a shortage must skip these, or every city that
+    // has not built an optional service looks like it is neglecting one.
+    { name: "Transit", key: "transit", radius: TRANSIT_RADIUS, optional: true }
   ]
   for (var r = 0; r < rows.length; r++) { rows[r].residents = 0; rows[r].served = 0 }
   for (var i = 0; i < grid.length; i++) {
@@ -2652,10 +2656,13 @@ function computeApproval(happiness, coverage, fires, crimes, netIncome, populati
   approval -= (crimes || 0) * 8
   // Unserved residents, weighted across every service the city offers.
   if (population > 0) {
-    var unmet = 0
-    for (var i = 0; i < (coverage || []).length; i++)
+    var unmet = 0, counted = 0
+    for (var i = 0; i < (coverage || []).length; i++) {
+      if (coverage[i].optional) continue
+      counted++
       unmet += (coverage[i].unmet || 0) / Math.max(1, coverage[i].residents || 1)
-    approval -= (unmet / Math.max(1, (coverage || []).length)) * 25
+    }
+    if (counted > 0) approval -= (unmet / counted) * 25
   }
   return Math.round(clamp(approval, 0, 100))
 }
