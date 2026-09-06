@@ -3993,18 +3993,10 @@ Item {
           Grid {
             id: viewControls
             columns: 2
+            // Zoom is deliberately the bottom row: it is the only control
+            // here with a readout, and the percentage sits directly beneath.
             spacing: Style.space(6)
 
-            Button {
-              iconText: "\u2212"
-              foreground: root.bar ? root.bar.foreground : Color.foreground
-              onClicked: root.setZoom(root.zoom / 1.2)
-            }
-            Button {
-              iconText: "+"
-              foreground: root.bar ? root.bar.foreground : Color.foreground
-              onClicked: root.setZoom(root.zoom * 1.2)
-            }
             Button {
               iconText: "\u2302"
               foreground: root.bar ? root.bar.foreground : Color.foreground
@@ -4018,6 +4010,16 @@ Item {
               foreground: root.overlayMode === ""
                 ? (root.bar ? root.bar.foreground : Color.foreground) : Color.accent
               onClicked: root.overlayMenuOpen = !root.overlayMenuOpen
+            }
+            Button {
+              iconText: "\u2212"
+              foreground: root.bar ? root.bar.foreground : Color.foreground
+              onClicked: root.setZoom(root.zoom / 1.2)
+            }
+            Button {
+              iconText: "+"
+              foreground: root.bar ? root.bar.foreground : Color.foreground
+              onClicked: root.setZoom(root.zoom * 1.2)
             }
           }
 
