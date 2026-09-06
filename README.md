@@ -13,6 +13,12 @@ growing while suspended either. Each tick: zoned tiles next to a road grow
 one density level if there's demand and the city is happy, tax income comes
 in, upkeep goes out, and population/happiness are recalculated.
 
+The city is taxed on residents *and* on business: commercial jobs at 80% of a
+resident's rate, industrial at 50%. Because the staffed departments are billed
+per resident, a low-tax city earns more from shops than from housing, and a
+high-tax one the other way round — so the tax slider decides what kind of city
+pays best, not just how much.
+
 Click the bar icon to open the city panel. Pick a tool (Road, Res, Com, Ind,
 Park, Clear) and click or drag on the grid to build. Roads are required —
 zones can grow within two orthogonal steps of one, via open land, other zones,

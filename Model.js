@@ -980,6 +980,7 @@ var DENSITY_UPKEEP_SOFTCAP = 420
 // into roads/plants/parks leaves the total about the same while making the
 // budget answer "what am I paying for?" instead of just "how much?".
 var DENSITY_UPKEEP_RATE = 0.22
+var DENSITY_UPKEEP_MAX_SCALE = 2.4
 var ROAD_UPKEEP = 0.25
 var PARK_UPKEEP = 0.3
 
@@ -997,7 +998,11 @@ function computeUpkeep(stats, funding, ordinances) {
 // The monthly bill, itemised. computeUpkeep is just the sum of this, so what
 // the player is shown can never drift from what they are actually charged.
 function upkeepBreakdown(stats, funding, ordinances) {
-  var densityRate = DENSITY_UPKEEP_RATE * (1 + stats.builtDensity / DENSITY_UPKEEP_SOFTCAP)
+  // Capped: past the cap a denser city still costs more in total (the bill is
+  // rate x density) but stops being charged an ever-worsening *rate* for it.
+  // Uncapped, this outran income entirely and growth became self-defeating.
+  var densityRate = DENSITY_UPKEEP_RATE
+    * Math.min(DENSITY_UPKEEP_MAX_SCALE, 1 + stats.builtDensity / DENSITY_UPKEEP_SOFTCAP)
   var rows = [
     { key: "roads", label: "Roads",
       amount: (stats.roadCount - (stats.avenueCount || 0)) * ROAD_UPKEEP
@@ -1034,8 +1039,30 @@ function monthlyCostOf(type, level) {
   return 0
 }
 
-function computeIncome(population, taxRatePercent) {
-  return population * taxRatePercent * 0.02
+// Businesses are taxed too, per job, at their own weight against a resident.
+// Without this, income was purely headcount while the services bill grew with
+// the square of built density — so past a certain size every new building lost
+// money and a mature city had no way to grow out of a deficit. It also made
+// the obvious player instinct ("zone commerce to raise income") simply wrong.
+//
+// Commerce earns more per job than industry: shops and offices are taxed on
+// what they turn over, while industry is the cheap way to *create* jobs and
+// already pays for itself by unlocking residential growth.
+var COM_TAX_WEIGHT = 0.8
+var IND_TAX_WEIGHT = 0.5
+
+function computeIncome(population, taxRatePercent, jobsCommercial, jobsIndustrial) {
+  var taxed = population
+    + (jobsCommercial || 0) * COM_TAX_WEIGHT
+    + (jobsIndustrial || 0) * IND_TAX_WEIGHT
+  return taxed * taxRatePercent * 0.02
+}
+
+// Everything a city is taxed on, from one stats object — so callers cannot
+// pass the population and forget the businesses.
+function incomeFor(stats, taxRatePercent) {
+  return computeIncome(stats.taxablePopulation, taxRatePercent,
+    stats.jobsCommercial, stats.jobsIndustrial)
 }
 
 // One full minute of simulation. Returns the new grid plus everything the
@@ -1060,7 +1087,7 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
   var load = utilityLoad(grid, stats, policy)
   var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load, policy, traffic)
   var upkeep = computeUpkeep(stats, funding, ordinances)
-  var income = computeIncome(stats.taxablePopulation, taxRatePercent) * incomeMultiplier
+  var income = incomeFor(stats, taxRatePercent) * incomeMultiplier
     * neighborBonus(connected.length).trade
   return {
     grid: nextGrid,

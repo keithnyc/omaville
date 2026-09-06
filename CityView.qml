@@ -189,7 +189,7 @@ Item {
   // Budget card's rows would otherwise each rescan the grid on every change.
   readonly property var budgetStats: Model.summarize(root.grid)
   readonly property real budgetIncome: root.serviceReady
-    ? Model.computeIncome(root.budgetStats.taxablePopulation, root.taxRatePercent) : 0
+    ? Model.incomeFor(root.budgetStats, root.taxRatePercent) : 0
   readonly property real budgetUpkeep: root.serviceReady
     ? Model.computeUpkeep(root.budgetStats, root.cityService.funding) : 0
   readonly property real budgetNet: root.budgetIncome - root.budgetUpkeep

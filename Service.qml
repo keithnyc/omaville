@@ -144,7 +144,7 @@ Item {
     root.traffic = Model.trafficSurvey(root.grid, root.gridSize,
       Model.findUtilities(root.grid), root.funding, root.policy)
   }
-  readonly property real income: Model.computeIncome(root.cityStats.taxablePopulation, root.taxRatePercent)
+  readonly property real income: Model.incomeFor(root.cityStats, root.taxRatePercent)
   readonly property real upkeep: Model.computeUpkeep(root.cityStats, root.funding, root.ordinances)
   readonly property var linkedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
   readonly property var advice: root.initialized ? Model.cityAdvice({
@@ -223,7 +223,7 @@ Item {
     var offer = Model.loanOffer(offerId)
     if (!offer) return false
     var stats = Model.summarize(root.grid)
-    var income = Model.computeIncome(stats.taxablePopulation, root.taxRatePercent)
+    var income = Model.incomeFor(stats, root.taxRatePercent)
     if (!Model.canBorrow(offer, root.loans, root.population, income).ok) return false
     root.loans = Model.takeLoan(root.loans, offer, root.ageMinutes)
     root.treasury += offer.principal
