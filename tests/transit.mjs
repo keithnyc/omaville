@@ -217,3 +217,59 @@ console.log('PASS: transit as a funded, upgradeable, coverage-mapped service tha
   'trips without ever emptying a road and stays weaker than good planning, three trip ' +
   'ordinances with real downsides, and congestion that slows fire and police response ' +
   'to a floor rather than to nothing.');
+
+// --- every service type is complete in every table it appears in ---------
+// A live TypeError came from adding TILE_TRANSIT to CityView's coverageTypes
+// without adding it to utilityRangeColors, so hovering the map with the new
+// tool selected threw on every mouse move. qmllint cannot see that: the
+// tables are plain object literals. This reads them out of the QML and checks
+// them against each other, for every service, not just transit.
+{
+  const qml = fs.readFileSync(new URL('../CityView.qml', import.meta.url), 'utf8');
+  const table = name => {
+    const m = qml.match(new RegExp('readonly property var ' + name +
+      ': (\\(\\{[\\s\\S]*?\\}\\)|\\[[\\s\\S]*?\\])'));
+    assert.ok(m, `${name} is still declared in CityView.qml`);
+    return m[1];
+  };
+  const tileConst = /Model\.TILE_([A-Z_]+)/g;
+  const namesIn = body => Array.from(body.matchAll(tileConst), m => m[1]);
+  const letterFor = {
+    POWER: 'E', WATER: 'W', FIRE: 'F', POLICE: 'S', SCHOOL: 'N',
+    MEDICAL: 'H', TRANSIT: 'M', PARK: 'P'
+  };
+
+  const coverage = namesIn(table('coverageTypes'));
+  assert.ok(coverage.includes('TRANSIT'), 'transit offers a coverage preview');
+  const colors = table('utilityRangeColors');
+  const radii = table('coverageRadii');
+  for (const name of coverage) {
+    const key = letterFor[name];
+    assert.ok(key, `${name} has a known tile letter`);
+    // drawCoverageOverlay reads both of these unguarded; a missing entry is a
+    // runtime TypeError on hover, not a missing circle.
+    assert.match(colors, new RegExp('\\b' + key + ':'),
+      `${name} has a range colour, or hovering it throws`);
+    assert.match(radii, new RegExp('\\b' + key + ':'),
+      `${name} has a coverage radius, or hovering it throws`);
+  }
+
+  // Anything the toolbar can upgrade needs tier names and costs in the model.
+  for (const name of namesIn(table('upgradeableTypes'))) {
+    const key = letterFor[name];
+    assert.ok(M.UPGRADE_TIER_NAMES[key], `${name} has tier names`);
+    assert.equal(M.UPGRADE_TIER_NAMES[key].length, 3);
+    assert.ok(M.UPGRADE_COSTS[key], `${name} has upgrade costs`);
+    assert.ok(M.COSTS[key] > 0, `${name} has a placement cost`);
+    assert.ok(M.TILE_LABELS[key], `${name} has a label`);
+  }
+
+  // And every funded department must be nameable and billable.
+  for (const key of M.FUNDABLE_SERVICES) {
+    assert.ok(M.DEPARTMENT_NAMES[key] && M.DEPARTMENT_RATE[key] > 0,
+      `${key} is a complete department`);
+    assert.ok(M.defaultFunding()[key] !== undefined, `${key} has a default budget`);
+  }
+
+  console.log('PASS: every coverage, upgradeable and funded type is complete in every table.');
+}

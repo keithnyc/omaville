@@ -301,12 +301,17 @@ Item {
       }
     }
     if (info.upgrade) {
-      if (info.type !== Model.TILE_SCHOOL && info.type !== Model.TILE_MEDICAL && root.coverageRadii[info.type])
+      if (info.type !== Model.TILE_SCHOOL && info.type !== Model.TILE_MEDICAL
+          && info.type !== Model.TILE_TRANSIT && root.coverageRadii[info.type])
         lines.push("Service range: " + Math.round(root.coverageRadii[info.type] * Model.INFRA_RADIUS_SCALE[info.level] * 10) / 10 + " tiles")
       if (info.type === Model.TILE_SCHOOL)
         lines.push("Education range: " + Model.SCHOOL_RADIUS * Model.INFRA_RADIUS_SCALE[info.level] + " tiles")
       if (info.type === Model.TILE_MEDICAL)
         lines.push("Healthcare range: " + Model.MEDICAL_RADIUS * Model.INFRA_RADIUS_SCALE[info.level] + " tiles")
+      if (info.type === Model.TILE_TRANSIT)
+        lines.push("Takes " + Math.round(Model.TRANSIT_RELIEF[info.level] * 100)
+          + "% of car trips off the roads within "
+          + Model.TRANSIT_RADIUS * Model.INFRA_RADIUS_SCALE[info.level] + " tiles")
       var u = info.upgrade
       if (u.reason === "max-level") lines.push("Max tier reached")
       else if (u.reason === "locked") lines.push("Upgrade needs Pop " + u.threshold + " ($" + u.cost + ")")
@@ -3383,13 +3388,15 @@ Item {
     E: { fill: "rgba(201, 162, 39, 0.16)", stroke: "rgba(230, 190, 60, 0.75)" },
     W: { fill: "rgba(47, 111, 148, 0.2)", stroke: "rgba(100, 180, 220, 0.75)" },
     F: { fill: "rgba(193, 67, 54, 0.16)", stroke: "rgba(230, 110, 90, 0.75)" },
-    S: { fill: "rgba(58, 111, 224, 0.16)", stroke: "rgba(110, 150, 230, 0.75)" }
+    S: { fill: "rgba(58, 111, 224, 0.16)", stroke: "rgba(110, 150, 230, 0.75)" },
+    M: { fill: "rgba(197, 133, 47, 0.16)", stroke: "rgba(226, 172, 80, 0.78)" }
   })
   readonly property var coverageRadii: ({
     H: Model.MEDICAL_RADIUS,
     N: Model.SCHOOL_RADIUS,
     E: Model.POWER_RADIUS, W: Model.WATER_RADIUS,
-    F: Model.FIRE_RADIUS, S: Model.POLICE_RADIUS
+    F: Model.FIRE_RADIUS, S: Model.POLICE_RADIUS,
+    M: Model.TRANSIT_RADIUS
   })
   readonly property var coverageTypes: [Model.TILE_POWER, Model.TILE_WATER, Model.TILE_FIRE, Model.TILE_POLICE, Model.TILE_SCHOOL, Model.TILE_MEDICAL, Model.TILE_TRANSIT]
 
