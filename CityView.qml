@@ -768,8 +768,7 @@ Item {
     S: [Qt.resolvedUrl("assets/police/s1.png").toString(), Qt.resolvedUrl("assets/police/s2.png").toString(), Qt.resolvedUrl("assets/police/s3.png").toString()],
     P: [Qt.resolvedUrl("assets/parks/p1.png").toString(), Qt.resolvedUrl("assets/parks/p2.png").toString(), Qt.resolvedUrl("assets/parks/p3.png").toString()]
   })
-  readonly property var infrastructureGroundColors: ({ E: "#2e2b1c", W: "#1e2c33", F: "#2a1614", S: "#141c2a", P: "#416b43" })
-  readonly property var spriteLotTints: ({ R: "rgba(80, 120, 78, 0.08)", C: "rgba(92, 122, 148, 0.12)", I: "rgba(122, 115, 97, 0.11)", E: "rgba(201, 162, 39, 0.10)", W: "rgba(47, 111, 148, 0.10)", F: "rgba(193, 67, 54, 0.08)", S: "rgba(58, 111, 224, 0.10)", P: "rgba(80, 132, 77, 0.08)" })
+  readonly property var spriteLotTints: ({ R: "rgba(80, 120, 78, 0.08)", C: "rgba(92, 122, 148, 0.12)", I: "rgba(122, 115, 97, 0.11)", E: "rgba(201, 162, 39, 0.10)", W: "rgba(47, 111, 148, 0.10)", F: "rgba(193, 67, 54, 0.08)", S: "rgba(58, 111, 224, 0.10)", P: "rgba(80, 132, 77, 0.08)", M: "rgba(197, 133, 47, 0.10)" })
 
   // Decoration sprites are trimmed and then bottom-centred inside a 256px
   // frame (see assets/decorations/PROMPTS.md), so how much of that frame each

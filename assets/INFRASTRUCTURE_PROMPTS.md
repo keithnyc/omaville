@@ -40,3 +40,22 @@ Power tiers 2 and 3 also received a background-extraction edit preserving the bu
 
 Water tiers 2 and 3 required background-extraction edits. The final treatment-plant extraction used the transparent power-plant sprite as a cutout-delivery reference. All three final outputs were verified to have genuine alpha before normalization.
 
+
+## assets/transit — NOT YET GENERATED
+
+Drafted by Claude for Codex/Astra; no images exist yet. The game currently
+falls back to `CityView.drawTransit`, a flat code-drawn canopy-and-buses
+placeholder. See "Art TODO" in HANDOFF.md for the wiring and test steps.
+
+The transit family is the one service whose tiers change *mode*, not just
+size — bus, then tram, then everything at once. Lean on that rather than
+just making the building bigger, since three progressively larger sheds
+would not read apart at 32px.
+
+- `m1.png`: Use case: stylized-concept. Production Omaville transit sprite. References are STYLE AND CAMERA ONLY. Match elevated orthographic near-overhead view, lower-left-facing front, warm crisp detailed 32-bit pixel art, compact one-tile scale, readable at 32px. Tier 1 BUS DEPOT: a small municipal bus stop and layby — one warm cream and slate-blue open shelter with a pitched canopy and a bench, a short pale kerbed pull-in beside it, and ONE stubby amber-yellow single-decker bus with dark windows parked at the shelter, facing lower-left. A modest neighbourhood facility, not a garage. Isolated complete object filling the square frame with margin, tiny contact shadow, genuine transparent alpha background. No ground slab, road surface beyond the short layby, people, text, checkerboard, black backdrop or broad glow. Warm amber vehicle against cool slate-blue and cream structure.
+- `m2.png`: Use case: stylized-concept. Production Omaville transit sprite. References are STYLE AND CAMERA ONLY. Match elevated orthographic near-overhead view, lower-left-facing front, warm crisp detailed 32-bit pixel art, compact one-tile scale, readable at 32px. Tier 2 TRAM LINE: a raised tram platform with a longer cream and slate-blue canopy on slim posts, a short section of twin steel rail set into pale paving running lower-left to upper-right, one slim amber-and-cream articulated tram car on the rail with a dark window band, and a single overhead wire on two slender poles. The rail and overhead wire are the distinguishing features and must read clearly. Isolated complete object filling the square frame with margin, tiny contact shadow, genuine transparent alpha background. No ground slab, roads, people, text, checkerboard, black backdrop or broad glow. Same warm amber vehicle against cool slate-blue and cream structure.
+- `m3.png`: Use case: stylized-concept. Production Omaville transit sprite. References are STYLE AND CAMERA ONLY. Match elevated orthographic near-overhead view, lower-left-facing front, warm crisp detailed 32-bit pixel art, compact one-tile scale, readable at 32px. Tier 3 TRANSIT HUB: one compact multi-modal interchange — a two-storey cream masonry concourse with a broad slate-blue butterfly canopy over TWO short bus bays holding amber buses, a tram platform with rail along one side, a small clock on the concourse gable and a slim rooftop aerial. Dense but readable single structure, clearly the largest of the three without simply being a bigger shed. Isolated complete object filling the square frame with margin, tiny contact shadow, genuine transparent alpha background. No ground slab, surrounding roads, people, text, checkerboard, black backdrop or broad glow. Same warm amber vehicles against cool slate-blue and cream masonry.
+
+Style references to match: `assets/schools/n1.png` and `assets/medical/h1.png`
+are the closest civic buildings in camera and finish. `assets/power/e2.png` is
+the reference for reading machinery clearly at this scale.
