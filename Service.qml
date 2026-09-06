@@ -167,6 +167,12 @@ Item {
     loans: root.loans
   }) : []
   readonly property bool sustainableNow: Model.sustainabilityMet(root.sustainability)
+  // Civic level: what the city is schooled enough to build, as opposed to big
+  // enough to want. Climbs and falls with education coverage and funding.
+  property real civicLevel: Model.CIVIC_MIN
+  readonly property real civicTarget: root.initialized
+    ? Model.civicTarget(root.coverage, root.funding, Model.findUtilities(root.grid))
+    : Model.CIVIC_MIN
   property int sustainedTicks: 0
   // ageMinutes when the city first held it long enough; 0 means never.
   property int sustainableAt: 0
@@ -190,7 +196,8 @@ Item {
 
   function buildTier(index, type, level) {
     if (!root.initialized || root.outOfOffice) return false
-    var check = Model.canBuildTier(root.grid, index, type, level, root.population, root.treasury)
+    var check = Model.canBuildTier(root.grid, index, type, level, root.population,
+      root.treasury, root.civicLevel)
     if (!check.ok) return false
     var next = root.grid.slice()
     next[index] = Model.makeTile(type, level)
@@ -220,7 +227,8 @@ Item {
     if (root.outOfOffice) return false
     if (index < 0 || index >= root.grid.length) return false
     var tile = Model.parseTile(root.grid[index])
-    var check = Model.canUpgrade(tile.type, tile.level, root.population, root.treasury)
+    var check = Model.canUpgrade(tile.type, tile.level, root.population, root.treasury,
+      root.civicLevel)
     if (!check.ok) return false
     root.treasury -= check.cost
     root.grid = Model.upgradeTile(root.grid, index)
@@ -336,6 +344,7 @@ Item {
     root.lastElectionTick = 0
     root.sustainedTicks = 0
     root.sustainableAt = 0
+    root.civicLevel = Model.CIVIC_MIN
     root.outOfOfficeUntil = 0
     root.lastApproval = 0
     root.neighbors = Model.makeNeighbors(root.gridSize, Date.now())
@@ -511,6 +520,16 @@ Item {
         traffic: root.traffic, income: result.income, upkeep: result.upkeep,
         happiness: root.happiness, loans: root.loans
       })
+      var before = Math.floor(root.civicLevel)
+      root.civicLevel = Model.advanceCivic(root.civicLevel, root.civicTarget)
+      var after = Math.floor(root.civicLevel)
+      if (after > before)
+        root.logEvent("milestone", "The city reaches " + Model.civicLabel(root.civicLevel).toLowerCase()
+          + " status — tier " + (after) + " building unlocked.")
+      else if (after < before)
+        root.logEvent("loss", "Schooling has slipped: the city is back to "
+          + Model.civicLabel(root.civicLevel).toLowerCase() + " status.")
+
       var heldBefore = root.sustainedTicks
       root.sustainedTicks = Model.advanceSustainability(goal, heldBefore)
       if (root.sustainedTicks >= Model.SUSTAINABLE_HOLD_TICKS && root.sustainableAt === 0) {
@@ -720,6 +739,7 @@ Item {
       crimes: root.crimes,
       ordinances: root.ordinances,
       lastElectionTick: root.lastElectionTick,
+      civicLevel: root.civicLevel,
       sustainedTicks: root.sustainedTicks,
       sustainableAt: root.sustainableAt,
       outOfOfficeUntil: root.outOfOfficeUntil,
@@ -791,6 +811,9 @@ Item {
       crimes = Array.isArray(saved.crimes) ? saved.crimes : []
       ordinances = Array.isArray(saved.ordinances) ? saved.ordinances : []
       lastElectionTick = Math.max(0, num(saved.lastElectionTick, 0))
+      civicLevel = saved.civicLevel !== undefined
+        ? Math.max(Model.CIVIC_MIN, Math.min(Model.CIVIC_MAX, num(saved.civicLevel, Model.CIVIC_MIN)))
+        : -1   // resolved below, once coverage can be computed from the grid
       sustainedTicks = Math.max(0, Math.round(num(saved.sustainedTicks, 0)))
       sustainableAt = Math.max(0, Math.round(num(saved.sustainableAt, 0)))
       outOfOfficeUntil = Math.max(0, num(saved.outOfOfficeUntil, 0))
@@ -827,6 +850,18 @@ Item {
     }
 
     initialized = true
+
+    // A save from before civic level existed starts where its schools say it
+    // belongs, not at the bottom — an established city must not wake up locked
+    // out of tiers it has been building for hours.
+    if (civicLevel < 0) {
+      // Never below what the city has already built: a save from before this
+      // existed must not wake up unable to build what it is standing in.
+      civicLevel = Math.max(
+        Model.civicTarget(Model.serviceCoverageStats(grid, gridSize),
+          funding, Model.findUtilities(grid)),
+        Model.highestBuiltTier(grid) + 1)
+    }
     if (saveProblem !== "") {
       console.warn("omaville: save file " + statePath + " " + saveProblem + " — starting a new city")
       notify("Omaville couldn't read its save file",

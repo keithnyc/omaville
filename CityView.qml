@@ -232,6 +232,7 @@ Item {
   // the grid themselves — the panel is only ever as expensive as one summarize.
   // Both live on the service now, so the panel and the bar widget report the
   // same advice from one computation instead of each rebuilding it.
+  readonly property real civicLevel: root.serviceReady ? root.cityService.civicLevel : Model.CIVIC_MAX
   readonly property var cityAdvice: root.serviceReady ? root.cityService.advice : []
   readonly property var topAdvice: root.serviceReady ? root.cityService.topAdvice : null
   readonly property int attractiveness: Model.computeAttractiveness(root.budgetStats)
@@ -272,14 +273,14 @@ Item {
     if (tileHoverIndex >= 0) tileHoverDelay.restart()
   }
   readonly property var hoveredTileInfo: tileHoverReady && tileHoverIndex >= 0
-    ? Model.inspectTile(root.grid, root.gridSize, tileHoverIndex, root.utilities, root.demand, root.population, root.treasury) : null
+    ? Model.inspectTile(root.grid, root.gridSize, tileHoverIndex, root.utilities, root.demand, root.population, root.treasury, root.civicLevel) : null
   Timer {
     id: tileHoverDelay
     interval: 650
     onTriggered: root.tileHoverReady = root.tileHoverIndex >= 0
   }
   readonly property var inspectedInfo: root.inspectedIndex >= 0 && root.serviceReady
-    ? Model.inspectTile(root.grid, root.gridSize, root.inspectedIndex, root.utilities, root.demand, root.population, root.treasury)
+    ? Model.inspectTile(root.grid, root.gridSize, root.inspectedIndex, root.utilities, root.demand, root.population, root.treasury, root.civicLevel)
     : null
 
   function inspectTitle(info) {
@@ -331,6 +332,9 @@ Item {
       var u = info.upgrade
       if (u.reason === "max-level") lines.push("Max tier reached")
       else if (u.reason === "locked") lines.push("Upgrade needs Pop " + u.threshold + " ($" + u.cost + ")")
+      else if (u.reason === "unschooled")
+        lines.push("Upgrade needs " + Model.civicLabel(u.civicNeeded).toLowerCase()
+          + " status — build and fund schools ($" + u.cost + ")")
       else if (u.reason === "cant-afford") lines.push("Upgrade ready — needs $" + u.cost)
       else if (u.ok) lines.push("Upgrade ready — $" + u.cost + " (hover the tool icon)")
     }
@@ -5922,6 +5926,7 @@ Item {
               : (Model.UPGRADE_TIER_NAMES[ttype] ? Model.UPGRADE_TIER_NAMES[ttype][tierIndex] : "")
             readonly property int threshold: Model.UPGRADE_THRESHOLDS[tierIndex]
             readonly property bool unlocked: root.population >= threshold
+              && Model.civicAllowsTier(root.civicLevel, tierEntry.tierIndex)
             spacing: Style.space(2)
             width: Style.space(64)
 
@@ -5997,7 +6002,10 @@ Item {
                 text: root.flyoutDecorations ? root.toolHint(tierEntry.ttype)
                   : tierEntry.tierName + " · " + (tierEntry.unlocked
                     ? "$" + Model.totalInvestment(tierEntry.ttype, tierEntry.tierIndex) + " new; upgrades pay the difference"
-                    : "Unlocks at population " + tierEntry.threshold)
+                    : (root.population < tierEntry.threshold
+                        ? "Unlocks at population " + tierEntry.threshold
+                        : "Needs " + Model.civicLabel(tierEntry.tierIndex + 1).toLowerCase()
+                          + " status — build and fund schools"))
               }
             }
 

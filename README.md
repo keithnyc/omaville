@@ -19,6 +19,12 @@ per resident, a low-tax city earns more from shops than from housing, and a
 high-tax one the other way round — so the tax slider decides what kind of city
 pays best, not just how much.
 
+Building tiers need more than population: a **civic level** rises while your
+schools actually reach people and stay funded, and falls when either lapses.
+An elementary system supports tier 2; only a university system supports tier 3.
+It gates what you can build, never what already stands — but let the schools
+slide and the top tier locks again.
+
 There is a long goal: hold a surplus budget, full service coverage, flowing
 traffic, contented residents and no debt for 24 straight months and the city
 is self-sustaining. The streak resets the moment any of it lapses. Track it

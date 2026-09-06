@@ -245,3 +245,109 @@ console.log('PASS: a sustainability goal that must be held, resets on any lapse,
 }
 
 console.log('PASS: coverage percentages agree with the headcount beside them.');
+
+// --- civic level: progress that can be lost ------------------------------
+// LinCity-NG's tech level, adapted. Every unlock here was gated on population,
+// which only ever rises, so nothing was ever at stake. This climbs while
+// education reaches people and is funded, and slides back when either lapses.
+{
+  const town = school => {
+    const g = M.emptyGrid(size);
+    // Homes tight around the school: a tier-1 school only reaches 6 tiles, and
+    // a fixture where it cannot cover its own town would be measuring reach
+    // rather than the ladder.
+    for (let c = 18; c < 24; c++) g[15 * size + c] = 'R3';
+    if (school !== null) g[16 * size + 21] = school;
+    return g;
+  };
+  const target = (school, funding) => {
+    const g = town(school);
+    return M.civicTarget(M.serviceCoverageStats(g, size),
+      funding || M.defaultFunding(), M.findUtilities(g));
+  };
+
+  // The school ladder maps onto the civic ladder: elementary supports tier 2,
+  // only a university supports tier 3.
+  assert.equal(target(null), M.CIVIC_MIN, 'no schools, no civic standing');
+  assert.ok(target('N0') >= 2, 'an elementary system supports tier 2');
+  assert.ok(target('N0') < 3, 'but not tier 3');
+  assert.ok(target('N1') > target('N0'), 'a high school is worth more');
+  assert.ok(target('N1') < 3, 'and still not enough for tier 3');
+  assert.equal(target('N2'), M.CIVIC_MAX, 'a university system reaches the top');
+
+  // Money and reach both matter, which is what makes it losable.
+  assert.ok(target('N2', { N: M.FUNDING_MIN }) < target('N2'),
+    'starving the schools lowers what the city can sustain');
+  const farAway = (() => {
+    const g = town('N2');
+    g[60 * size + 60] = 'R3';   // a district the university cannot reach
+    return M.civicTarget(M.serviceCoverageStats(g, size), M.defaultFunding(),
+      M.findUtilities(g));
+  })();
+  assert.ok(farAway < M.CIVIC_MAX, 'and so does leaving a district unschooled');
+
+  // It moves gradually, in both directions, and cannot be rushed or crash.
+  assert.ok(M.advanceCivic(1, 3) > 1 && M.advanceCivic(1, 3) < 3, 'climbs gradually');
+  assert.ok(M.advanceCivic(3, 1) < 3 && M.advanceCivic(3, 1) > 1, 'falls gradually');
+  assert.equal(M.advanceCivic(2, 2), 2, 'and holds when nothing changes');
+  assert.equal(M.advanceCivic(undefined, 3), M.CIVIC_MIN + M.CIVIC_RATE,
+    'a missing value starts at the bottom rather than NaN');
+  let up = M.CIVIC_MIN;
+  for (let i = 0; i < 200; i++) up = M.advanceCivic(up, 9);
+  assert.equal(up, M.CIVIC_MAX, 'and it is bounded above');
+
+  // The gate itself.
+  assert.ok(M.civicAllowsTier(1, 0), 'tier 1 is always available');
+  assert.ok(!M.civicAllowsTier(1, 1), 'tier 2 needs civic 2');
+  assert.ok(M.civicAllowsTier(2, 1) && !M.civicAllowsTier(2, 2), 'tier 3 needs civic 3');
+  assert.ok(M.civicAllowsTier(3, 2));
+  assert.ok(M.civicAllowsTier(undefined, 2),
+    'an unknown civic level must not lock anything — old saves and old callers');
+
+  // Construction is gated; nothing already standing is ever condemned.
+  const g = town('N0');
+  const spot = 20 * size + 20;
+  const rich = 999999;
+  assert.equal(M.canBuildTier(g, spot, 'F', 0, 5000, rich, 1).ok, true, 'tier 1 always buildable');
+  assert.equal(M.canBuildTier(g, spot, 'F', 1, 5000, rich, 1).ok, false, 'tier 2 blocked at civic 1');
+  assert.equal(M.canBuildTier(g, spot, 'F', 1, 5000, rich, 2).ok, true, 'and allowed at civic 2');
+  assert.equal(M.canBuildTier(g, spot, 'F', 2, 5000, rich, 2).ok, false, 'tier 3 blocked at civic 2');
+  assert.equal(M.canBuildTier(g, spot, 'F', 2, 5000, rich, 3).ok, true, 'and allowed at civic 3');
+
+  const upg = M.canUpgrade('F', 1, 5000, rich, 2);
+  assert.equal(upg.ok, false);
+  assert.equal(upg.reason, 'unschooled', 'and the reason is reportable');
+  assert.equal(upg.civicNeeded, 3);
+  assert.ok(M.civicLabel(upg.civicNeeded), 'which has a name to show');
+
+  // An existing tier-3 building keeps standing when schooling lapses — the
+  // level gates what you may build, never what you already built.
+  const built = M.emptyGrid(size);
+  built[spot] = 'F2';
+  const after = M.tickGrid(built, size, M.summarize(built), 70, M.findUtilities(built),
+    { R: 1, C: 1, I: 1 }, M.defaultFunding());
+  assert.equal(after[spot], 'F2', 'a finished building is never condemned by civic decay');
+}
+
+console.log('PASS: a civic level earned from schooling, lost when it lapses, gating what ' +
+  'may be built without ever condemning what stands.');
+
+// --- civic level must not confiscate on migration ------------------------
+{
+  // 99% education coverage lands at 2.98. Locking tier 3 over that last
+  // percent would read as a bug, so the gate forgives a rounding gap.
+  assert.ok(M.CIVIC_TOLERANCE > 0 && M.CIVIC_TOLERANCE < 0.2, 'a small tolerance, not a loophole');
+  assert.ok(M.civicAllowsTier(2.98, 2), 'a city one rounding error short still builds tier 3');
+  assert.ok(!M.civicAllowsTier(2.5, 2), 'but letting schooling slide really does lock it');
+
+  // What is already standing sets the floor a legacy save starts from.
+  const g = M.emptyGrid(size);
+  assert.equal(M.highestBuiltTier(g), 0, 'an empty city has built nothing');
+  g[100] = 'F0'; assert.equal(M.highestBuiltTier(g), 0);
+  g[101] = 'N2'; assert.equal(M.highestBuiltTier(g), 2, 'a university counts');
+  g[102] = 'R3'; assert.equal(M.highestBuiltTier(g), 2, 'but a grown house is not a tier build');
+  assert.ok(M.civicAllowsTier(M.highestBuiltTier(g) + 1, M.highestBuiltTier(g)),
+    'so a migrated city can always still build what it already has');
+}
+
+console.log('PASS: civic gating forgives a rounding gap and never demotes a city on load.');

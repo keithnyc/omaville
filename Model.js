@@ -241,13 +241,16 @@ var PARK_BONUS_PER_LEVEL = [2, 4, 7]
 // Pure eligibility check shared by Service.qml's upgrade action and
 // CityView's tier flyout, so the flyout can show "locked" / cost
 // accurately without duplicating the rule.
-function canUpgrade(type, currentLevel, population, treasury) {
+function canUpgrade(type, currentLevel, population, treasury, civic) {
   if (!UPGRADE_COSTS[type]) return { ok: false, reason: "not-upgradeable", cost: 0 }
   if (currentLevel >= 2) return { ok: false, reason: "max-level", cost: 0 }
   var nextLevel = currentLevel + 1
   var cost = UPGRADE_COSTS[type][nextLevel]
   var threshold = UPGRADE_THRESHOLDS[nextLevel]
   if (population < threshold) return { ok: false, reason: "locked", cost: cost, threshold: threshold }
+  if (!civicAllowsTier(civic, nextLevel))
+    return { ok: false, reason: "unschooled", cost: cost, threshold: threshold,
+      civicNeeded: nextLevel + 1 }
   if (treasury < cost) return { ok: false, reason: "cant-afford", cost: cost, threshold: threshold }
   return { ok: true, reason: "", cost: cost, threshold: threshold }
 }
@@ -277,7 +280,7 @@ function totalInvestment(type, level) {
 
 // Place the selected infrastructure tier atomically, or raise a matching
 // building to it for only the remaining investment. Never downgrade.
-function canBuildTier(grid, index, type, level, population, treasury) {
+function canBuildTier(grid, index, type, level, population, treasury, civic) {
   if (!UPGRADE_COSTS[type] || !Number.isInteger(level) || level < 0 || level > 2
       || !Number.isInteger(index) || index < 0 || index >= grid.length)
     return { ok: false, cost: 0 }
@@ -286,7 +289,14 @@ function canBuildTier(grid, index, type, level, population, treasury) {
     return { ok: false, cost: 0 }
   var cost = totalInvestment(type, level)
     - (current.type === type ? totalInvestment(type, current.level) : 0)
-  return { ok: population >= UPGRADE_THRESHOLDS[level] && treasury >= cost, cost: cost }
+  // Population says the city is big enough to want it; the civic level says it
+  // is schooled enough to run it. Both gate construction only — anything
+  // already built stays built if the schools later lapse.
+  return {
+    ok: population >= UPGRADE_THRESHOLDS[level] && treasury >= cost
+      && civicAllowsTier(civic, level),
+    cost: cost
+  }
 }
 
 var MILESTONES = [50, 150, 400, 1000, 2500, 5000, 10000, 20000]
@@ -945,7 +955,7 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
 // (isCovered, hasRoadAccess, nearbyZoneEffect, computeDemand's output) so
 // what the tooltip reports can never drift out of sync with what's actually
 // governing growth.
-function inspectTile(grid, gridSize, index, utilities, demand, population, treasury) {
+function inspectTile(grid, gridSize, index, utilities, demand, population, treasury, civic) {
   var tile = parseTile(grid[index])
   var info = {
     type: tile.type,
@@ -970,7 +980,7 @@ function inspectTile(grid, gridSize, index, utilities, demand, population, treas
   }
   if (UPGRADE_COSTS[tile.type]) {
     info.tierName = UPGRADE_TIER_NAMES[tile.type][tile.level]
-    info.upgrade = canUpgrade(tile.type, tile.level, population || 0, treasury || 0)
+    info.upgrade = canUpgrade(tile.type, tile.level, population || 0, treasury || 0, civic)
   }
   return info
 }
@@ -2819,4 +2829,85 @@ function sustainabilityProgress(rows) {
 // state once.
 function advanceSustainability(rows, heldTicks) {
   return sustainabilityMet(rows) ? Math.max(0, heldTicks || 0) + 1 : 0
+}
+
+// --- civic level ----------------------------------------------------------
+// LinCity-NG's sharpest idea: schools consume resources to sustain a tech
+// level, that level unlocks buildings, and it *falls* if the schools are
+// starved. Every unlock in Omaville was gated on population, which only ever
+// rises — so progress here was a one-way ratchet with nothing at stake.
+//
+// A civic level is earned the same way: it climbs while education actually
+// reaches people and is paid for, and it slides back when either lapses. It
+// gates what you may *build* — never what already stands, because retroactively
+// condemning a player's finished buildings would be a punishment, not a
+// mechanic.
+var CIVIC_MIN = 1
+var CIVIC_MAX = 3
+// What each school tier can sustain at full reach and funding. Deliberately
+// matched to the school ladder: an elementary system supports tier 2, and only
+// a university system supports tier 3.
+var CIVIC_LADDER = [2.0, 2.6, 3.0]
+// Per tick, so a city climbs 1 -> 3 in roughly 25 months of steady schooling
+// and loses it just as slowly. Slow enough that it reads as a trend rather
+// than a switch, fast enough to matter inside one session.
+var CIVIC_RATE = 0.08
+
+function bestSchoolTier(utilities) {
+  var schools = (utilities && utilities.schools) || []
+  var best = -1
+  for (var i = 0; i < schools.length; i++) if (schools[i].level > best) best = schools[i].level
+  return best
+}
+
+// Where the civic level is heading, given how good the schooling currently is.
+function civicTarget(coverage, funding, utilities) {
+  var best = bestSchoolTier(utilities)
+  if (best < 0) return CIVIC_MIN
+  var row = coverageRow(coverage || [], "schools")
+  var reach = clamp((row.coverage || 0) / 100, 0, 1)
+  var money = fundingLevel(funding, "N")
+  var effective = clamp(reach * money, 0, 1)
+  var ceiling = CIVIC_LADDER[clamp(best, 0, CIVIC_LADDER.length - 1)]
+  return clamp(CIVIC_MIN + (ceiling - CIVIC_MIN) * effective, CIVIC_MIN, CIVIC_MAX)
+}
+
+// Moves toward the target at a bounded rate in both directions — the point is
+// that it can be lost, so decay is not made gentler than growth.
+function advanceCivic(current, target) {
+  var from = clamp(typeof current === "number" && isFinite(current) ? current : CIVIC_MIN,
+    CIVIC_MIN, CIVIC_MAX)
+  var to = clamp(target, CIVIC_MIN, CIVIC_MAX)
+  if (to > from) return Math.min(to, from + CIVIC_RATE)
+  if (to < from) return Math.max(to, from - CIVIC_RATE)
+  return from
+}
+
+// Tier index 0/1/2 needs civic level 1/2/3, with a small tolerance: a city at
+// 99% education coverage sits at 2.98, and locking a whole building tier over
+// a rounding gap would read as a bug rather than a rule. Wide enough to
+// forgive the last percent, far too narrow to forgive letting schools slide.
+var CIVIC_TOLERANCE = 0.05
+
+function civicAllowsTier(civic, level) {
+  var have = typeof civic === "number" && isFinite(civic) ? civic : CIVIC_MAX
+  return have >= level + 1 - CIVIC_TOLERANCE
+}
+
+// The highest tier the city has actually finished building. Used only when
+// migrating a save from before civic level existed: whatever is already
+// standing proves the city could once support it, so it starts there and is
+// left to drift rather than being retroactively demoted on load.
+function highestBuiltTier(grid) {
+  var best = 0
+  for (var i = 0; i < grid.length; i++) {
+    var tile = parseTile(grid[i])
+    if (UPGRADE_COSTS[tile.type] && tile.level > best) best = tile.level
+  }
+  return best
+}
+
+function civicLabel(civic) {
+  var n = Math.floor(clamp(civic || CIVIC_MIN, CIVIC_MIN, CIVIC_MAX))
+  return ["", "Township", "Educated city", "University city"][n] || "Township"
 }
