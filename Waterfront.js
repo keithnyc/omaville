@@ -1,6 +1,11 @@
 .pragma library
 
-function wet(value) { return value === 'L0' || value === '#1' }
+// Any odd road level is a bridge, so an avenue bridge ('#3') still has water
+// under it and still joins up with the shoreline banks around it.
+function wet(value) {
+  return value === 'L0'
+    || (typeof value === 'string' && value[0] === '#' && Number(value[1]) % 2 === 1)
+}
 function adjacent(data, size, index) {
   var x = index % size, y = Math.floor(index / size)
   return [y > 0 ? data[index-size] : 'L0', x < size-1 ? data[index+1] : 'L0',

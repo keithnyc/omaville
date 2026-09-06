@@ -31,9 +31,9 @@ var MEDICAL_UPKEEP = 1.5
 var TILE_TREE = "T"
 var TILE_FLOWERS = "B"
 
-var COSTS = { "#": 10, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "T": 12, "B": 18, "N": 100, "H": 110, "L": 4, "Q": 30 }
+var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "T": 12, "B": 18, "N": 100, "H": 110, "L": 4, "Q": 30 }
 var TILE_LABELS = {
-  "_": "Clear", "#": "Road", "R": "Residential", "C": "Commercial",
+  "_": "Clear", "#": "Road", "A": "Avenue", "R": "Residential", "C": "Commercial",
   "I": "Industrial", "P": "Playground", "E": "Generator", "W": "Well",
   "F": "Firehouse", "S": "Substation", "T": "Tree", "B": "Flowerbed", "N": "Elementary School", "H": "Clinic", "L": "Water", "Q": "Waterfront Park"
 }
@@ -57,7 +57,7 @@ function propertyValueBonus(grid, gridSize, index) {
 
 function isWaterTile(value) {
   var tile = parseTile(value)
-  return tile.type === TILE_LAKE || (tile.type === TILE_ROAD && tile.level === 1)
+  return tile.type === TILE_LAKE || isBridgeTile(tile)
 }
 
 function waterfrontBonus(grid, gridSize, index) {
@@ -75,7 +75,14 @@ function shoreAdjacent(grid, gridSize, index) {
 }
 
 function placementCost(grid, index, type) {
-  return type === TILE_ROAD && parseTile(grid[index]).type === TILE_LAKE ? BRIDGE_COST : COSTS[type]
+  var current = parseTile(grid[index])
+  // Widening a street you already paid for costs only the widening, the same
+  // way raising a building to a higher tier costs only the difference.
+  if (type === TOOL_AVENUE) {
+    if (current.type === TILE_ROAD) return AVENUE_UPGRADE_COST
+    return (current.type === TILE_LAKE ? BRIDGE_COST : COSTS[TILE_ROAD]) + AVENUE_UPGRADE_COST
+  }
+  return type === TILE_ROAD && current.type === TILE_LAKE ? BRIDGE_COST : COSTS[type]
 }
 
 function computeAttractiveness(stats) {
@@ -248,7 +255,9 @@ function upgradeTile(grid, index) {
 // tearing down an upgraded plant returns what it really cost, not just
 // its original tier-1 price.
 function totalInvestment(type, level) {
-  if (type === TILE_ROAD && level === 1) return BRIDGE_COST
+  if (type === TILE_ROAD && level > 0)
+    return (level % 2 === 1 ? BRIDGE_COST : COSTS[TILE_ROAD])
+      + (level >= 2 ? AVENUE_UPGRADE_COST : 0)
   var base = COSTS[type] || 0
   var upgrades = UPGRADE_COSTS[type]
   if (!upgrades) return base
@@ -464,7 +473,7 @@ function serviceCoverageStats(grid, gridSize) {
 function summarize(grid) {
   var stats = {
     population: 0, jobsCommercial: 0, jobsIndustrial: 0,
-    roadCount: 0, parkCount: 0, resCount: 0, comCount: 0, indCount: 0,
+    roadCount: 0, avenueCount: 0, parkCount: 0, resCount: 0, comCount: 0, indCount: 0,
     powerCount: 0, waterCount: 0, fireCount: 0, policeCount: 0, builtDensity: 0,
     // Level-weighted, not flat counts — a Garden or a Power Station costs
     // (and gives) more than a tier-1 Playground or Generator.
@@ -477,7 +486,10 @@ function summarize(grid) {
   for (var i = 0; i < grid.length; i++) {
     var tile = parseTile(grid[i])
     switch (tile.type) {
-    case TILE_ROAD: stats.roadCount++; break
+    case TILE_ROAD:
+      stats.roadCount++
+      if (tile.level >= 2) stats.avenueCount++
+      break
     case TILE_TREE: stats.treeCount++; stats.decorationPoints += 2; stats.decorationUpkeep += 0.03; break
     case TILE_FLOWERS: stats.flowerCount++; stats.decorationPoints += 3; stats.decorationUpkeep += 0.06; break
     case TILE_PARK:
@@ -538,11 +550,12 @@ function summarize(grid) {
   return stats
 }
 
-function computeHappiness(taxRatePercent, stats) {
+function computeHappiness(taxRatePercent, stats, trafficPenalty) {
   var taxPenalty = Math.max(0, taxRatePercent - 10) * 1.5
   var parkBonus = Math.min(28, stats.parkHappinessBonus)
   var industrialPenalty = Math.min(25, stats.indCount * 2)
-  return Math.round(clamp(70 - taxPenalty + parkBonus - industrialPenalty, 0, 100))
+  return Math.round(clamp(
+    70 - taxPenalty + parkBonus - industrialPenalty - (trafficPenalty || 0), 0, 100))
 }
 
 // The same ratios that drive growth chance, pulled out on its own so
@@ -622,13 +635,187 @@ function nearbyZoneEffect(grid, gridSize, index) {
   return { nearIndustrial: nearIndustrial, nearCommercial: nearCommercial }
 }
 
+// --- traffic ---------------------------------------------------------------
+// Congestion is the first constraint a big city meets that a small one never
+// does. One rule produces the whole system: every built lot generates trips,
+// those trips spread evenly across the road tiles that actually serve the lot,
+// and a road tile carries only so many.
+//
+// All three counter-strategies fall out of that rule rather than being bolted
+// on beside it. Zoning shops near homes cuts trips at the source. A connected
+// grid spreads the same trips over more roads than one feeder spine can carry.
+// An avenue raises what a single tile can take. Nothing here routes anything:
+// pathfinding thousands of trips across 4096 tiles every tick would cost far
+// more than the effect is worth, and would not change the advice it gives.
+
+// Street, bridge, avenue, avenue bridge. The level is two independent bits —
+// odd means over water, >= 2 means avenue — so bridges keep working untouched.
+// Calibrated against a mature 7,500-resident city built with no thought for
+// traffic at all: about a sixth of its lots come out gridlocked and a fifth
+// merely slowed, which is a problem worth fixing rather than a city that
+// stops dead the moment the system arrives.
+var ROAD_CAPACITY = [20, 20, 50, 50]
+var AVENUE_UPGRADE_COST = 20
+var AVENUE_UPKEEP = 0.55
+// A build tool, not a tile type: it writes TILE_ROAD at an avenue level, so
+// every road-shaped thing in the model stays a road.
+var TOOL_AVENUE = "A"
+
+var TRIPS_PER_RESIDENT = 0.55
+var TRIPS_PER_JOB = 0.4
+// How far a trip can be satisfied locally, and how much local opportunity it
+// takes to absorb as much as a neighbourhood ever can. Never all of it:
+// somebody always drives.
+var TRIP_LOCAL_RADIUS = 5
+var TRIP_LOCAL_TARGET = 70
+var TRIP_LOCAL_RELIEF = 0.55
+
+// Below WATCH a road flows freely; between WATCH and JAM growth tapers; at or
+// above JAM the lot cannot grow at all until someone fixes the road.
+var CONGESTION_WATCH = 0.7
+var CONGESTION_JAM = 1.0
+var TRAFFIC_MAX_HAPPINESS_PENALTY = 14
+
+function isBridgeTile(tile) {
+  return tile.type === TILE_ROAD && tile.level % 2 === 1
+}
+
+function isAvenueTile(tile) {
+  return tile.type === TILE_ROAD && tile.level >= 2
+}
+
+function roadCapacity(level) {
+  return ROAD_CAPACITY[level] || ROAD_CAPACITY[0]
+}
+
+// The other half of a commute, within walking distance: jobs for a home,
+// customers for a shop or a plant. A bounded box keeps this O(1) per tile
+// however big the city gets — the same reason nearbyZoneEffect is written
+// this way instead of comparing every built tile against every other one.
+function localOpportunity(grid, gridSize, index, type) {
+  var x = index % gridSize, y = Math.floor(index / gridSize)
+  var r = TRIP_LOCAL_RADIUS, r2 = r * r, total = 0
+  for (var dy = -r; dy <= r; dy++) {
+    var ny = y + dy
+    if (ny < 0 || ny >= gridSize) continue
+    for (var dx = -r; dx <= r; dx++) {
+      var nx = x + dx
+      if (nx < 0 || nx >= gridSize) continue
+      if (dx * dx + dy * dy > r2) continue
+      var t = parseTile(grid[ny * gridSize + nx])
+      if (t.level < 1) continue
+      if (type === TILE_RES) {
+        if (t.type === TILE_COM) total += t.level * COM_JOBS_PER_LEVEL
+        else if (t.type === TILE_IND) total += t.level * IND_JOBS_PER_LEVEL
+      } else if (t.type === TILE_RES) total += t.level * RES_CAP_PER_LEVEL
+    }
+  }
+  return total
+}
+
+// Trips one lot puts onto the network this tick, after whatever its own
+// neighbourhood absorbs on foot.
+function tileTrips(grid, gridSize, index, tile) {
+  var base = 0
+  if (tile.type === TILE_RES) base = tile.level * RES_CAP_PER_LEVEL * TRIPS_PER_RESIDENT
+  else if (tile.type === TILE_COM) base = tile.level * COM_JOBS_PER_LEVEL * TRIPS_PER_JOB
+  else if (tile.type === TILE_IND) base = tile.level * IND_JOBS_PER_LEVEL * TRIPS_PER_JOB
+  if (base <= 0) return 0
+  var local = localOpportunity(grid, gridSize, index, tile.type)
+  return base * (1 - TRIP_LOCAL_RELIEF * Math.min(1, local / TRIP_LOCAL_TARGET))
+}
+
+function trafficSurvey(grid, gridSize) {
+  var roadLoad = {}, lotRoads = {}, totalTrips = 0, unservedTrips = 0
+
+  for (var i = 0; i < grid.length; i++) {
+    var tile = parseTile(grid[i])
+    if (tile.level < 1) continue
+    if (tile.type !== TILE_RES && tile.type !== TILE_COM && tile.type !== TILE_IND) continue
+    var trips = tileTrips(grid, gridSize, i, tile)
+    if (trips <= 0) continue
+    totalTrips += trips
+    // The same set of roads that lets this lot grow at all is the set that
+    // carries its traffic, so a lot can never be served by a road it cannot
+    // reach, and widening the wrong street can never help it.
+    var serving = roadAccessIndices(grid, gridSize, i)
+    if (serving.length === 0) { unservedTrips += trips; continue }
+    lotRoads[i] = serving
+    var share = trips / serving.length
+    for (var r = 0; r < serving.length; r++)
+      roadLoad[serving[r]] = (roadLoad[serving[r]] || 0) + share
+  }
+
+  var roadCongestion = {}, jammed = 0, busy = 0, used = 0, stuck = 0, worst = 0
+  for (var key in roadLoad) {
+    var capacity = roadCapacity(parseTile(grid[Number(key)]).level)
+    var value = roadLoad[key] / capacity
+    roadCongestion[key] = value
+    used++
+    if (value >= CONGESTION_JAM) { jammed++; stuck += roadLoad[key] - capacity }
+    else if (value >= CONGESTION_WATCH) busy++
+    if (value > worst) worst = value
+  }
+
+  // A lot's congestion is the mean across the roads serving it: one bad street
+  // out of four is a nuisance, not a shutdown — and that gap is exactly what a
+  // connected grid buys over a single feeder.
+  var lotCongestion = {}
+  for (var lot in lotRoads) {
+    var serving2 = lotRoads[lot], sum = 0
+    for (var s = 0; s < serving2.length; s++) sum += roadCongestion[serving2[s]] || 0
+    lotCongestion[lot] = sum / serving2.length
+  }
+
+  return {
+    roadCongestion: roadCongestion, lotCongestion: lotCongestion,
+    totalTrips: totalTrips, unservedTrips: unservedTrips,
+    jammedRoads: jammed, busyRoads: busy, usedRoads: used,
+    worst: worst, stuckTrips: stuck,
+    stuckShare: totalTrips > 0 ? stuck / totalTrips : 0
+  }
+}
+
+function lotCongestion(traffic, index) {
+  if (!traffic || !traffic.lotCongestion) return 0
+  var value = traffic.lotCongestion[index]
+  return value === undefined ? 0 : value
+}
+
+// Full speed up to WATCH, tapering to a standstill at JAM. Returned rather
+// than applied inline so tickGrid and growthBlocker read it from one place and
+// cannot disagree about whether a lot is stuck.
+function trafficGrowthScale(congestion) {
+  if (congestion < CONGESTION_WATCH) return 1
+  if (congestion >= CONGESTION_JAM) return 0
+  return 1 - (congestion - CONGESTION_WATCH) / (CONGESTION_JAM - CONGESTION_WATCH)
+}
+
+// The share of built lots that cannot grow because of the roads serving them.
+// This is what the planner reports and what the overlay paints red, so the two
+// can never disagree about how bad things are.
+function jammedLotShare(traffic) {
+  if (!traffic || !traffic.lotCongestion) return 0
+  var total = 0, stuck = 0
+  for (var key in traffic.lotCongestion) {
+    total++
+    if (traffic.lotCongestion[key] >= CONGESTION_JAM) stuck++
+  }
+  return total > 0 ? stuck / total : 0
+}
+
+function trafficHappinessPenalty(traffic) {
+  if (!traffic || !traffic.totalTrips) return 0
+  return Math.min(TRAFFIC_MAX_HAPPINESS_PENALTY, Math.round(traffic.stuckShare * 45))
+}
+
 // Growth/abandonment for one minute. Demand factors use the *pre-tick*
 // stats so every tile decides off the same snapshot, not a shifting one.
 // A zone only grows when it's road-connected *and* inside both a power
 // and a water plant's coverage — served, not just zoned. Losing any one
 // of the three (plant bulldozed, road cut) puts it at decay risk exactly
 // like a road disconnect always has.
-function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load, effects) {
+function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load, effects, traffic) {
   var policy = effects || ordinanceEffects([])
   var powerSatisfaction = load ? load.power : 1
   var waterSatisfaction = load ? load.water : 1
@@ -671,6 +858,9 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
           growthChance *= 1 - (1 - INDUSTRIAL_GROWTH_PENALTY) * policy.industrialNuisance
         if (zoneEffect.nearCommercial) growthChance *= COMMERCIAL_GROWTH_BONUS
       }
+      // Congestion throttles every zone equally: goods, customers and
+      // workers all arrive by the same jammed street.
+      growthChance *= trafficGrowthScale(lotCongestion(traffic, i))
       if (Math.random() < growthChance) {
         next[i] = makeTile(tile.type, tile.level + 1)
         continue
@@ -757,7 +947,9 @@ function computeUpkeep(stats, funding, ordinances) {
 function upkeepBreakdown(stats, funding, ordinances) {
   var densityRate = DENSITY_UPKEEP_RATE * (1 + stats.builtDensity / DENSITY_UPKEEP_SOFTCAP)
   var rows = [
-    { key: "roads", label: "Roads", amount: stats.roadCount * ROAD_UPKEEP },
+    { key: "roads", label: "Roads",
+      amount: (stats.roadCount - (stats.avenueCount || 0)) * ROAD_UPKEEP
+        + (stats.avenueCount || 0) * AVENUE_UPKEEP },
     { key: "power", label: "Power plants", amount: stats.powerUpkeep },
     { key: "water", label: "Water", amount: stats.waterUpkeep },
     { key: "parks", label: "Parks", amount: stats.parkCount * PARK_UPKEEP },
@@ -806,13 +998,15 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
   var policy = ordinanceEffects(ordinances)
   incomeMultiplier = incomeMultiplier === undefined ? 1 : incomeMultiplier
   var stats = summarize(grid)
+  var traffic = trafficSurvey(grid, gridSize)
   var happiness = Math.round(clamp(
-    computeHappiness(taxRatePercent, stats) + happinessModifier + policy.happiness, 0, 100))
+    computeHappiness(taxRatePercent, stats, trafficHappinessPenalty(traffic))
+      + happinessModifier + policy.happiness, 0, 100))
   var utilities = findUtilities(grid)
   var connected = connectedNeighbors(grid, gridSize, neighbors)
   var demand = computeDemand(stats, connected.length, policy)
   var load = utilityLoad(grid, stats, policy)
-  var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load, policy)
+  var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load, policy, traffic)
   var upkeep = computeUpkeep(stats, funding, ordinances)
   var income = computeIncome(stats.taxablePopulation, taxRatePercent) * incomeMultiplier
     * neighborBonus(connected.length).trade
@@ -833,6 +1027,7 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
     powerCount: stats.powerCount,
     waterCount: stats.waterCount,
     load: load,
+    traffic: traffic,
     connectedNeighbors: connected
   }
 }
@@ -854,6 +1049,12 @@ function canPlace(grid, index, type, treasury) {
   if (treasury < cost) return false
   var current = parseTile(grid[index])
   if (type === TILE_ROAD && current.type === TILE_LAKE) return true
+  // An avenue can be laid on open land or water like a road, or widen an
+  // existing street or bridge in place. Widening an avenue is a no-op, so it
+  // is refused rather than silently charging for nothing.
+  if (type === TOOL_AVENUE)
+    return current.type === TILE_EMPTY || current.type === TILE_LAKE
+      || (current.type === TILE_ROAD && !isAvenueTile(current))
   if (type === TILE_WATERFRONT_PARK)
     return current.type === TILE_EMPTY && shoreAdjacent(grid, Math.round(Math.sqrt(grid.length)), index)
   return current.type === TILE_EMPTY
@@ -861,14 +1062,20 @@ function canPlace(grid, index, type, treasury) {
 
 function placeTile(grid, index, type) {
   var next = grid.slice()
-  next[index] = makeTile(type, type === TILE_ROAD && parseTile(grid[index]).type === TILE_LAKE ? 1 : 0)
+  var current = parseTile(grid[index])
+  if (type === TOOL_AVENUE) {
+    var overWater = current.type === TILE_LAKE || isBridgeTile(current)
+    next[index] = makeTile(TILE_ROAD, overWater ? 3 : 2)
+    return next
+  }
+  next[index] = makeTile(type, type === TILE_ROAD && current.type === TILE_LAKE ? 1 : 0)
   return next
 }
 
 function bulldozeTile(grid, index) {
   var next = grid.slice()
   var tile = parseTile(grid[index])
-  next[index] = makeTile(tile.type === TILE_ROAD && tile.level === 1 ? TILE_LAKE : TILE_EMPTY, 0)
+  next[index] = makeTile(isBridgeTile(tile) ? TILE_LAKE : TILE_EMPTY, 0)
   return next
 }
 
@@ -1540,7 +1747,7 @@ function coverageRow(coverage, key) {
   return { unmet: 0, coverage: 100, residents: 0 }
 }
 
-function planningAdvice(stats, demand, neighborsLinked, neighborsTotal) {
+function planningAdvice(stats, demand, neighborsLinked, neighborsTotal, traffic) {
   neighborsLinked = neighborsLinked || 0
   neighborsTotal = neighborsTotal || 0
   var ceiling = residentialCeiling(stats)
@@ -1552,6 +1759,20 @@ function planningAdvice(stats, demand, neighborsLinked, neighborsTotal) {
       "Residential is at " + Math.round(stats.population / ceiling * 100) + "% of its zoned ceiling ("
       + stats.population + " of " + ceiling + "). Growth has stopped because there is nowhere left to "
       + "build up — zone more residential land.", "growth")
+  // Gridlock stops growth outright, so it ranks with the things that halt a
+  // city rather than with the balance advice further down. The three fixes are
+  // named explicitly because none of them is obvious from the map alone.
+  var stuckShare = jammedLotShare(traffic)
+  if (stuckShare >= 0.25)
+    return advice("planning", SEVERITY_URGENT, "The city is gridlocked",
+      Math.round(stuckShare * 100) + "% of built lots sit on jammed roads and cannot grow. "
+      + "Widen the worst streets into avenues, open a second route so the traffic has "
+      + "somewhere else to go, or zone shops among the houses so fewer trips start at all.",
+      "traffic")
+  if (stuckShare >= 0.08)
+    return advice("planning", SEVERITY_WATCH, "Traffic is building up",
+      Math.round(stuckShare * 100) + "% of built lots are on roads at capacity. Widening them "
+      + "into avenues or mixing shops into the housing will keep growth moving.", "traffic")
   var jobs = stats.jobsCommercial + stats.jobsIndustrial
   if (jobs > stats.population * 1.6 && stats.population > 0)
     return advice("planning", SEVERITY_WATCH, "More jobs than workers",
@@ -1686,7 +1907,7 @@ function financeAdvice(stats, income, upkeep, treasury, loans, taxRatePercent) {
 // rescans the grid.
 function cityAdvice(ctx) {
   return [
-    planningAdvice(ctx.stats, ctx.demand, ctx.neighborsLinked, ctx.neighborsTotal),
+    planningAdvice(ctx.stats, ctx.demand, ctx.neighborsLinked, ctx.neighborsTotal, ctx.traffic),
     utilitiesAdvice(ctx.coverage, ctx.load),
     safetyAdvice(ctx.coverage, ctx.funding, ctx.fires, ctx.crimes),
     wellbeingAdvice(ctx.coverage, ctx.stats, ctx.funding),
@@ -1715,7 +1936,8 @@ var OVERLAYS = [
   { key: "schools", label: "Schools", service: "schools", radius: SCHOOL_RADIUS, funding: "N" },
   { key: "medical", label: "Health", service: "medical", radius: MEDICAL_RADIUS, funding: "H" },
   { key: "value", label: "Land value" },
-  { key: "growth", label: "Growth" }
+  { key: "growth", label: "Growth" },
+  { key: "traffic", label: "Traffic" }
 ]
 
 function overlayDef(key) {
@@ -1751,16 +1973,17 @@ function overlayCoverageState(grid, gridSize, index, def, utilities, funding) {
 // nothing is stopping it.
 var GROWTH_BLOCKER_LABELS = {
   max: "Fully grown", road: "No road", power: "No power",
-  water: "No water", unhappy: "City too unhappy"
+  water: "No water", traffic: "Gridlocked", unhappy: "City too unhappy"
 }
 
-function growthBlocker(grid, gridSize, index, utilities, happiness) {
+function growthBlocker(grid, gridSize, index, utilities, happiness, traffic) {
   var tile = parseTile(grid[index])
   if (tile.type !== TILE_RES && tile.type !== TILE_COM && tile.type !== TILE_IND) return ""
   if (tile.level >= 3) return "max"
   if (!hasRoadAccess(grid, gridSize, index)) return "road"
   if (!isCovered(gridSize, utilities.power, index, POWER_RADIUS)) return "power"
   if (!isCovered(gridSize, utilities.water, index, WATER_RADIUS)) return "water"
+  if (traffic && trafficGrowthScale(lotCongestion(traffic, index)) <= 0) return "traffic"
   if (happiness < 20) return "unhappy"
   return ""
 }

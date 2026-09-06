@@ -134,6 +134,12 @@ Item {
   readonly property var coverage: Model.serviceCoverageStats(root.grid, root.gridSize)
   readonly property var policy: Model.ordinanceEffects(root.ordinances)
   readonly property var load: Model.utilityLoad(root.grid, root.cityStats, root.policy)
+  // Deliberately NOT a binding on the grid. Surveying traffic means walking
+  // every lot's road access, which costs milliseconds on a mature city — fine
+  // once a month, ruinous on every tile of a road drag. It refreshes on the
+  // tick, and on demand when something is about to show it.
+  property var traffic: Model.trafficSurvey(root.grid, root.gridSize)
+  function refreshTraffic() { root.traffic = Model.trafficSurvey(root.grid, root.gridSize) }
   readonly property real income: Model.computeIncome(root.cityStats.taxablePopulation, root.taxRatePercent)
   readonly property real upkeep: Model.computeUpkeep(root.cityStats, root.funding, root.ordinances)
   readonly property var linkedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
@@ -142,7 +148,7 @@ Item {
     demand: Model.computeDemand(root.cityStats, root.linkedNeighbors.length, root.policy),
     income: root.income, upkeep: root.upkeep, treasury: root.treasury,
     funding: root.funding, loans: root.loans, taxRatePercent: root.taxRatePercent,
-    fires: root.fires, crimes: root.crimes, load: root.load,
+    fires: root.fires, crimes: root.crimes, load: root.load, traffic: root.traffic,
     neighborsLinked: root.linkedNeighbors.length,
     neighborsTotal: root.neighbors ? root.neighbors.length : 0
   }) : []
@@ -454,6 +460,7 @@ Item {
       var result = Model.advanceCity(root.grid, root.gridSize, root.taxRatePercent,
         happinessModifier, incomeMultiplier, root.funding, root.neighbors, root.ordinances)
       root.grid = result.grid
+      root.traffic = result.traffic
       root.population = result.population
       root.jobs = result.jobs
       root.happiness = result.happiness

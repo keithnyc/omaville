@@ -198,10 +198,18 @@ Item {
   property string overlayMode: ""
   readonly property var overlayDef: root.overlayMode !== "" ? Model.overlayDef(root.overlayMode) : null
   function setOverlay(mode) { root.overlayMode = root.overlayMode === mode ? "" : mode }
+  // The survey only refreshes on the tick, so bring it up to date the moment
+  // someone actually looks at it — otherwise a road just widened still reads
+  // as jammed until the next month rolls over. On the property rather than in
+  // setOverlay because the picker and the advisors set overlayMode directly.
+  onOverlayModeChanged: {
+    if (root.overlayMode === "traffic" && root.serviceReady) root.cityService.refreshTraffic()
+  }
   readonly property string overlayLegend: {
     if (!root.overlayDef) return ""
     if (root.overlayMode === "growth") return "Red: blocked from growing · dim: fully grown"
     if (root.overlayMode === "value") return "Brighter: higher land value from parks, water and landscaping"
+    if (root.overlayMode === "traffic") return "Roads — green: flowing · amber: busy · red: gridlocked"
     return "Green: in range · red: built but uncovered"
   }
   // Advisors run off the figures already computed above rather than rescanning
@@ -220,6 +228,7 @@ Item {
     if (type === Model.TILE_LAKE) return "Water · $4 per tile\nPaint rivers and lakes on empty land. Roads over water become $35 bridges."
     if (type === Model.TILE_WATERFRONT_PARK) return "Waterfront Park · $30\nPlace on empty land beside water for a garden and pier. Adds park happiness."
     if (type === Model.TILE_ROAD) return "Road · $10 on land / $35 bridge on water\nServes zones up to 2 steps away through lots, gardens or open land. Water and service buildings block access. Removing a bridge restores water."
+    if (type === Model.TOOL_AVENUE) return "Avenue · $30 new / $20 to widen a street\nCarries about two and a half times a street. Costs more to maintain."
     if (type === "decorations") return "Decorations · hover for trees and flowerbeds\nRaise nearby home values and residential demand."
     if (type === "inspect") return "Inspect · click a tile for services, property value and upgrades."
     if (type === "bulldoze") return "Bulldoze · remove a tile and reclaim its construction cost."
@@ -258,7 +267,9 @@ Item {
 
   function inspectTitle(info) {
     if (!info) return ""
-    if (info.type === Model.TILE_ROAD && info.level === 1) return "Bridge"
+    if (info.type === Model.TILE_ROAD)
+      return info.level === 3 ? "Avenue bridge" : info.level === 2 ? "Avenue"
+        : info.level === 1 ? "Bridge" : "Road"
     if (info.tierName) return info.tierName + " · Tier " + (info.level + 1)
     var label = Model.TILE_LABELS[info.type] || "Unknown"
     var isZone = info.type === Model.TILE_RES || info.type === Model.TILE_COM || info.type === Model.TILE_IND
@@ -303,8 +314,21 @@ Item {
     }
     if (info.type === Model.TILE_TREE || info.type === Model.TILE_FLOWERS)
       lines.push("Beautifies homes within 3 tiles", "Contributes to city appeal: +" + root.attractiveness + "% residential demand")
-    if (info.type === Model.TILE_ROAD)
-      lines.push(info.level === 1 ? "Carries traffic over water · bulldoze restores water" : "Connects buildings and carries traffic")
+    if (info.type === Model.TILE_ROAD) {
+      var overWater = info.level % 2 === 1
+      var avenue = info.level >= 2
+      lines.push(overWater ? "Carries traffic over water · bulldoze restores water"
+        : "Connects buildings and carries traffic")
+      lines.push("Capacity " + Model.roadCapacity(info.level) + " trips"
+        + (avenue ? "" : " · widen to an avenue for " + Model.roadCapacity(2)))
+      var congestion = root.serviceReady && root.cityService.traffic
+        && root.cityService.traffic.roadCongestion
+        ? (root.cityService.traffic.roadCongestion[root.inspectedIndex] || 0) : 0
+      if (congestion > 0)
+        lines.push("Currently at " + Math.round(congestion * 100) + "% of capacity"
+          + (congestion >= Model.CONGESTION_JAM ? " — gridlocked"
+            : congestion >= Model.CONGESTION_WATCH ? " — busy" : ""))
+    }
     if (info.type === Model.TILE_LAKE)
       lines.push("Natural water · nearby homes gain up to 12% value", "Draw a road here to build a $35 bridge", "Does not provide utility water")
     if (info.type === Model.TILE_WATERFRONT_PARK)
@@ -368,6 +392,7 @@ Item {
   function toolStatusText() {
     var t = root.hoveredToolType !== "" ? root.hoveredToolType : root.activeTool
     if (t === Model.TILE_ROAD) return "Road — $10 on land · $35 bridge over water" + root.monthlyNote(t, 0)
+    if (t === Model.TOOL_AVENUE) return "Avenue — $30 new · $20 to widen a street · carries 2.5x a street"
     if (t === Model.TILE_LAKE) return "Water — $4 · paint empty land · waterfront homes gain up to 12%"
     if (t === Model.TILE_WATERFRONT_PARK) return "Waterfront Park — $30 · requires empty land beside water" + root.monthlyNote(t, 0)
     if (t === "decorations") return "Decorations — hover to choose a tree or flowerbed"
@@ -656,6 +681,7 @@ Item {
 
   readonly property var toolList: [
     { type: Model.TILE_ROAD, label: "Road" },
+    { type: Model.TOOL_AVENUE, label: "Avenue" },
     { type: Model.TILE_LAKE, label: "Water" },
     { type: Model.TILE_WATERFRONT_PARK, label: "Waterfront Park" },
     { type: Model.TILE_RES, label: "Residential" },
@@ -754,6 +780,7 @@ Item {
     var endRow = Math.min(root.gridSize - 1, Math.ceil((offsetY + height) / cellSize))
     var utilities = root.utilities
     var funding = root.serviceReady ? root.cityService.funding : null
+    var traffic = root.serviceReady ? root.cityService.traffic : null
 
     for (var row = startRow; row <= endRow; row++) {
       for (var col = startCol; col <= endCol; col++) {
@@ -766,9 +793,32 @@ Item {
           var v = Model.landValueFraction(data, root.gridSize, idx)
           if (v > 0.02) fill = Qt.rgba(0.36 + v * 0.5, 0.82, 0.45, 0.12 + v * 0.45)
         } else if (root.overlayMode === "growth") {
-          var reason = Model.growthBlocker(data, root.gridSize, idx, utilities, root.happiness)
+          var reason = Model.growthBlocker(data, root.gridSize, idx, utilities, root.happiness, traffic)
           if (reason === "max") fill = Qt.rgba(0.55, 0.62, 0.55, 0.22)
           else if (reason !== "") fill = Qt.rgba(0.92, 0.34, 0.28, 0.5)
+        } else if (root.overlayMode === "traffic") {
+          // Roads carry the colour, because roads are what the player fixes.
+          // Lots are tinted faintly so a jammed block reads as a block rather
+          // than as a set of unrelated red lines.
+          var tile = Model.parseTile(data[idx])
+          if (tile.type === Model.TILE_ROAD) {
+            var c = traffic && traffic.roadCongestion
+              ? (traffic.roadCongestion[idx] || 0) : 0
+            if (c > 0.05) {
+              var over = Math.min(1, Math.max(0, (c - Model.CONGESTION_WATCH)
+                / (Model.CONGESTION_JAM - Model.CONGESTION_WATCH)))
+              if (c < Model.CONGESTION_WATCH)
+                fill = Qt.rgba(0.35, 0.78, 0.42, 0.18 + 0.3 * (c / Model.CONGESTION_WATCH))
+              else if (c < Model.CONGESTION_JAM)
+                fill = Qt.rgba(0.95, 0.72, 0.25, 0.45 + 0.25 * over)
+              else
+                fill = Qt.rgba(0.92, 0.26, 0.22, Math.min(0.85, 0.6 + 0.25 * (c - 1)))
+            }
+          } else if (tile.level > 0) {
+            var lc = Model.lotCongestion(traffic, idx)
+            if (lc >= Model.CONGESTION_JAM) fill = Qt.rgba(0.92, 0.26, 0.22, 0.2)
+            else if (lc >= Model.CONGESTION_WATCH) fill = Qt.rgba(0.95, 0.72, 0.25, 0.16)
+          }
         } else {
           var state = Model.overlayCoverageState(data, root.gridSize, idx, def, utilities, funding)
           if (state === "gap") fill = Qt.rgba(0.92, 0.34, 0.28, 0.55)
@@ -1156,6 +1206,40 @@ Item {
   // One renderer covers every topology: isolated tile, dead end, straight,
   // corner, T-junction, and four-way crossing. Curbs are drawn only against
   // non-road neighbors; markings follow the actual connection mask.
+  // Painted over a finished road rather than replacing it: an avenue is the
+  // same asphalt with a wider carriageway, and reusing drawRoad keeps the
+  // texture, curbs and junction logic identical between the two.
+  function drawAvenueMarkings(ctx, gx, gy, cellSize, conn) {
+    var cx = gx + cellSize * 0.5, cy = gy + cellSize * 0.5
+    var gap = cellSize * 0.17
+    var sep = Math.max(0.7, cellSize * 0.05)
+    var w = Math.max(0.7, cellSize * 0.032)
+    ctx.save()
+    ctx.fillStyle = "rgba(228, 188, 82, 0.7)"
+    if (conn.up) {
+      ctx.fillRect(cx - sep - w, gy, w, cellSize * 0.5 - gap)
+      ctx.fillRect(cx + sep, gy, w, cellSize * 0.5 - gap)
+    }
+    if (conn.down) {
+      ctx.fillRect(cx - sep - w, cy + gap, w, cellSize * 0.5 - gap + 1)
+      ctx.fillRect(cx + sep, cy + gap, w, cellSize * 0.5 - gap + 1)
+    }
+    if (conn.left) {
+      ctx.fillRect(gx, cy - sep - w, cellSize * 0.5 - gap, w)
+      ctx.fillRect(gx, cy + sep, cellSize * 0.5 - gap, w)
+    }
+    if (conn.right) {
+      ctx.fillRect(cx + gap, cy - sep - w, cellSize * 0.5 - gap + 1, w)
+      ctx.fillRect(cx + gap, cy + sep, cellSize * 0.5 - gap + 1, w)
+    }
+    // A dead-end stub would otherwise show nothing at all.
+    if (!conn.up && !conn.down && !conn.left && !conn.right) {
+      ctx.fillRect(cx - sep - w, gy + cellSize * 0.2, w, cellSize * 0.6)
+      ctx.fillRect(cx + sep, gy + cellSize * 0.2, w, cellSize * 0.6)
+    }
+    ctx.restore()
+  }
+
   function drawRoad(ctx, gx, gy, cellSize, conn, index) {
     ctx.save()
 
@@ -3161,10 +3245,12 @@ Item {
       }
       break
     case Model.TILE_ROAD:
-      if (tile.level === 1) {
+      var roadConn = root.roadConnections(data, root.gridSize, index)
+      if (tile.level % 2 === 1) {
         Waterfront.drawWater(ctx, gx, gy, cellSize, data, root.gridSize, index)
-        Waterfront.drawBridge(ctx, gx, gy, cellSize, root.roadConnections(data, root.gridSize, index))
-      } else root.drawRoad(ctx, gx, gy, cellSize, root.roadConnections(data, root.gridSize, index), index)
+        Waterfront.drawBridge(ctx, gx, gy, cellSize, roadConn)
+      } else root.drawRoad(ctx, gx, gy, cellSize, roadConn, index)
+      if (tile.level >= 2) root.drawAvenueMarkings(ctx, gx, gy, cellSize, roadConn)
       break
     case Model.TILE_PARK:
       if (!root.drawInfrastructureSprite(ctx, gx, gy, cellSize, tile.type, tile.level, index)) root.drawPark(ctx, gx, gy, cellSize, tile.level)
@@ -3622,6 +3708,10 @@ Item {
                   case Model.TILE_ROAD:
                     root.drawRoad(ctx, 0, 0, width, { up: true, down: true, left: true, right: true })
                     break
+                  case Model.TOOL_AVENUE:
+                    root.drawRoad(ctx, 0, 0, width, { up: true, down: true, left: false, right: false })
+                    root.drawAvenueMarkings(ctx, 0, 0, width, { up: true, down: true, left: false, right: false })
+                    break
                   case Model.TILE_LAKE: Waterfront.drawWater(ctx, 0, 0, width, ['L0'], 1, 0); break
                   case Model.TILE_WATERFRONT_PARK: root.drawPark(ctx, 0, 0, width, 2); break
                   case Model.TILE_RES: root.drawResidential(ctx, 0, 0, width, 2); break
@@ -3925,7 +4015,10 @@ Item {
             for (var detailRow = startRow; detailRow <= endRow; detailRow++) {
               for (var detailCol = startCol; detailCol <= endCol; detailCol++) {
                 var detailIndex = detailRow * root.gridSize + detailCol
-                if (data[detailIndex] === '#0')
+                // Lamps and markings belong on any road on dry land, avenues
+                // included; bridges carry their own railings instead.
+                var detailTile = Model.parseTile(data[detailIndex])
+                if (detailTile.type === Model.TILE_ROAD && detailTile.level % 2 === 0)
                   root.drawStreetDetails(ctx, detailCol * size - offsetX, detailRow * size - offsetY,
                     size, root.roadConnections(data, root.gridSize, detailIndex))
               }

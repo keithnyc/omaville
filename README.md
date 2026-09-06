@@ -19,6 +19,14 @@ zones can grow within two orthogonal steps of one, via open land, other zones,
 parks, or decorations (not across water or service buildings). Population milestones and
 budget crises show up as desktop notifications.
 
+Roads also carry traffic. Every built lot generates trips, spread across the
+road tiles that serve it, and a road only carries so many; a jammed road stops
+its lots growing and makes the city miserable. Three things fix it, and only
+one costs money: zone shops among the houses so fewer trips start at all, lay
+a connected grid so the same trips spread over more streets, or widen a street
+into an Avenue ($20 to widen, 2.5x the capacity, more upkeep). The Traffic
+overlay shows which roads are at their limit.
+
 ## Install
 
 ```bash
