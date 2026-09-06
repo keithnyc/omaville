@@ -41,7 +41,10 @@ Power tiers 2 and 3 also received a background-extraction edit preserving the bu
 Water tiers 2 and 3 required background-extraction edits. The final treatment-plant extraction used the transparent power-plant sprite as a cutout-delivery reference. All three final outputs were verified to have genuine alpha before normalization.
 
 
-## assets/transit — NOT YET GENERATED
+## assets/transit — generated September 6
+
+Final assets and actual prompt/cleanup details: assets/transit/PROMPTS.md.
+Draft briefing below retained for reference; all three sprites are now wired.
 
 Drafted by Claude for Codex/Astra; no images exist yet. The game currently
 falls back to `CityView.drawTransit`, a flat code-drawn canopy-and-buses

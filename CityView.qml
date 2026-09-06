@@ -783,6 +783,7 @@ Item {
   // Infrastructure tiers are zero-based (unlike the 1–3 zone growth levels).
   property bool useInfrastructureSprites: true
   readonly property var infrastructureSpriteUrls: ({
+    M: [Qt.resolvedUrl("assets/transit/m1.png").toString(), Qt.resolvedUrl("assets/transit/m2.png").toString(), Qt.resolvedUrl("assets/transit/m3.png").toString()],
     H: [Qt.resolvedUrl("assets/medical/h1.png").toString(), Qt.resolvedUrl("assets/medical/h2.png").toString(), Qt.resolvedUrl("assets/medical/h3.png").toString()],
     N: [Qt.resolvedUrl("assets/schools/n1.png").toString(), Qt.resolvedUrl("assets/schools/n2.png").toString(), Qt.resolvedUrl("assets/schools/n3.png").toString()],
     E: [Qt.resolvedUrl("assets/power/e1.png").toString(), Qt.resolvedUrl("assets/power/e2.png").toString(), Qt.resolvedUrl("assets/power/e3.png").toString()],
@@ -793,18 +794,11 @@ Item {
   })
   readonly property var spriteLotTints: ({ R: "rgba(80, 120, 78, 0.08)", C: "rgba(92, 122, 148, 0.12)", I: "rgba(122, 115, 97, 0.11)", E: "rgba(201, 162, 39, 0.10)", W: "rgba(47, 111, 148, 0.10)", F: "rgba(193, 67, 54, 0.08)", S: "rgba(58, 111, 224, 0.10)", P: "rgba(80, 132, 77, 0.08)", M: "rgba(197, 133, 47, 0.10)" })
 
-  // Decoration sprites are trimmed and then bottom-centred inside a 256px
-  // frame (see assets/decorations/PROMPTS.md), so how much of that frame each
-  // one actually paints differs a lot: the tree fills its full height, while
-  // the flowerbed is a wide flat oval covering only the bottom ~73%. Drawing
-  // both as the same bottom-anchored square left the bed visibly undersized,
-  // ringed by bare terrain. Each decoration therefore carries its own scale
-  // (fraction of the tile the sprite square spans) and baseline (how far down
-  // the tile that square's bottom edge sits) — tuned so the painted pixels,
-  // not the frame, end up filling the lot.
+  // Matching overhead camera and bottom-centred 256px cutouts. The flowerbed
+  // no longer needs a special scale/baseline to compensate for a tilted sprite.
   readonly property var decorationMetrics: ({
     T: { scale: 1.08, baseline: 0.97 },
-    B: { scale: 1.10, baseline: 0.93 }
+    B: { scale: 1.08, baseline: 0.97 }
   })
 
   // Data overlay painted over the finished map. Lives on its own thin Canvas
@@ -1277,44 +1271,65 @@ Item {
     return (hash ^ (hash >>> 16)) >>> 0
   }
 
-  // One renderer covers every topology: isolated tile, dead end, straight,
-  // corner, T-junction, and four-way crossing. Curbs are drawn only against
-  // non-road neighbors; markings follow the actual connection mask.
-  // Painted over a finished road rather than replacing it: an avenue is the
-  // same asphalt with a wider carriageway, and reusing drawRoad keeps the
-  // texture, curbs and junction logic identical between the two.
+  // Avenue paint uses the same topology as streets, but replaces (rather than
+  // overlays) the old centre dashes. Work in tile coordinates for seamless joins.
   function drawAvenueMarkings(ctx, gx, gy, cellSize, conn) {
-    var cx = gx + cellSize * 0.5, cy = gy + cellSize * 0.5
-    var gap = cellSize * 0.17
-    var sep = Math.max(0.7, cellSize * 0.05)
-    var w = Math.max(0.7, cellSize * 0.032)
     ctx.save()
-    ctx.fillStyle = "rgba(228, 188, 82, 0.7)"
-    if (conn.up) {
-      ctx.fillRect(cx - sep - w, gy, w, cellSize * 0.5 - gap)
-      ctx.fillRect(cx + sep, gy, w, cellSize * 0.5 - gap)
+    ctx.translate(gx + cellSize * 0.5, gy + cellSize * 0.5)
+    ctx.scale(cellSize, cellSize)
+    ctx.lineCap = "butt"
+    ctx.lineJoin = "round"
+    var count = Number(conn.up) + Number(conn.right) + Number(conn.down) + Number(conn.left)
+    var straight = (conn.up && conn.down) || (conn.left && conn.right)
+    var corner = count === 2 && !straight
+    var rotation = 0
+    if (corner) rotation = conn.up && conn.right ? 0 : conn.right && conn.down ? 1 : conn.down && conn.left ? 2 : 3
+    else if (count <= 2) rotation = conn.up ? 0 : conn.right ? 1 : conn.down ? 2 : conn.left ? 3 : 0
+    ctx.rotate(rotation * Math.PI / 2)
+    function path(offset) {
+      ctx.beginPath()
+      if (corner) {
+        ctx.moveTo(offset, -0.5)
+        ctx.quadraticCurveTo(offset, -offset, 0.5, -offset)
+      } else if (count <= 2) {
+        ctx.moveTo(offset, count === 0 ? -0.30 : -0.5)
+        ctx.lineTo(offset, count === 1 ? 0.12 : count === 0 ? 0.30 : 0.5)
+      } else {
+        if (conn.up) { ctx.moveTo(offset, -0.5); ctx.lineTo(offset, -0.30) }
+        if (conn.down) { ctx.moveTo(offset, 0.30); ctx.lineTo(offset, 0.5) }
+        if (conn.left) { ctx.moveTo(-0.5, offset); ctx.lineTo(-0.30, offset) }
+        if (conn.right) { ctx.moveTo(0.30, offset); ctx.lineTo(0.5, offset) }
+      }
+      ctx.stroke()
     }
-    if (conn.down) {
-      ctx.fillRect(cx - sep - w, cy + gap, w, cellSize * 0.5 - gap + 1)
-      ctx.fillRect(cx + sep, cy + gap, w, cellSize * 0.5 - gap + 1)
-    }
-    if (conn.left) {
-      ctx.fillRect(gx, cy - sep - w, cellSize * 0.5 - gap, w)
-      ctx.fillRect(gx, cy + sep, cellSize * 0.5 - gap, w)
-    }
-    if (conn.right) {
-      ctx.fillRect(cx + gap, cy - sep - w, cellSize * 0.5 - gap + 1, w)
-      ctx.fillRect(cx + gap, cy + sep, cellSize * 0.5 - gap + 1, w)
-    }
-    // A dead-end stub would otherwise show nothing at all.
-    if (!conn.up && !conn.down && !conn.left && !conn.right) {
-      ctx.fillRect(cx - sep - w, gy + cellSize * 0.2, w, cellSize * 0.6)
-      ctx.fillRect(cx + sep, gy + cellSize * 0.2, w, cellSize * 0.6)
+    ctx.setLineDash([])
+    ctx.strokeStyle = "#d4b45f"
+    ctx.lineWidth = 0.025
+    path(-0.035); path(0.035)
+    if (cellSize >= 20) {
+      ctx.strokeStyle = "rgba(235, 234, 219, 0.66)"
+      ctx.lineWidth = 0.018
+      // Qt Canvas dash lengths are device-space even under the tile transform.
+      ctx.setLineDash([cellSize * 0.12, cellSize * 0.13])
+      path(-0.245); path(0.245)
+      ctx.setLineDash([])
+      if (count >= 3) {
+        // Leave the turning area clear; zebra bars stay on each approach.
+        ctx.fillStyle = "rgba(228, 225, 207, 0.65)"
+        for (var arm = 0; arm < 4; arm++) {
+          if ([conn.up, conn.right, conn.down, conn.left][arm]) {
+            ctx.save(); ctx.rotate(arm * Math.PI / 2)
+            for (var stripe = 0; stripe < 6; stripe++)
+              ctx.fillRect(-0.34 + stripe * 0.12, -0.28, 0.07, 0.09)
+            ctx.restore()
+          }
+        }
+      }
     }
     ctx.restore()
   }
 
-  function drawRoad(ctx, gx, gy, cellSize, conn, index) {
+  function drawRoad(ctx, gx, gy, cellSize, conn, index, avenue) {
     ctx.save()
 
     // Layered asphalt: dark enough to frame the colorful buildings, with a
@@ -1366,7 +1381,7 @@ Item {
 
     // A three-tone curb reads at both overview and close zoom: dark gutter,
     // concrete face, then a hairline highlight toward the neighboring lot.
-    var edgeInset = cellSize * 0.035
+    var edgeInset = cellSize * (avenue ? 0.018 : 0.035)
     function drawCurb(x1, y1, x2, y2) {
       ctx.lineCap = "square"
       ctx.strokeStyle = "rgba(15, 16, 18, 0.72)"
@@ -1384,6 +1399,7 @@ Item {
     if (!conn.left) drawCurb(gx + edgeInset, gy + edgeInset, gx + edgeInset, gy + cellSize - edgeInset)
     if (!conn.right) drawCurb(gx + cellSize - edgeInset, gy + edgeInset, gx + cellSize - edgeInset, gy + cellSize - edgeInset)
 
+    if (avenue) { ctx.restore(); return }
     var count = (conn.up ? 1 : 0) + (conn.down ? 1 : 0)
       + (conn.left ? 1 : 0) + (conn.right ? 1 : 0)
     ctx.lineCap = "round"
@@ -3344,8 +3360,8 @@ Item {
       var roadConn = root.connectionsAt(index)
       if (tile.level % 2 === 1) {
         Waterfront.drawWater(ctx, gx, gy, cellSize, data, root.gridSize, index)
-        Waterfront.drawBridge(ctx, gx, gy, cellSize, roadConn)
-      } else root.drawRoad(ctx, gx, gy, cellSize, roadConn, index)
+        Waterfront.drawBridge(ctx, gx, gy, cellSize, roadConn, tile.level >= 2)
+      } else root.drawRoad(ctx, gx, gy, cellSize, roadConn, index, tile.level >= 2)
       if (tile.level >= 2) root.drawAvenueMarkings(ctx, gx, gy, cellSize, roadConn)
       break
     case Model.TILE_PARK:
@@ -3764,7 +3780,7 @@ Item {
                       root.drawRoad(ctx, 0, 0, width, { up: true, down: true, left: true, right: true })
                       break
                     case Model.TOOL_AVENUE:
-                      root.drawRoad(ctx, 0, 0, width, { up: true, down: true, left: false, right: false })
+                      root.drawRoad(ctx, 0, 0, width, { up: true, down: true, left: false, right: false }, 0, true)
                       root.drawAvenueMarkings(ctx, 0, 0, width, { up: true, down: true, left: false, right: false })
                       break
                     case Model.TILE_LAKE: Waterfront.drawWater(ctx, 0, 0, width, ['L0'], 1, 0); break

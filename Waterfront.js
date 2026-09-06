@@ -46,30 +46,35 @@ function drawWater(ctx, x, y, s, data, size, index) {
   ctx.restore()
 }
 
-function drawBridge(ctx,x,y,s,conn) {
+function drawBridge(ctx,x,y,s,conn,avenue) {
   ctx.save();ctx.translate(x,y);ctx.scale(s,s)
   var vertical=conn.up||conn.down, horizontal=conn.left||conn.right
-  if(!vertical&&!horizontal) horizontal=true
+  if(!vertical&&!horizontal) {
+    if(avenue) vertical=true
+    else horizontal=true
+  }
+  var near=avenue?.065:.14, far=avenue?.905:.83
+  var deck=avenue?.085:.16, width=avenue?.84:.68
   ctx.fillStyle='rgba(10,27,33,.4)'
   if(vertical)ctx.fillRect(.11,0,.80,1)
   if(horizontal)ctx.fillRect(0,.11,1,.80)
   ctx.fillStyle='#555861'
-  if(vertical)ctx.fillRect(.16,0,.68,1)
-  if(horizontal)ctx.fillRect(0,.16,1,.68)
+  if(vertical)ctx.fillRect(deck,0,width,1)
+  if(horizontal)ctx.fillRect(0,deck,1,width)
   ctx.fillStyle='#c0b993'
-  for(var mark=0;mark<3;mark++) {
+  for(var mark=0;!avenue&&mark<3;mark++) {
     if(vertical)ctx.fillRect(.489,.06+mark*.34,.022,.18)
     if(horizontal)ctx.fillRect(.06+mark*.34,.489,.18,.022)
   }
   ctx.fillStyle='#a8a69a'
   // Rail segments leave connected side-road entrances open.
   if(vertical) for(var side=0;side<2;side++) {
-    var railX=side===0?.14:.83, opening=side===0?conn.left:conn.right
+    var railX=side===0?near:far, opening=side===0?conn.left:conn.right
     if(opening){ctx.fillRect(railX,0,.035,.16);ctx.fillRect(railX,.84,.035,.16)}
     else ctx.fillRect(railX,0,.035,1)
   }
   if(horizontal) for(var side=0;side<2;side++) {
-    var railY=side===0?.14:.83, opening=side===0?conn.up:conn.down
+    var railY=side===0?near:far, opening=side===0?conn.up:conn.down
     if(opening){ctx.fillRect(0,railY,.16,.035);ctx.fillRect(.84,railY,.16,.035)}
     else ctx.fillRect(0,railY,1,.035)
   }
@@ -77,12 +82,12 @@ function drawBridge(ctx,x,y,s,conn) {
   for(var post=0;post<4;post++) {
     var p=.035+post*.30
     if(vertical) {
-      if(!conn.left||p<.16||p>.84)ctx.fillRect(.13,p,.06,.05)
-      if(!conn.right||p<.16||p>.84)ctx.fillRect(.81,p,.06,.05)
+      if(!conn.left||p<.16||p>.84)ctx.fillRect(near-.01,p,.06,.05)
+      if(!conn.right||p<.16||p>.84)ctx.fillRect(far-.02,p,.06,.05)
     }
     if(horizontal) {
-      if(!conn.up||p<.16||p>.84)ctx.fillRect(p,.13,.05,.06)
-      if(!conn.down||p<.16||p>.84)ctx.fillRect(p,.81,.05,.06)
+      if(!conn.up||p<.16||p>.84)ctx.fillRect(p,near-.01,.05,.06)
+      if(!conn.down||p<.16||p>.84)ctx.fillRect(p,far-.02,.05,.06)
     }
   }
   ctx.restore()
