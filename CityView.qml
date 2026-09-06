@@ -1067,10 +1067,13 @@ Item {
       // become one flat slab with seams.
       var inset = 0.035 + ((seed >>> 14) % 3) * 0.012
       var far = 0.965 - ((seed >>> 17) % 3) * 0.012
-      ctx.fillStyle = "#43473f"
-      ctx.fillRect(inset, 0.30, far - inset, 0.665)
-      ctx.fillStyle = "#5c6058"
-      ctx.fillRect(inset + 0.012, 0.315, far - inset - 0.024, 0.635)
+      // Warm, gravelly and close in value to the terrain it sits on. A brighter
+      // grey read as a concrete pad dropped on grass rather than a worn yard,
+      // and washed the whole district out at district zoom.
+      ctx.fillStyle = "#3a3d34"
+      ctx.fillRect(inset, 0.34, far - inset, 0.625)
+      ctx.fillStyle = "#4a4c41"
+      ctx.fillRect(inset + 0.012, 0.355, far - inset - 0.024, 0.590)
       // A darker apron across the frontage, where deliveries actually stand.
       ctx.fillStyle = "#6d6f66"
       ctx.fillRect(0.08, 0.862, 0.58, 0.075)
@@ -1435,12 +1438,17 @@ Item {
     // gray slab or repaint-flickering random noise.
     ctx.fillStyle = "#2c2e32"
     ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+    // The radius is deliberately larger than the cell so the gradient's dark
+    // end falls *outside* it. At 0.72 the darkest ring landed right on the
+    // tile edge, and since both neighbours did the same, every join along a
+    // road showed as a black seam. Now the whole tile sits in the gentle
+    // inner half and adjacent tiles meet at almost the same tone.
     var asphalt = ctx.createRadialGradient(
       gx + cellSize * 0.48, gy + cellSize * 0.46, 0,
-      gx + cellSize * 0.48, gy + cellSize * 0.46, cellSize * 0.72)
-    asphalt.addColorStop(0, "rgba(82, 84, 89, 0.42)")
-    asphalt.addColorStop(0.72, "rgba(53, 55, 60, 0.18)")
-    asphalt.addColorStop(1, "rgba(18, 19, 22, 0.22)")
+      gx + cellSize * 0.48, gy + cellSize * 0.46, cellSize * 1.25)
+    asphalt.addColorStop(0, "rgba(82, 84, 89, 0.34)")
+    asphalt.addColorStop(0.72, "rgba(60, 62, 68, 0.12)")
+    asphalt.addColorStop(1, "rgba(30, 32, 36, 0.10)")
     ctx.fillStyle = asphalt
     ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
 
@@ -1492,10 +1500,17 @@ Item {
       ctx.lineWidth = Math.max(0.65, cellSize * 0.018)
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke()
     }
-    if (!conn.up) drawCurb(gx + edgeInset, gy + edgeInset, gx + cellSize - edgeInset, gy + edgeInset)
-    if (!conn.down) drawCurb(gx + edgeInset, gy + cellSize - edgeInset, gx + cellSize - edgeInset, gy + cellSize - edgeInset)
-    if (!conn.left) drawCurb(gx + edgeInset, gy + edgeInset, gx + edgeInset, gy + cellSize - edgeInset)
-    if (!conn.right) drawCurb(gx + cellSize - edgeInset, gy + edgeInset, gx + cellSize - edgeInset, gy + cellSize - edgeInset)
+    // Inset only the end that actually turns a corner. Insetting both ends
+    // left a notch the width of two insets at every join along a through
+    // road, so a straight street had its curb visibly chopped into segments.
+    var curbX0 = conn.left ? gx : gx + edgeInset
+    var curbX1 = conn.right ? gx + cellSize : gx + cellSize - edgeInset
+    var curbY0 = conn.up ? gy : gy + edgeInset
+    var curbY1 = conn.down ? gy + cellSize : gy + cellSize - edgeInset
+    if (!conn.up) drawCurb(curbX0, gy + edgeInset, curbX1, gy + edgeInset)
+    if (!conn.down) drawCurb(curbX0, gy + cellSize - edgeInset, curbX1, gy + cellSize - edgeInset)
+    if (!conn.left) drawCurb(gx + edgeInset, curbY0, gx + edgeInset, curbY1)
+    if (!conn.right) drawCurb(gx + cellSize - edgeInset, curbY0, gx + cellSize - edgeInset, curbY1)
 
     if (avenue) { ctx.restore(); return }
     var count = (conn.up ? 1 : 0) + (conn.down ? 1 : 0)
