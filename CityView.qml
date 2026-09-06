@@ -372,6 +372,7 @@ Item {
   property bool advisorsOpen: false
   property bool overlayMenuOpen: false
   property bool historyOpen: false
+  property bool goalOpen: false
   readonly property bool editingTownName: root.settingsOpen && townNameInput.activeFocus
   Shortcut {
     sequence: "F2"
@@ -389,6 +390,7 @@ Item {
     { action: "budget", label: "Budget", enabled: root.serviceReady },
     { action: "advisors", label: "Advisors", enabled: root.serviceReady },
     { action: "history", label: "History", enabled: root.serviceReady },
+    { action: "goal", label: "City Goal", enabled: root.serviceReady },
     { action: "name", label: "Name Town", enabled: root.serviceReady },
     { action: "", label: "", enabled: false, heading: true },
     { action: "settings", label: "Settings", enabled: true },
@@ -401,6 +403,7 @@ Item {
     else if (action === "budget") root.budgetOpen = true
     else if (action === "advisors") root.advisorsOpen = true
     else if (action === "history") root.historyOpen = true
+    else if (action === "goal") root.goalOpen = true
     else if (action === "settings") root.settingsOpen = true
     else if (action === "name") {
       root.settingsOpen = true
@@ -4479,12 +4482,12 @@ Item {
   // useless the moment the map pushed it out of view.
   Item {
     anchors.fill: parent
-    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
+    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
 
     MouseArea {
       anchors.fill: parent
-      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen
-      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false }
+      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen
+      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false; root.goalOpen = false }
     }
 
     Rectangle {
@@ -4934,6 +4937,147 @@ Item {
           }
 
           Button { text: "Done"; onClicked: root.historyOpen = false }
+        }
+      }
+    }
+
+    // The long goal, borrowed from LinCity-NG: a state the city holds rather
+    // than a score it climbs, which is what an idle game can actually reward.
+    Rectangle {
+      id: goalCard
+      visible: root.goalOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(380))
+      height: Math.min(parent.height - Style.space(32), goalColumn.implicitHeight + Style.space(28))
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      MouseArea { anchors.fill: parent }
+
+      Flickable {
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        contentHeight: goalColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+
+        Column {
+          id: goalColumn
+          width: parent.width
+          spacing: Style.space(8)
+
+          Text {
+            text: root.serviceReady && root.cityService.sustainableAt > 0
+              ? "A self-sustaining city" : "Toward a self-sustaining city"
+            color: Color.menu.text
+            font.bold: true
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: {
+              if (!root.serviceReady) return ""
+              var s = root.cityService
+              if (s.sustainableAt > 0) {
+                var cal = Model.calendarFor(s.sustainableAt)
+                return "Reached in " + cal.monthName + ", Year " + cal.year
+                  + ". The city has proved it can run itself — everything below is "
+                  + "still worth holding, but the milestone is yours for good."
+              }
+              return "Hold every condition below for " + Model.SUSTAINABLE_HOLD_TICKS
+                + " months. The streak resets the moment one of them lapses."
+            }
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          // Progress bar for the streak.
+          Item {
+            width: parent.width
+            height: streakLabel.implicitHeight + Style.space(8)
+            visible: root.serviceReady
+            Text {
+              id: streakLabel
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.serviceReady
+                ? (root.cityService.sustainableNow
+                    ? "Holding · " + Math.min(root.cityService.sustainedTicks,
+                        Model.SUSTAINABLE_HOLD_TICKS) + " of "
+                        + Model.SUSTAINABLE_HOLD_TICKS + " months"
+                    : "Not currently holding")
+                : ""
+              color: root.serviceReady && root.cityService.sustainableNow
+                ? Color.accent : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+          }
+          Rectangle {
+            width: parent.width; height: Style.space(5); radius: height / 2
+            color: Qt.rgba(0.5, 0.6, 0.6, 0.2)
+            Rectangle {
+              width: parent.width * (root.serviceReady
+                ? Math.min(1, root.cityService.sustainedTicks / Model.SUSTAINABLE_HOLD_TICKS) : 0)
+              height: parent.height; radius: height / 2
+              color: Color.accent
+              Behavior on width { NumberAnimation { duration: 300; easing.type: Easing.OutCubic } }
+            }
+          }
+
+          Repeater {
+            model: root.serviceReady ? root.cityService.sustainability : []
+
+            Item {
+              id: goalRow
+              required property var modelData
+              width: goalColumn.width
+              height: goalText.implicitHeight + Style.space(6)
+
+              Text {
+                id: goalMark
+                anchors.left: parent.left
+                anchors.top: goalText.top
+                width: Style.space(16)
+                text: goalRow.modelData.met ? "\u2713" : "\u00b7"
+                color: goalRow.modelData.met ? "#7fbf7f"
+                  : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.45)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+              Column {
+                id: goalText
+                anchors.left: goalMark.right
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(1)
+                Text {
+                  width: parent.width
+                  text: goalRow.modelData.label
+                  color: goalRow.modelData.met ? Color.menu.text
+                    : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.75)
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  width: parent.width
+                  text: goalRow.modelData.detail
+                  wrapMode: Text.WordWrap
+                  color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+
+          Button { text: "Done"; onClicked: root.goalOpen = false }
         }
       }
     }

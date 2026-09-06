@@ -157,6 +157,19 @@ Item {
     neighborsTotal: root.neighbors ? root.neighbors.length : 0
   }) : []
   readonly property var topAdvice: root.advice.length > 0 ? Model.topAdvice(root.advice) : null
+
+  // The long goal. Derived every time anything it depends on changes, so the
+  // panel always shows the truth; only the *streak* is persisted, because that
+  // is the one part that is history rather than a current fact.
+  readonly property var sustainability: root.initialized ? Model.sustainability({
+    stats: root.cityStats, coverage: root.coverage, traffic: root.traffic,
+    income: root.income, upkeep: root.upkeep, happiness: root.happiness,
+    loans: root.loans
+  }) : []
+  readonly property bool sustainableNow: Model.sustainabilityMet(root.sustainability)
+  property int sustainedTicks: 0
+  // ageMinutes when the city first held it long enough; 0 means never.
+  property int sustainableAt: 0
   // Anything actively going wrong, most urgent first — what the bar widget
   // swaps its icon for.
   readonly property string alertKind: root.fires.length > 0 ? "fire"
@@ -321,6 +334,8 @@ Item {
     root.crimes = []
     root.ordinances = []
     root.lastElectionTick = 0
+    root.sustainedTicks = 0
+    root.sustainableAt = 0
     root.outOfOfficeUntil = 0
     root.lastApproval = 0
     root.neighbors = Model.makeNeighbors(root.gridSize, Date.now())
@@ -489,6 +504,25 @@ Item {
       }
       root.treasury = Math.max(Model.TREASURY_FLOOR, balance)
       root.ageMinutes += 1
+
+      // Checked after the tick has settled, against the figures it produced.
+      var goal = Model.sustainability({
+        stats: Model.summarize(root.grid), coverage: root.coverage,
+        traffic: root.traffic, income: result.income, upkeep: result.upkeep,
+        happiness: root.happiness, loans: root.loans
+      })
+      var heldBefore = root.sustainedTicks
+      root.sustainedTicks = Model.advanceSustainability(goal, heldBefore)
+      if (root.sustainedTicks >= Model.SUSTAINABLE_HOLD_TICKS && root.sustainableAt === 0) {
+        root.sustainableAt = root.ageMinutes
+        root.notify(root.cityName + " is self-sustaining",
+          "Balanced books, every service covered, traffic flowing and residents content — "
+          + "held for " + Model.SUSTAINABLE_HOLD_TICKS + " months.")
+        root.logEvent("milestone", root.cityName + " reached a self-sustaining economy.")
+      } else if (heldBefore >= 6 && root.sustainedTicks === 0 && root.sustainableAt === 0) {
+        root.logEvent("milestone", "The city slipped out of balance after "
+          + heldBefore + " months.")
+      }
       // Log a brownout only when the grid crosses into overload, not every
       // tick it stays there — otherwise one shortage floods the whole log.
       var strained = result.load && (result.load.power < 1 || result.load.water < 1)
@@ -686,6 +720,8 @@ Item {
       crimes: root.crimes,
       ordinances: root.ordinances,
       lastElectionTick: root.lastElectionTick,
+      sustainedTicks: root.sustainedTicks,
+      sustainableAt: root.sustainableAt,
       outOfOfficeUntil: root.outOfOfficeUntil,
       lastApproval: root.lastApproval,
       neighbors: root.neighbors,
@@ -755,6 +791,8 @@ Item {
       crimes = Array.isArray(saved.crimes) ? saved.crimes : []
       ordinances = Array.isArray(saved.ordinances) ? saved.ordinances : []
       lastElectionTick = Math.max(0, num(saved.lastElectionTick, 0))
+      sustainedTicks = Math.max(0, Math.round(num(saved.sustainedTicks, 0)))
+      sustainableAt = Math.max(0, Math.round(num(saved.sustainableAt, 0)))
       outOfOfficeUntil = Math.max(0, num(saved.outOfOfficeUntil, 0))
       lastApproval = Math.max(0, Math.round(num(saved.lastApproval, 0)))
       neighbors = Array.isArray(saved.neighbors) && saved.neighbors.length === 4

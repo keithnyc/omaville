@@ -138,3 +138,56 @@ const size = M.GRID_SIZE;
 
 console.log('PASS: businesses taxed with commerce ahead of industry, a capped services rate, ' +
   'growth that pays for itself in a dense city, and a starter town that is still a squeeze.');
+
+// --- the long goal --------------------------------------------------------
+// Borrowed from LinCity-NG's sustainable-economy win condition. It has to be a
+// state the city *holds*, not one it touches once, or an idle game rewards a
+// lucky moment instead of being run well.
+{
+  const good = {
+    stats: { population: 5000 }, income: 900, upkeep: 500,
+    coverage: [{ name: 'Water', key: 'water', unmet: 0 },
+               { name: 'Transit', key: 'transit', unmet: 9999, optional: true }],
+    traffic: null, happiness: 80, loans: []
+  };
+  const rows = M.sustainability(good);
+  assert.ok(rows.length >= 5, 'several conditions, not one');
+  for (const r of rows) {
+    assert.ok(r.key && r.label && r.detail, `${r.key} is displayable`);
+    assert.equal(typeof r.met, 'boolean');
+  }
+  assert.ok(M.sustainabilityMet(rows), 'a well-run city qualifies');
+  assert.deepEqual({ ...M.sustainabilityProgress(rows) }, { met: rows.length, total: rows.length });
+
+  // An optional service must never block the goal — otherwise it is a demand
+  // to spend rather than a test of running the city well.
+  assert.ok(rows.find(r => r.key === 'served').met,
+    'unmet optional coverage does not count against it');
+
+  const fails = (patch, key) => {
+    const rows = M.sustainability(Object.assign({}, good, patch));
+    const row = rows.find(r => r.key === key);
+    assert.ok(row && !row.met, `${key} should fail`);
+    assert.ok(!M.sustainabilityMet(rows), `and block the goal`);
+    return rows;
+  };
+  fails({ income: 100 }, 'solvent');
+  fails({ stats: { population: 10 } }, 'grown');
+  fails({ coverage: [{ name: 'Water', key: 'water', unmet: 40 }] }, 'served');
+  fails({ happiness: 20 }, 'content');
+  fails({ loans: [{ remaining: 500, payment: 10 }] }, 'unencumbered');
+  fails({ traffic: { lotCongestion: Object.fromEntries(
+    Array.from({ length: 10 }, (_, i) => [i, 5])) } }, 'moving');
+
+  // The streak accumulates only while everything holds, and resets hard.
+  let held = 0;
+  for (let i = 0; i < 5; i++) held = M.advanceSustainability(rows, held);
+  assert.equal(held, 5, 'holding accumulates');
+  held = M.advanceSustainability(M.sustainability({ ...good, happiness: 10 }), held);
+  assert.equal(held, 0, 'one lapse resets the streak entirely');
+  assert.equal(M.advanceSustainability([], 9), 0, 'no criteria is not success');
+  assert.ok(M.SUSTAINABLE_HOLD_TICKS > 1, 'and it must be held for a real span');
+}
+
+console.log('PASS: a sustainability goal that must be held, resets on any lapse, ' +
+  'and is never blocked by an optional service.');

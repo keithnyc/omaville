@@ -19,6 +19,11 @@ per resident, a low-tax city earns more from shops than from housing, and a
 high-tax one the other way round — so the tax slider decides what kind of city
 pays best, not just how much.
 
+There is a long goal: hold a surplus budget, full service coverage, flowing
+traffic, contented residents and no debt for 24 straight months and the city
+is self-sustaining. The streak resets the moment any of it lapses. Track it
+under City Goal in the menu.
+
 Click the bar icon to open the city panel. Pick a tool (Road, Res, Com, Ind,
 Park, Clear) and click or drag on the grid to build. Roads are required —
 zones can grow within two orthogonal steps of one, via open land, other zones,

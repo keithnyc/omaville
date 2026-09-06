@@ -2737,3 +2737,79 @@ function nextElectionTick(ageMinutes) {
 function electionDue(ageMinutes, lastElectionTick) {
   return ageMinutes - lastElectionTick >= ELECTION_INTERVAL_TICKS
 }
+
+// --- the long goal --------------------------------------------------------
+// Borrowed from LinCity-NG, which is won either by evacuating everyone by
+// rocket or by reaching a sustainable economy. The second idea suits an idle
+// game far better than a score does: it is a *state you hold*, not a number
+// you climb, so the game has a destination without ever demanding a session.
+//
+// Every criterion below is derived from figures the tick already computes.
+// Nothing here simulates anything new — it only asks whether the city is
+// currently being run well, and for how long it has been true.
+var SUSTAINABLE_MIN_POP = 2000
+var SUSTAINABLE_MIN_HAPPINESS = 70
+var SUSTAINABLE_MAX_JAMMED = 0.05
+var SUSTAINABLE_HOLD_TICKS = 24
+
+function sustainability(ctx) {
+  var rows = []
+  function row(key, label, met, detail) {
+    rows.push({ key: key, label: label, met: !!met, detail: detail })
+  }
+
+  var stats = ctx.stats || {}
+  var surplus = (ctx.income || 0) - (ctx.upkeep || 0)
+  row("solvent", "Budget in surplus", surplus > 0,
+    (surplus >= 0 ? "+" : "−") + "$" + Math.abs(Math.round(surplus)) + " a month")
+
+  var pop = stats.population || 0
+  row("grown", "A real city", pop >= SUSTAINABLE_MIN_POP,
+    pop + " of " + SUSTAINABLE_MIN_POP + " residents")
+
+  // Optional services (transit) are excluded deliberately: a city is not
+  // failing anyone by not running buses, and demanding it would make the
+  // goal about spending rather than about being run well.
+  var unmet = 0, worst = ""
+  var coverage = ctx.coverage || []
+  for (var i = 0; i < coverage.length; i++) {
+    if (coverage[i].optional) continue
+    if ((coverage[i].unmet || 0) > 0) { unmet++; if (!worst) worst = coverage[i].name }
+  }
+  row("served", "Every service reaches everyone", unmet === 0,
+    unmet === 0 ? "all covered" : unmet + " short, worst: " + worst)
+
+  var jammed = jammedLotShare(ctx.traffic)
+  row("moving", "Traffic flowing", jammed <= SUSTAINABLE_MAX_JAMMED,
+    Math.round(jammed * 100) + "% of lots gridlocked, needs " 
+      + Math.round(SUSTAINABLE_MAX_JAMMED * 100) + "% or less")
+
+  var happiness = ctx.happiness || 0
+  row("content", "Residents content", happiness >= SUSTAINABLE_MIN_HAPPINESS,
+    happiness + "% happy, needs " + SUSTAINABLE_MIN_HAPPINESS + "%")
+
+  // A city living on borrowed money is not sustaining itself by definition.
+  var debt = totalLoanDebt(ctx.loans || [])
+  row("unencumbered", "Free of debt", debt <= 0,
+    debt > 0 ? "$" + Math.round(debt) + " outstanding" : "no loans")
+
+  return rows
+}
+
+function sustainabilityMet(rows) {
+  for (var i = 0; i < rows.length; i++) if (!rows[i].met) return false
+  return rows.length > 0
+}
+
+function sustainabilityProgress(rows) {
+  var met = 0
+  for (var i = 0; i < rows.length; i++) if (rows[i].met) met++
+  return { met: met, total: rows.length }
+}
+
+// Held ticks only accumulate while every criterion is true, and reset the
+// moment one lapses — the goal is running the city well, not touching the
+// state once.
+function advanceSustainability(rows, heldTicks) {
+  return sustainabilityMet(rows) ? Math.max(0, heldTicks || 0) + 1 : 0
+}
