@@ -4969,46 +4969,56 @@ Item {
           Repeater {
             model: root.cityAdvice
 
-            Column {
+            // The row is an Item, not a Column, purely so the hit area can
+            // cover it: anchors.fill inside a Column silently disables that
+            // Column's layout, which cost ten warnings a launch and would
+            // have stacked every advisor on top of the first one.
+            Item {
               id: adviceRow
               required property var modelData
               width: advisorsColumn.width
-              spacing: Style.space(2)
+              height: adviceBody.height
 
-              Row {
-                spacing: Style.space(6)
-                // Severity dot: green settled, amber worth a look, red acting on.
-                Rectangle {
-                  width: Style.space(8); height: Style.space(8)
-                  radius: width / 2
-                  anchors.verticalCenter: parent.verticalCenter
-                  color: adviceRow.modelData.severity >= 2 ? "#e0806a"
-                    : adviceRow.modelData.severity === 1 ? "#e0b45a" : "#7fbf7f"
+              Column {
+                id: adviceBody
+                width: parent.width
+                spacing: Style.space(2)
+
+                Row {
+                  spacing: Style.space(6)
+                  // Severity dot: green settled, amber worth a look, red acting on.
+                  Rectangle {
+                    width: Style.space(8); height: Style.space(8)
+                    radius: width / 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: adviceRow.modelData.severity >= 2 ? "#e0806a"
+                      : adviceRow.modelData.severity === 1 ? "#e0b45a" : "#7fbf7f"
+                  }
+                  Text {
+                    text: adviceRow.modelData.name
+                    color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    text: adviceRow.modelData.headline
+                    color: Color.menu.text
+                    font.bold: true
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
                 }
+
                 Text {
-                  text: adviceRow.modelData.name
-                  color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+                  width: adviceRow.width - Style.space(14)
+                  x: Style.space(14)
+                  text: adviceRow.modelData.detail
+                    + (adviceRow.modelData.overlay !== "" ? "  — click to show on the map" : "")
+                  wrapMode: Text.WordWrap
+                  color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.65)
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.caption
                 }
-                Text {
-                  text: adviceRow.modelData.headline
-                  color: Color.menu.text
-                  font.bold: true
-                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                  font.pixelSize: Style.font.caption
-                }
-              }
-
-              Text {
-                width: adviceRow.width - Style.space(14)
-                x: Style.space(14)
-                text: adviceRow.modelData.detail
-                  + (adviceRow.modelData.overlay !== "" ? "  — click to show on the map" : "")
-                wrapMode: Text.WordWrap
-                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.65)
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.caption
               }
 
               // Naming a problem and then making the player hunt for it is
