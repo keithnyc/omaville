@@ -110,6 +110,10 @@ Item {
   // The last minute the player actually looked, so the panel can say what
   // happened while they were away rather than replaying the whole log.
   property real lastSeenMinute: 0
+  // The last edition the player actually read. One number, because the Gazette
+  // itself is derived from the log and the history rather than stored — a save
+  // with a hard 64KB cap has no room for archived newspapers.
+  property real lastGazetteMinute: 0
   property bool brownoutActive: false
 
   property bool initialized: false
@@ -443,6 +447,7 @@ Item {
     root.history = []
     root.cityLog = []
     root.lastSeenMinute = 0
+    root.lastGazetteMinute = 0
     root.brownoutActive = false
     root.ageMinutes = 0
     root.foundedAtMs = Date.now()
@@ -714,7 +719,9 @@ Item {
         var lost = result.destroyed === 1 ? "A building has been lost to the fire."
           : result.destroyed + " buildings have been lost to the fire."
         root.notify(root.cityName + " — fire", lost)
-        root.logEvent("loss", lost)
+        // Fire news, not financial news: this is the fire desk's story, and
+        // filing it under "loss" put it beside the stock market in the Gazette.
+        root.logEvent("fire", lost)
       } else if (result.fires.length === 0 && wasBurning > 0) {
         root.notify(root.cityName, "The fire is out.")
         root.logEvent("fire", "A fire was put out.")
@@ -775,6 +782,13 @@ Item {
   }
 
   readonly property var unseenLog: Model.logSince(root.cityLog, root.lastSeenMinute)
+  readonly property bool gazetteNews: root.initialized
+    && Model.gazetteHasNews(root.cityLog, root.lastGazetteMinute)
+  function markGazetteRead() {
+    if (root.ageMinutes === root.lastGazetteMinute) return
+    root.lastGazetteMinute = root.ageMinutes
+    flushState()
+  }
 
   function sampleHistory(income, upkeep) {
     root.history = Model.recordHistory(root.history, {
@@ -872,7 +886,8 @@ Item {
       neighbors: root.neighbors,
       history: Model.packHistory(root.history),
       cityLog: root.cityLog,
-      lastSeenMinute: root.lastSeenMinute
+      lastSeenMinute: root.lastSeenMinute,
+      lastGazetteMinute: root.lastGazetteMinute
     }, null, 2) + "\n")
   }
 
@@ -951,6 +966,7 @@ Item {
       history = Array.isArray(saved.history) ? saved.history : Model.unpackHistory(saved.history)
       cityLog = Array.isArray(saved.cityLog) ? saved.cityLog : []
       lastSeenMinute = Math.max(0, num(saved.lastSeenMinute, 0))
+      lastGazetteMinute = Math.max(0, num(saved.lastGazetteMinute, 0))
     } catch (error) {
       saveProblem = "not valid JSON (" + error + ")"
       foundedAtMs = 0

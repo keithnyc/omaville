@@ -26,6 +26,43 @@ Item {
   // while the panel was shut should not vanish because the panel was
   // briefly opened and closed again.
   property bool awaySummaryOpen: false
+  // The Gazette. An idle game's best moments happen while nobody is watching,
+  // and all the player gets on their return is a number that went up — this
+  // turns the log the city already keeps into a front page worth reading.
+  property bool gazetteOpen: false
+  // Snapshotted at open, because opening marks the edition read: without this
+  // the page would set its own cutoff to now and print a blank.
+  property real gazetteSince: 0
+  readonly property var gazettePage: root.gazetteOpen && root.serviceReady
+    ? Model.gazette({
+        cityName: root.cityService.cityName, mayorName: root.cityService.mayorName,
+        ageMinutes: root.cityService.ageMinutes, sinceMinute: root.gazetteSince,
+        log: root.cityLog, history: root.cityHistory, stats: root.budgetStats,
+        happiness: root.happiness, treasury: root.treasury,
+        jammed: Model.jammedLotShare(root.serviceReady ? root.cityService.traffic : null),
+        unserved: root.unservedResidents
+      })
+    : null
+  readonly property int unservedResidents: {
+    var n = 0
+    for (var i = 0; i < root.serviceCoverage.length; i++)
+      if (!root.serviceCoverage[i].optional) n += root.serviceCoverage[i].unmet
+    return n
+  }
+  function openGazette() {
+    if (!root.serviceReady) return
+    root.gazetteSince = root.cityService.lastGazetteMinute
+    root.gazetteOpen = true
+    root.cityService.markGazetteRead()
+  }
+  readonly property string gazetteSerif: "Noto Serif"
+  // The engravings are commissioned separately (assets/gazette/BRIEF-gazette.md)
+  // and the page is built to read without them. Pointing an Image at a file
+  // that is not there is not an error, but it does log a warning on every
+  // repaint, which would bury a real one — so the sources are gated until the
+  // art lands. tests/gazette.mjs fails if this flag and the files disagree, so
+  // it cannot be left stale in either direction.
+  readonly property bool gazetteArt: false
   onActiveChanged: {
     if (active && root.serviceReady && root.unseenEvents.length > 0) root.awaySummaryOpen = true
     // Opening the panel is a moment somebody is about to read the coverage
@@ -3806,8 +3843,22 @@ Item {
           onClicked: root.gameMenuOpen = !root.gameMenuOpen
         }
 
+        Button {
+          id: gazetteButton
+          anchors.verticalCenter: parent.verticalCenter
+          // Nerd Font newspaper. A dot rides on it when there is an edition
+          // the player has not read, which is the only nudge it ever gives.
+          iconText: "\uf1ea"
+          tooltipText: root.serviceReady && root.cityService.gazetteNews
+            ? "The " + root.cityService.cityName + " Gazette — a new edition"
+            : "The city Gazette"
+          foreground: root.serviceReady && root.cityService.gazetteNews
+            ? "#e8a84c" : (root.bar ? root.bar.foreground : Color.foreground)
+          onClicked: root.openGazette()
+        }
+
         Text {
-          width: parent.width - gameMenuButton.width - taxRow.implicitWidth - detachButton.width - parent.spacing * 3
+          width: parent.width - gameMenuButton.width - gazetteButton.width - taxRow.implicitWidth - detachButton.width - parent.spacing * 4
           text: root.serviceReady ? root.cityService.cityName : "Omaville"
           elide: Text.ElideRight
           color: root.bar ? root.bar.foreground : Color.foreground
@@ -4923,12 +4974,12 @@ Item {
   // useless the moment the map pushed it out of view.
   Item {
     anchors.fill: parent
-    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
+    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || root.gazetteOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
 
     MouseArea {
       anchors.fill: parent
-      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen
-      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false; root.goalOpen = false; root.marketOpen = false }
+      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || root.gazetteOpen
+      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false; root.goalOpen = false; root.marketOpen = false; root.gazetteOpen = false }
     }
 
     Rectangle {
@@ -5140,6 +5191,192 @@ Item {
             color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
+          }
+        }
+      }
+    }
+
+    // The Gazette. Deliberately the one screen that does not look like the
+    // rest of the game: everything else is warm pixel art seen from above,
+    // this is meant to read as a physical object from inside the world — ink
+    // pressed into cheap paper. Its own palette and its own serif, on purpose.
+    Rectangle {
+      id: gazetteCard
+      visible: root.gazetteOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(20), Style.space(430))
+      height: Math.min(parent.height - Style.space(20),
+        gazetteColumn.implicitHeight + Style.space(24))
+      color: "#efe7d4"
+      border.width: 1
+      border.color: "#8a7f6a"
+      radius: Style.space(2)
+
+      readonly property color ink: "#221e18"
+      readonly property color faded: "#5f5648"
+      readonly property color rule: "#8a7f6a"
+      readonly property var page: root.gazettePage
+
+      Flickable {
+        anchors.fill: parent
+        anchors.margins: Style.space(12)
+        contentHeight: gazetteColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+
+        Column {
+          id: gazetteColumn
+          width: parent.width
+          spacing: Style.space(5)
+
+          // Masthead: the engraving carries the top third as sky, so the
+          // title is drawn over it rather than beside it.
+          Item {
+            width: parent.width
+            height: Math.max(mastheadTitle.implicitHeight + Style.space(6),
+              mastheadArt.status === Image.Ready ? width * 0.22 : 0)
+            Image {
+              id: mastheadArt
+              anchors.fill: parent
+              source: root.gazetteArt ? Qt.resolvedUrl("assets/gazette/masthead.png") : ""
+              fillMode: Image.PreserveAspectFit
+              visible: status === Image.Ready
+              opacity: 0.85
+              smooth: true
+            }
+            Text {
+              id: mastheadTitle
+              anchors.top: parent.top
+              anchors.horizontalCenter: parent.horizontalCenter
+              width: parent.width
+              horizontalAlignment: Text.AlignHCenter
+              text: gazetteCard.page ? gazetteCard.page.title : ""
+              elide: Text.ElideRight
+              color: gazetteCard.ink
+              font.family: root.gazetteSerif
+              font.pixelSize: Style.font.subtitle + Style.space(4)
+              font.bold: true
+            }
+          }
+          Rectangle { width: parent.width; height: 2; color: gazetteCard.rule }
+          Rectangle { width: parent.width; height: 1; color: gazetteCard.rule }
+          Text {
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            text: gazetteCard.page
+              ? "Vol. " + gazetteCard.page.volume + " · No. " + gazetteCard.page.number
+                + " · " + gazetteCard.page.dateline + " · " + gazetteCard.page.mayor
+              : ""
+            elide: Text.ElideRight
+            color: gazetteCard.faded
+            font.family: root.gazetteSerif
+            font.pixelSize: Style.font.caption
+          }
+          Rectangle { width: parent.width; height: 1; color: gazetteCard.rule }
+          Item { width: 1; height: Style.space(2) }
+
+          // A quiet stretch is worth printing too. An idle game that says
+          // nothing happened is telling the truth.
+          Text {
+            visible: gazetteCard.page && gazetteCard.page.quiet
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            text: gazetteCard.page ? gazetteCard.page.quietNote : ""
+            wrapMode: Text.WordWrap
+            color: gazetteCard.faded
+            font.family: root.gazetteSerif
+            font.italic: true
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          GazetteStory {
+            visible: gazetteCard.page && gazetteCard.page.lead !== null
+            width: parent.width
+            story: gazetteCard.page ? gazetteCard.page.lead : null
+            lead: true
+            art: root.gazetteArt
+            serif: root.gazetteSerif
+            ink: gazetteCard.ink
+            faded: gazetteCard.faded
+          }
+          Repeater {
+            model: gazetteCard.page ? gazetteCard.page.stories : []
+            Column {
+              required property var modelData
+              width: gazetteColumn.width
+              spacing: Style.space(5)
+              Rectangle { width: parent.width; height: 1; color: gazetteCard.rule; opacity: 0.6 }
+              GazetteStory {
+                width: parent.width
+                story: parent.modelData
+                art: root.gazetteArt
+                serif: root.gazetteSerif
+                ink: gazetteCard.ink
+                faded: gazetteCard.faded
+              }
+            }
+          }
+
+          Item { width: 1; height: Style.space(2) }
+          Rectangle { width: parent.width; height: 1; color: gazetteCard.rule }
+          Text {
+            width: parent.width
+            text: "BY THE NUMBERS"
+            color: gazetteCard.faded
+            font.family: root.gazetteSerif
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+          Grid {
+            width: parent.width
+            columns: 2
+            columnSpacing: Style.space(10)
+            rowSpacing: Style.space(2)
+            Repeater {
+              model: gazetteCard.page ? gazetteCard.page.figures : []
+              Text {
+                required property var modelData
+                width: (gazetteColumn.width - Style.space(10)) / 2
+                text: modelData.label + " — "
+                  + (modelData.money ? Model.money(modelData.value)
+                     : Model.groupDigits(modelData.value) + (modelData.suffix || ""))
+                  + (modelData.change
+                     ? "  (" + (modelData.change > 0 ? "+" : "−")
+                       + (modelData.moneyChange
+                          ? Model.money(Math.abs(modelData.change))
+                          : Model.groupDigits(Math.abs(modelData.change)))
+                       + " on the year)"
+                     : "")
+                elide: Text.ElideRight
+                color: gazetteCard.ink
+                font.family: root.gazetteSerif
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+          Rectangle { width: parent.width; height: 1; color: gazetteCard.rule }
+          Text {
+            width: parent.width
+            text: "THE ALMANAC — " + (gazetteCard.page ? gazetteCard.page.almanac : "")
+            wrapMode: Text.WordWrap
+            color: gazetteCard.faded
+            font.family: root.gazetteSerif
+            font.italic: true
+            font.pixelSize: Style.font.caption
+          }
+          Item { width: 1; height: Style.space(4) }
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "— close —"
+            color: gazetteCard.faded
+            font.family: root.gazetteSerif
+            font.pixelSize: Style.font.caption
+            MouseArea {
+              anchors.fill: parent
+              anchors.margins: -Style.space(8)
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.gazetteOpen = false
+            }
           }
         }
       }

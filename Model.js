@@ -2653,6 +2653,213 @@ function logSince(log, minute) {
   return out
 }
 
+// --- the city Gazette -----------------------------------------------------
+// An idle game's problem is that its best moments happen while nobody is
+// watching, and all the player gets on their return is a number that went up.
+// The log already records what happened; this gives it a front page.
+//
+// Nothing here is stored. An edition is derived from the log and the history
+// that are kept anyway, so it costs no save budget and reprints identically
+// as long as those entries survive the LOG_MAX window.
+
+// What each kind of event is worth to an editor, which picture it runs with,
+// and the headlines it can run under. Several per desk so a city that burns
+// twice does not print the same headline twice.
+// Several kinds cover both a disaster and its resolution — the same "fire"
+// entry is logged when a building burns down and when the last fire is put
+// out. A headline pool that does not know the difference will eventually run
+// THE CITY BURNS over a story about the fire being out, so a desk may carry a
+// second pool for news that resolved well.
+var GAZETTE_DESKS = {
+  election: { weight: 95, spot: "election",
+    heads: ["THE VERDICT OF THE PEOPLE", "CITY HALL CHANGES HANDS", "TO THE POLLS"],
+    calm: ["RETURNED TO OFFICE", "THE MAYOR PREVAILS", "A MANDATE RENEWED"] },
+  budget: { weight: 92, spot: "money",
+    heads: ["THE TREASURY IN THE RED", "CITY CANNOT MEET ITS BILLS", "A RECKONING AT CITY HALL"] },
+  fire: { weight: 90, spot: "fire",
+    heads: ["FLAMES IN THE NIGHT", "THE CITY BURNS", "ENGINES ANSWER THE BELL"],
+    calm: ["THE FIRE IS OUT", "ENGINES STAND DOWN", "THE DANGER PASSES"] },
+  milestone: { weight: 86, spot: "growth",
+    heads: ["A CITY COME OF AGE", "ANOTHER MARK PASSED", "THE TOWN GROWS BOLDER"] },
+  // Covers both a forced sale at the exchange and the city losing its civic
+  // standing, so the headlines stay general enough to carry either. Buildings
+  // lost to fire are filed under fire, where they belong.
+  loss: { weight: 82, spot: "money",
+    heads: ["A HARD SEASON", "GROUND IS LOST", "A SETBACK FOR THE CITY"] },
+  brownout: { weight: 78, spot: "civic",
+    heads: ["THE LIGHTS GO OUT", "A CITY IN DARKNESS", "THE GRID GIVES WAY"],
+    calm: ["THE LIGHTS COME BACK ON", "POWER RESTORED", "THE GRID HOLDS AGAIN"] },
+  neighbor: { weight: 74, spot: "growth",
+    heads: ["THE ROAD IS OPEN", "A NEW WAY OUT", "NEIGHBOURS AT LAST"] },
+  crime: { weight: 70, spot: "civic",
+    heads: ["LAWLESSNESS IN THE DISTRICT", "TROUBLE IN THE STREETS", "A DISTRICT UNDER SIEGE"],
+    calm: ["ORDER RESTORED", "THE CONSTABULARY PREVAILS", "THE STREETS ARE QUIET"] },
+  dilemma: { weight: 66, spot: "civic",
+    heads: ["THE MAYOR DECIDES", "A MATTER BEFORE THE OFFICE", "A CHOICE IS MADE"] },
+  ordinance: { weight: 60, spot: "civic",
+    heads: ["NEW ORDINANCE ON THE BOOKS", "THE COUNCIL LEGISLATES", "A RULE IS WRITTEN"] },
+  loan: { weight: 54, spot: "money",
+    heads: ["THE CITY BORROWS", "A DEBT IS TAKEN ON", "TERMS ARE AGREED"] },
+  market: { weight: 44, spot: "money",
+    heads: ["CITY HALL PLAYS THE MARKET", "AT THE EXCHANGE", "THE PORTFOLIO MOVES"] }
+}
+var GAZETTE_STORIES = 4
+
+// Stable per entry, so an edition reprints exactly as it first appeared
+// rather than reshuffling its own headlines every repaint. `taken` lets a page
+// avoid running the same headline twice when a quiet year forces it to print
+// two stories off the same desk.
+// A story that reports something ending well rather than beginning badly.
+// Deliberately narrow: it matches the wording the log actually uses, and
+// anything it does not recognise falls through to the alarming pool, which is
+// the safer way round for a paper reporting a fire.
+var GAZETTE_RESOLVED = /\b(put out|is out|broken up|restored|back within|returned|re-elected|recovered|reached|opened)\b/i
+
+function gazetteHeadline(entry, taken) {
+  var desk = GAZETTE_DESKS[entry.kind]
+  if (!desk) return "NEWS FROM THE CITY"
+  var pool = (desk.calm && GAZETTE_RESOLVED.test(entry.text || "")) ? desk.calm : desk.heads
+  var seed = Math.abs(Math.round(entry.m) * 31 + (entry.text || "").length * 7)
+  for (var i = 0; i < pool.length; i++) {
+    var head = pool[(seed + i) % pool.length]
+    if (!taken || taken.indexOf(head) < 0) return head
+  }
+  return pool[seed % pool.length]
+}
+
+function gazetteSpot(kind) {
+  return (GAZETTE_DESKS[kind] || {}).spot || "civic"
+}
+
+var ROMAN = [[1000, "M"], [900, "CM"], [500, "D"], [400, "CD"], [100, "C"], [90, "XC"],
+  [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]]
+function romanNumeral(value) {
+  var n = Math.max(0, Math.floor(value)), out = ""
+  if (n < 1) return "I"
+  for (var i = 0; i < ROMAN.length; i++) {
+    while (n >= ROMAN[i][0]) { out += ROMAN[i][1]; n -= ROMAN[i][0] }
+  }
+  return out
+}
+
+// The nearest history sample at or before a given minute, for year-on-year
+// figures. History is sampled every few months, so this is approximate by
+// design — a newspaper quoting round numbers is in character.
+function historyAt(history, minute) {
+  var best = null
+  for (var i = 0; i < (history || []).length; i++) {
+    if (history[i].m > minute) break
+    best = history[i]
+  }
+  return best
+}
+
+// Weather is not simulated, so the almanac reports the mood instead — which
+// is the thing a local paper would actually lead its back page with.
+function gazetteAlmanac(happiness, jammed, unserved) {
+  var mood = happiness >= 75 ? "The city is in good humour."
+    : happiness >= 55 ? "The mood is steady enough."
+    : happiness >= 35 ? "Grumbling is heard in the streets."
+    : "Discontent is general."
+  var road = jammed >= 0.25 ? " The roads are a disgrace."
+    : jammed >= 0.08 ? " Traffic is heavy at the hour of change." : " The roads run clear."
+  var want = unserved > 0 ? " Some households remain beyond the reach of the city's services." : ""
+  return mood + road + want
+}
+
+// ctx: { cityName, mayorName, ageMinutes, sinceMinute, log, history, stats,
+//        happiness, approval, treasury, jammed, unserved }
+function gazette(ctx) {
+  ctx = ctx || {}
+  var now = Math.max(0, Math.floor(ctx.ageMinutes || 0))
+  var since = Math.max(0, Math.floor(ctx.sinceMinute || 0))
+  var calendar = calendarFor(now)
+  var name = (ctx.cityName || "The City").trim()
+
+  var fresh = []
+  for (var i = 0; i < (ctx.log || []).length; i++) {
+    var entry = ctx.log[i]
+    if (entry.m <= since) break
+    if (GAZETTE_DESKS[entry.kind]) fresh.push(entry)
+  }
+  // Best story first, and within a weight the more recent one leads.
+  fresh.sort(function (a, b) {
+    var wa = GAZETTE_DESKS[a.kind].weight, wb = GAZETTE_DESKS[b.kind].weight
+    return wb === wa ? b.m - a.m : wb - wa
+  })
+
+  // One story per desk before any desk gets a second. A city that held four
+  // elections and had one fire should not print four election headlines and
+  // bury the fire — a front page is a survey of the year, not a ranking.
+  var seen = {}
+  var running = [], spare = []
+  for (var f = 0; f < fresh.length; f++) {
+    if (seen[fresh[f].kind]) spare.push(fresh[f])
+    else { seen[fresh[f].kind] = true; running.push(fresh[f]) }
+  }
+  var chosen = running.concat(spare).slice(0, GAZETTE_STORIES)
+
+  var stories = [], taken = []
+  for (var c = 0; c < chosen.length; c++) {
+    var head = gazetteHeadline(chosen[c], taken)
+    taken.push(head)
+    var when = calendarFor(chosen[c].m)
+    stories.push({
+      headline: head,
+      body: chosen[c].text,
+      spot: gazetteSpot(chosen[c].kind),
+      kind: chosen[c].kind,
+      dateline: when.monthName + ", Year " + when.year
+    })
+  }
+
+  var stats = ctx.stats || {}
+  var then = historyAt(ctx.history, Math.max(0, now - 12))
+  var figures = [
+    { label: "Population", value: stats.population || 0,
+      change: then ? (stats.population || 0) - then.p : 0 },
+    { label: "In work", value: (stats.jobsCommercial || 0) + (stats.jobsIndustrial || 0) },
+    { label: "Treasury", value: Math.round(ctx.treasury || 0), money: true,
+      change: then ? Math.round((ctx.treasury || 0) - then.t) : 0, moneyChange: true },
+    { label: "Contentment", value: (ctx.happiness || 0), suffix: "%",
+      change: then ? (ctx.happiness || 0) - then.h : 0 }
+  ]
+
+  return {
+    name: name,
+    title: name + " Gazette",
+    volume: romanNumeral(calendar.year),
+    number: calendar.monthIndex + 1,
+    dateline: calendar.monthName + ", Year " + calendar.year,
+    mayor: mayorTitle(ctx.mayorName || ""),
+    lead: stories.length > 0 ? stories[0] : null,
+    stories: stories.slice(1),
+    figures: figures,
+    almanac: gazetteAlmanac(ctx.happiness || 0, ctx.jammed || 0, ctx.unserved || 0),
+    // A quiet stretch is worth printing too. An idle game that says nothing
+    // happened is telling the truth, and a slow news day is a real front page.
+    quiet: stories.length === 0,
+    quietNote: "No fires, no scandals, no elections. The presses ran anyway."
+  }
+}
+
+// Whether there is enough new material to be worth telling the player about.
+// One stray market trade is not an edition; two events, or any of the big
+// desks, is.
+var GAZETTE_ALERT_WEIGHT = 80
+function gazetteHasNews(log, sinceMinute) {
+  var count = 0
+  for (var i = 0; i < (log || []).length; i++) {
+    if (log[i].m <= sinceMinute) break
+    var desk = GAZETTE_DESKS[log[i].kind]
+    if (!desk) continue
+    if (desk.weight >= GAZETTE_ALERT_WEIGHT) return true
+    count++
+    if (count >= 2) return true
+  }
+  return false
+}
+
 // Min/max across one history field, for scaling a sparkline. Returns a flat
 // band around a constant series so a city that never changed still draws a
 // sensible line instead of dividing by zero.
