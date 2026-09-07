@@ -62,7 +62,7 @@ Item {
   // repaint, which would bury a real one — so the sources are gated until the
   // art lands. tests/gazette.mjs fails if this flag and the files disagree, so
   // it cannot be left stale in either direction.
-  readonly property bool gazetteArt: false
+  readonly property bool gazetteArt: true
   onActiveChanged: {
     if (active && root.serviceReady && root.unseenEvents.length > 0) root.awaySummaryOpen = true
     // Opening the panel is a moment somebody is about to read the coverage
@@ -5234,7 +5234,7 @@ Item {
           Item {
             width: parent.width
             height: Math.max(mastheadTitle.implicitHeight + Style.space(6),
-              mastheadArt.status === Image.Ready ? width * 0.22 : 0)
+              mastheadArt.status === Image.Ready ? width * 0.25 : 0)
             Image {
               id: mastheadArt
               anchors.fill: parent

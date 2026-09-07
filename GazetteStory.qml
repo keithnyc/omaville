@@ -26,7 +26,9 @@ Item {
 
     Image {
       id: spot
-      width: root.lead ? Style.space(64) : Style.space(40)
+      // The engravings are dense; below about 44px the hatching fills in and
+      // a fire stops reading as a fire.
+      width: root.lead ? Style.space(72) : Style.space(46)
       height: width
       source: root.art && root.story
         ? Qt.resolvedUrl("assets/gazette/spot-" + root.story.spot + ".png") : ""

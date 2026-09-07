@@ -2644,6 +2644,24 @@ function pushLogEntry(log, minute, kind, text) {
   return next
 }
 
+// Buildings destroyed by fire were once filed under "loss", beside the stock
+// market, so an existing save's Gazette runs them under a picture of coins.
+// The kind is fixed at the source now; this repairs what is already written.
+// Deliberately narrow — it matches the exact sentence the old code logged, and
+// leaves anything else alone.
+var LOG_FIRE_LOSS = /lost to the fire\.$/
+function migrateLogKinds(log) {
+  var out = [], changed = false
+  for (var i = 0; i < (log || []).length; i++) {
+    var e = log[i]
+    if (e && e.kind === "loss" && LOG_FIRE_LOSS.test(e.text || "")) {
+      out.push({ m: e.m, kind: "fire", text: e.text })
+      changed = true
+    } else out.push(e)
+  }
+  return changed ? out : log
+}
+
 function logSince(log, minute) {
   var out = []
   for (var i = 0; i < (log || []).length; i++) {

@@ -183,6 +183,41 @@ const page = (over = {}) => M.gazette(Object.assign({
     'editions are derived, never persisted');
 }
 
+// --- old saves are repaired on the way in ---------------------------------
+// Buildings destroyed by fire were once filed under "loss", beside the stock
+// market, so an existing city's front page ran them under a picture of coins.
+{
+  const old = [
+    entry(50, 'loss', 'A building has been lost to the fire.'),
+    entry(48, 'loss', '3 buildings have been lost to the fire.'),
+    entry(46, 'loss', 'Sold Ashford under duress for $220.'),
+    entry(44, 'loss', 'Schooling has slipped: the city is back to basic status.'),
+    entry(42, 'fire', 'A fire was put out.')
+  ];
+  const fixed = M.migrateLogKinds(old);
+  assert.equal(fixed[0].kind, 'fire', 'a building lost to fire is fire news');
+  assert.equal(fixed[1].kind, 'fire', 'however many of them');
+  assert.equal(fixed[2].kind, 'loss', 'a forced sale is not');
+  assert.equal(fixed[3].kind, 'loss', 'nor is losing civic standing');
+  assert.equal(fixed[4].kind, 'fire', 'and what was already right is untouched');
+  for (let i = 0; i < old.length; i++) {
+    assert.equal(fixed[i].m, old[i].m, 'timestamps survive');
+    assert.equal(fixed[i].text, old[i].text, 'and so does every word');
+  }
+  assert.equal(M.migrateLogKinds([]).length, 0);
+  // The load path always hands it an array, so this only pins that a stray
+  // null is passed through rather than throwing.
+  assert.equal(M.migrateLogKinds(null), null, 'a missing log passes straight through');
+  assert.equal(M.migrateLogKinds(undefined), undefined);
+  // A log with nothing to fix is returned as-is rather than rebuilt, so a
+  // load does not churn the save.
+  const clean = [entry(9, 'market', 'Bought $10 of Ashford.')];
+  assert.equal(M.migrateLogKinds(clean), clean, 'no change, no copy');
+
+  const service = fs.readFileSync(new URL('../Service.qml', import.meta.url), 'utf8');
+  assert.ok(/Model\.migrateLogKinds\(/.test(service), 'and the load path actually runs it');
+}
+
 // --- the art flag may not go stale ----------------------------------------
 // The page is built to read without the engravings, and points its Images at
 // nothing until they exist — a missing file logs a warning on every repaint,

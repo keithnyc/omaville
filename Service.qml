@@ -964,7 +964,9 @@ Item {
         ? saved.neighbors : null
       // Pre-pack saves stored history as an array; both decode the same way.
       history = Array.isArray(saved.history) ? saved.history : Model.unpackHistory(saved.history)
-      cityLog = Array.isArray(saved.cityLog) ? saved.cityLog : []
+      // Repairs entries written before fire losses were filed under fire; see
+      // Model.migrateLogKinds. A no-op for a save that has none.
+      cityLog = Model.migrateLogKinds(Array.isArray(saved.cityLog) ? saved.cityLog : [])
       lastSeenMinute = Math.max(0, num(saved.lastSeenMinute, 0))
       lastGazetteMinute = Math.max(0, num(saved.lastGazetteMinute, 0))
     } catch (error) {
