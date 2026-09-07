@@ -593,6 +593,11 @@ Item {
       }
       root.activeEffects = stillActive
 
+      // Captured before anything in this tick can overwrite it. The
+      // neighbouring towns are fed by what this city shed across the month,
+      // and reading root.population further down would silently give zero the
+      // day somebody moves the assignment up.
+      var populationBefore = root.population
       var result = Model.advanceCity(root.grid, root.gridSize, root.taxRatePercent,
         happinessModifier, incomeMultiplier, root.funding, root.neighbors, root.ordinances)
       root.grid = result.grid
@@ -616,6 +621,30 @@ Item {
         if (who.reason === "gone" || who.to === "") continue
         root.logEvent("departure", who.name + " of " + who.street
           + " has left for " + who.to + ".")
+      }
+
+      // The towns at the map edge, fed by whatever this city just shed —
+      // including, by name, wherever this month's leavers said they were
+      // going. Run after the citizens so a letter, a departure and a town's
+      // population are one story rather than three unrelated numbers.
+      var intake = ({})
+      for (var g = 0; g < moved.departures.length; g++) {
+        var gone = moved.departures[g]
+        if (!gone.to) continue
+        intake[gone.to] = (intake[gone.to] || 0) + Model.RES_CAP_PER_LEVEL
+      }
+      var abroad = Model.advanceNeighbors(root.neighbors, {
+        lost: Math.max(0, populationBefore - result.population),
+        population: result.population, previousPopulation: populationBefore,
+        intake: intake,
+        connectedNames: root.linkedNeighbors.map(function (n) { return n.name })
+      })
+      root.neighbors = abroad.neighbors
+      for (var o = 0; o < abroad.overtook.length; o++) {
+        root.logEvent("neighbor", abroad.overtook[o]
+          + " is now a larger town than " + root.cityName + ".")
+        root.notify(root.cityName + " — overtaken",
+          abroad.overtook[o] + " has grown larger than this city.")
       }
       root.population = result.population
       root.jobs = result.jobs
@@ -1011,6 +1040,9 @@ Item {
     // An existing save predates neighbours entirely; seed them off its own
     // founding time so the same city always gets the same four towns.
     if (!neighbors) neighbors = Model.makeNeighbors(gridSize, foundedAtMs || Date.now())
+    // A save written before the towns had populations gets them now, starting
+    // where an established place starts rather than at nothing.
+    neighbors = Model.seedNeighborPopulations(neighbors)
 
     // Which highways are open is derived from the grid, never restored from
     // the save — the roads *are* the truth. Persisting it separately meant a

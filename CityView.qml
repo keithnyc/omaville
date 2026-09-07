@@ -5761,8 +5761,9 @@ Item {
                     id: townName
                     anchors.left: parent.left
                     text: townRow.modelData.name
+                      + " · " + Model.groupDigits(townRow.modelData.population)
                       + (townRow.modelData.connected ? " · linked" : "")
-                    color: Color.menu.text
+                    color: townRow.modelData.larger ? "#e4bd78" : Color.menu.text
                     font.family: root.bar ? root.bar.fontFamily : Style.font.family
                     font.pixelSize: Style.font.caption
                   }
@@ -5781,8 +5782,13 @@ Item {
                   wrapMode: Text.WordWrap
                   text: townRow.modelData.temperament
                     + (townRow.modelData.connected
-                        ? " · rises and falls with your own commerce"
+                        ? " · linked: trades with you and competes with you"
                         : " · unconnected, moves on its own")
+                    + (townRow.modelData.larger
+                        ? "\nLarger than " + (root.serviceReady ? root.cityService.cityName : "this city")
+                          + (townRow.modelData.connected
+                              ? " — taking custom and residents" : "")
+                        : "")
                     + (townRow.modelData.units > 0
                         ? "\nHolding $" + Math.round(townRow.modelData.value)
                           + " (" + (townRow.modelData.gain >= 0 ? "+" : "\u2212") + "$"

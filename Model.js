@@ -1384,7 +1384,12 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
     computeHappiness(taxRatePercent, stats, trafficHappinessPenalty(traffic))
       + happinessModifier + policy.happiness, 0, 100))
   var connected = connectedNeighbors(grid, gridSize, neighbors)
-  var demand = computeDemand(stats, connected.length, policy)
+  // A highway is not free money any more. The trade bonus still applies
+  // through neighborBonus inside computeDemand; this is the other half — a
+  // town you are joined to competes for the same custom and the same people,
+  // and only once it has grown to a real share of your size.
+  var rivals = rivalPressure(connected, stats.population)
+  var demand = computeDemand(stats, connected.length, combineEffects(policy, rivals))
   var load = utilityLoad(grid, stats, policy)
   var nextGrid = tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load, policy, traffic)
   var upkeep = computeUpkeep(stats, funding, ordinances)
@@ -1409,6 +1414,7 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
     load: load,
     traffic: traffic,
     character: character,
+    rivals: rivals,
     connectedNeighbors: connected
   }
 }
@@ -3488,7 +3494,8 @@ function makeNeighbors(gridSize, seed) {
       edge: NEIGHBOR_EDGES[i],
       name: pool.splice(pick, 1)[0],
       index: neighborConnectorIndex(gridSize, NEIGHBOR_EDGES[i],
-        Math.floor(random() * 100000))
+        Math.floor(random() * 100000)),
+      pop: NEIGHBOR_START_POP
     })
   }
   return out
@@ -3538,6 +3545,114 @@ function neighborBonus(connectedCount) {
     commerce: 1 + NEIGHBOR_COMMERCE_BONUS * n,
     trade: 1 + NEIGHBOR_TRADE_BONUS * n
   }
+}
+
+// --- neighbouring towns as rivals -----------------------------------------
+// The towns at the map edge used to be four names attached to a price ticker.
+// Now they have populations, and those populations are fed by yours: people
+// who give up on this city turn up in one of them. That makes the market
+// genuinely uncomfortable, because a stake in the town that took your
+// residents pays out precisely when you are losing.
+//
+// A highway is no longer free money either. A connected town trades with you
+// and competes with you — its shops pull custom out of yours, and leaving is
+// easier down a road that exists. The bonus and the pressure are both real,
+// which is what turns connecting into a decision.
+
+var NEIGHBOR_START_POP = 380
+// Their own slow arc, so a town is alive even when this city is doing nothing.
+var NEIGHBOR_DRIFT = 0.006
+// How much of what this city loses turns up next door. Not all of it — people
+// leave regions, not just cities.
+var NEIGHBOR_INTAKE_SHARE = 0.55
+// Somewhere with a road takes more of them than somewhere without one.
+var NEIGHBOR_CONNECTED_PULL = 2.5
+// A neighbour smaller than this share of your city is no threat to it.
+var RIVAL_PRESSURE_FLOOR = 0.6
+var RIVAL_PRESSURE_MAX = 1.5
+var RIVAL_COMMERCE_BITE = 0.35
+var RIVAL_MIGRATION_BITE = 0.15
+
+function neighborPopulation(town) {
+  var n = Number(town && town.pop)
+  return isFinite(n) && n > 0 ? n : NEIGHBOR_START_POP
+}
+
+// Saves written before the towns had populations, and new towns, both start
+// from the same place rather than at zero — these are established places, not
+// empty fields.
+function seedNeighborPopulations(neighbors) {
+  var out = []
+  for (var i = 0; i < (neighbors || []).length; i++) {
+    var town = neighbors[i]
+    out.push({ edge: town.edge, name: town.name, index: town.index,
+      pop: Math.round(neighborPopulation(town)) })
+  }
+  return out
+}
+
+// One month next door. `lost` is how much population this city shed since last
+// month — the towns grow on their own besides, so nothing here depends on the
+// player failing.
+function advanceNeighbors(neighbors, ctx) {
+  ctx = ctx || {}
+  var linked = ctx.connectedNames || []
+  var lost = Math.max(0, ctx.lost || 0) * NEIGHBOR_INTAKE_SHARE
+  // Named residents who packed for a particular town this month. They arrive
+  // where they said they were going rather than being spread around, which is
+  // the only reason a letter, a departure and a town's population read as one
+  // story instead of three unrelated numbers.
+  var intake = ctx.intake || {}
+  var weights = [], total = 0
+  for (var i = 0; i < (neighbors || []).length; i++) {
+    var w = linked.indexOf(neighbors[i].name) >= 0 ? NEIGHBOR_CONNECTED_PULL : 1
+    weights.push(w)
+    total += w
+  }
+  var out = [], overtook = []
+  for (var t = 0; t < (neighbors || []).length; t++) {
+    var town = neighbors[t]
+    var before = neighborPopulation(town)
+    var after = before * (1 + NEIGHBOR_DRIFT)
+      + (total > 0 ? lost * (weights[t] / total) : 0)
+      + (intake[town.name] || 0)
+    after = Math.round(after)
+    // Worth telling the player about exactly once: the month a neighbour they
+    // used to be bigger than passes them. Compared against last month's
+    // population as well as this one, because in a zero-sum city the crossing
+    // usually happens by this city shrinking rather than by the town growing —
+    // testing only "did they rise past us" missed every case that matters.
+    var was = ctx.previousPopulation === undefined
+      ? (ctx.population || 0) : ctx.previousPopulation
+    if (before <= was && after > (ctx.population || 0)) overtook.push(town.name)
+    out.push({ edge: town.edge, name: town.name, index: town.index, pop: after })
+  }
+  return { neighbors: out, overtook: overtook }
+}
+
+// What the towns you are joined to cost you, shaped like ordinanceEffects so
+// it folds into the month's policy with everything else. Only connected towns
+// press on you: a rival you have no road to is somebody else's problem.
+function rivalPressure(connected, population) {
+  var pressure = 0
+  for (var i = 0; i < (connected || []).length; i++) {
+    var ratio = neighborPopulation(connected[i]) / Math.max(1, population || 0)
+    pressure += clamp(ratio - RIVAL_PRESSURE_FLOOR, 0, RIVAL_PRESSURE_MAX)
+  }
+  var out = neutralEffects()
+  out.commercialDemand = 1 / (1 + pressure * RIVAL_COMMERCE_BITE)
+  out.residentialDemand = 1 / (1 + pressure * RIVAL_MIGRATION_BITE)
+  return out
+}
+
+// A town's own size, in the share price. This is the loop closing: your
+// residents leave for Oakhurst, Oakhurst grows, Oakhurst is worth more — so a
+// stake in it pays out exactly when you are losing, which is the whole reason
+// to make the gamble about neighbours rather than about abstract stocks.
+var MARKET_SIZE_WEIGHT = 0.35
+function townSizeFactor(town) {
+  return 1 + MARKET_SIZE_WEIGHT
+    * (clamp(neighborPopulation(town) / (NEIGHBOR_START_POP * 4), 0, 2) - 0.5)
 }
 
 // --- ordinances -----------------------------------------------------------
@@ -3930,7 +4045,8 @@ function townPrice(neighbor, tick, stats, connected) {
     wave += temper.amps[i] * Math.sin(2 * Math.PI * t / periods[i] + phase)
   }
   var jitter = (marketHash(neighbor.index + t, periods[0]) - 0.5) * 2 * temper.noise
-  return Math.max(MARKET_MIN_PRICE, wave * (1 + jitter) * townTradeFactor(connected, stats))
+  return Math.max(MARKET_MIN_PRICE,
+    wave * (1 + jitter) * townTradeFactor(connected, stats) * townSizeFactor(neighbor))
 }
 
 // Every town priced at once, with what the city holds of each. connectedNames
@@ -3948,6 +4064,10 @@ function marketQuotes(neighbors, connectedNames, tick, stats, holdings) {
     var value = units * price
     out.push({
       id: n.name, name: n.name, edge: n.edge, connected: connected,
+      // Their size, so the panel can say why a price moved and whether the
+      // town has grown past this city.
+      population: Math.round(neighborPopulation(n)),
+      larger: neighborPopulation(n) > ((stats && stats.population) || 0),
       temperament: townTemperament(n).label,
       price: price,
       // Last tick's price, so the panel can show a direction without keeping
