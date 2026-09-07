@@ -464,6 +464,51 @@ const context = (grid, over = {}) => Object.assign({
   assert.equal(atWorks, M.citizenTrade(works, size, person, 0), 'a trade does not change on a reread');
 }
 
+
+// --- streets the mayor names ----------------------------------------------
+// The city generates a plausible name for every road. This is where one stops
+// being the city's and becomes the player's — and every letter written from
+// that street has to change wording with it, or the naming is decoration.
+{
+  const g = M.emptyGrid(size);
+  for (let x = 10; x < 30; x++) g[at(x, 15)] = '#0';
+  g[at(12, 16)] = 'R2';
+  const generated = M.streetOf(g, size, at(12, 16));
+
+  const names = M.renameStreet({}, 'ew', 15, 'Keith Boulevard');
+  assert.equal(M.streetOf(g, size, at(12, 16), names), 'Keith Boulevard');
+  assert.notEqual(generated, 'Keith Boulevard', 'and it really was called something else');
+  assert.equal(M.roadStreet(g, size, at(15, 15), names).named, true, 'the road knows it was named');
+  assert.equal(M.roadStreet(g, size, at(15, 15)).named, false);
+
+  // The whole reason the key is axis-and-line: extending the road must not
+  // lose the name, exactly as it must not lose the generated one.
+  const longer = g.slice();
+  for (let x = 30; x < 50; x++) longer[at(x, 15)] = '#0';
+  for (let x = 2; x < 10; x++) longer[at(x, 15)] = '#0';
+  assert.equal(M.streetOf(longer, size, at(12, 16), names), 'Keith Boulevard');
+
+  // A resident writes from the street the player named.
+  const ctx = context(g, { streetNames: names });
+  const cast = [{ n: 'Ada Pike', i: at(12, 16), s: 0, p: M.CITIZEN_PATIENCE, b: -480 }];
+  assert.equal(M.citizenBio(cast[0], ctx).street, 'Keith Boulevard');
+  assert.equal(M.citizenLetters(cast, ctx, 1)[0].street, 'Keith Boulevard');
+
+  // Clearing it hands the street back to the city.
+  assert.equal(M.streetOf(g, size, at(12, 16), M.renameStreet(names, 'ew', 15, '   ')),
+    generated, 'an empty name restores the generated one');
+  // And the map is replaced rather than edited, so a QML property assignment
+  // actually notifies.
+  assert.notEqual(M.renameStreet(names, 'ew', 15, 'Other'), names);
+  assert.equal(names['ew:15'], 'Keith Boulevard', 'the original is left alone');
+
+  assert.ok(M.STREET_NAME_MAX > 8 && M.STREET_NAME_MAX < 64);
+  assert.equal(M.renameStreet({}, 'ew', 15, 'x'.repeat(200))['ew:15'].length, M.STREET_NAME_MAX,
+    'a name is capped rather than overflowing the map label');
+  assert.equal(M.streetOf(g, size, at(12, 16), { 'ew:15': '' }), generated,
+    'and an empty stored name is not printed as a blank street');
+}
+
 console.log('PASS: named residents at real addresses, complaints that are true of their own ' +
   'tile and ranked as a person would rank them, patience that recovers when the problem is ' +
-  'fixed, and a letters column that says something different in every letter, on streets that are real roads, for people who arrive as adults, work at what was built around them, and are written up when they go.');
+  'fixed, and a letters column that says something different in every letter, on streets that are real roads, for people who arrive as adults, work at what was built around them, and are written up when they go, on streets the mayor can name.');

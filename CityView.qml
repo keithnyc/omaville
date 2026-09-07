@@ -445,7 +445,14 @@ Item {
     // `lines` wholesale, so anything pushed before it would be silently
     // discarded. Prepended at the return, because it is the only line on the
     // card about a person and it should not be the fifth thing read.
+    // A road says which street it is, so the name in a letter can be found by
+    // clicking the road itself.
     var whoLines = []
+    if (info.type === Model.TILE_ROAD && root.serviceReady) {
+      var onStreet = Model.roadStreet(root.grid, root.gridSize, info.index,
+        root.cityService.streetNames)
+      if (onStreet) whoLines.push(onStreet.name + (onStreet.named ? " — your name for it" : ""))
+    }
     var who = root.residentAt(info.index)
     if (who) {
       whoLines.push(who.name + ", " + who.age + " — " + (who.trade || "no trade recorded"))
@@ -540,7 +547,8 @@ Item {
   readonly property var citizenContext: root.serviceReady ? ({
     grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
     funding: root.cityService.funding, traffic: root.cityService.traffic,
-    crimes: root.crimes, fires: root.fires, ageMinutes: root.cityService.ageMinutes
+    crimes: root.crimes, fires: root.fires, ageMinutes: root.cityService.ageMinutes,
+    streetNames: root.cityService.streetNames
   }) : null
   readonly property var residents: {
     if (!root.serviceReady) return []
@@ -702,7 +710,8 @@ Item {
   // drag pays nothing for it.
   readonly property real streetLabelZoom: 26
   readonly property var streetRuns: root.effectiveCellSize >= root.streetLabelZoom
-    ? Model.streetRuns(root.grid, root.gridSize) : []
+    ? Model.streetRuns(root.grid, root.gridSize,
+        root.serviceReady ? root.cityService.streetNames : null) : []
 
   function centerOnGrid() {
     var mid = root.gridSize * root.effectiveCellSize / 2
@@ -5121,6 +5130,72 @@ Item {
                 color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.8)
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
                 font.pixelSize: Style.font.caption
+              }
+            }
+
+            // Name the street. The city generates a plausible name for every
+            // road; this is where it stops being the city's and becomes yours,
+            // and every letter about it changes wording accordingly.
+            Item {
+              visible: root.inspectedInfo !== null
+                && root.inspectedInfo.type === Model.TILE_ROAD && root.serviceReady
+              width: inspectColumn.width
+              height: visible ? renameRow.implicitHeight + Style.space(4) : 0
+              // A name typed for one road must not be left sitting in the box
+              // when the player clicks a different one. Declared here rather
+              // than as a handler on root, where the input's id is not in
+              // scope and the clearing would silently never happen.
+              Connections {
+                target: root
+                function onInspectedIndexChanged() { streetInput.text = "" }
+              }
+              Row {
+                id: renameRow
+                anchors.bottom: parent.bottom
+                width: parent.width
+                spacing: Style.space(4)
+                Rectangle {
+                  width: parent.width - renameApply.width - parent.spacing
+                  height: streetInput.implicitHeight + Style.space(6)
+                  radius: Style.space(3)
+                  color: Qt.rgba(0.5, 0.6, 0.6, 0.12)
+                  border.width: 1
+                  border.color: streetInput.activeFocus ? Color.accent : root.neutralTint(0.3)
+                  TextInput {
+                    id: streetInput
+                    anchors.fill: parent
+                    anchors.margins: Style.space(4)
+                    verticalAlignment: TextInput.AlignVCenter
+                    clip: true
+                    maximumLength: Model.STREET_NAME_MAX
+                    color: Color.menu.text
+                    selectionColor: Color.accent
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                    onAccepted: renameApply.apply()
+                    Text {
+                      anchors.fill: parent
+                      verticalAlignment: Text.AlignVCenter
+                      visible: streetInput.text === "" && !streetInput.activeFocus
+                      text: "Rename this street"
+                      color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.4)
+                      font.family: streetInput.font.family
+                      font.pixelSize: streetInput.font.pixelSize
+                    }
+                  }
+                }
+                Button {
+                  id: renameApply
+                  text: "Name"
+                  enabled: root.serviceReady && !root.outOfOffice
+                  function apply() {
+                    if (!root.serviceReady || root.outOfOffice) return
+                    root.cityService.renameStreet(root.inspectedIndex, streetInput.text)
+                    streetInput.text = ""
+                    streetInput.focus = false
+                  }
+                  onClicked: apply()
+                }
               }
             }
           }

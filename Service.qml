@@ -119,6 +119,18 @@ Item {
   // player *where* something is wrong rather than what percentage of the city
   // it affects.
   property var citizens: []
+  // Streets the mayor has named, keyed by axis and line so a name survives the
+  // road being extended. Only the overrides are stored; every other street
+  // still generates its own name and costs nothing.
+  property var streetNames: ({})
+  function renameStreet(index, label) {
+    if (!root.initialized) return false
+    var street = Model.roadStreet(root.grid, root.gridSize, index, root.streetNames)
+    if (!street) return false
+    root.streetNames = Model.renameStreet(root.streetNames, street.axis, street.fixed, label)
+    flushState()
+    return true
+  }
   property bool brownoutActive: false
 
   property bool initialized: false
@@ -460,6 +472,7 @@ Item {
     root.lastSeenMinute = 0
     root.lastGazetteMinute = 0
     root.citizens = []
+    root.streetNames = ({})
     root.brownoutActive = false
     root.ageMinutes = 0
     root.foundedAtMs = Date.now()
@@ -611,7 +624,8 @@ Item {
         grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
         funding: root.funding, traffic: root.traffic, crimes: root.crimes,
         fires: root.fires, population: result.population,
-        ageMinutes: root.ageMinutes, neighbors: root.neighbors
+        ageMinutes: root.ageMinutes, neighbors: root.neighbors,
+        streetNames: root.streetNames
       })
       root.citizens = moved.citizens
       // Deaths are the one thing here worth a notice of its own. The paper
@@ -962,7 +976,8 @@ Item {
       cityLog: root.cityLog,
       lastSeenMinute: root.lastSeenMinute,
       lastGazetteMinute: root.lastGazetteMinute,
-      citizens: root.citizens
+      citizens: root.citizens,
+      streetNames: root.streetNames
     }, null, 2) + "\n")
   }
 
@@ -1048,6 +1063,8 @@ Item {
       // as born in Year 1 and die on the next tick.
       citizens = Model.seedCitizenLives(
         Array.isArray(saved.citizens) ? saved.citizens : [], ageMinutes)
+      streetNames = (saved.streetNames && typeof saved.streetNames === "object")
+        ? saved.streetNames : ({})
     } catch (error) {
       saveProblem = "not valid JSON (" + error + ")"
       foundedAtMs = 0

@@ -2825,10 +2825,32 @@ function cityHash(a, b) {
 // by a tile and it must still be the same street, or a letter written in March
 // is about somewhere that no longer exists by June. Two roads on the same row
 // with a gap between them share a name, which is what real streets do anyway.
-function streetNameFor(axis, fixed) {
+// A street's identity, and the key a player's own name is stored against.
+// Axis and line rather than extent, so a renaming survives the road being
+// extended for exactly the same reason the generated name does.
+function streetKey(axis, fixed) {
+  return axis + ":" + fixed
+}
+
+var STREET_NAME_MAX = 28
+function streetNameFor(axis, fixed, names) {
+  var own = names && names[streetKey(axis, fixed)]
+  if (typeof own === "string" && own !== "") return own
   var h = cityHash(axis === "ns" ? 7919 : 104729, fixed + 1)
   return STREET_HEAD[h % STREET_HEAD.length] + " "
     + STREET_TAIL[Math.floor(h / STREET_HEAD.length) % STREET_TAIL.length]
+}
+
+// Setting a street's name, or clearing it back to the generated one. Returns a
+// new map rather than editing the old, so a caller assigning it to a QML
+// property gets a change notification.
+function renameStreet(names, axis, fixed, label) {
+  var next = {}
+  for (var key in (names || {})) next[key] = names[key]
+  var clean = sanitizeName(label).slice(0, STREET_NAME_MAX).trim()
+  if (clean === "") delete next[streetKey(axis, fixed)]
+  else next[streetKey(axis, fixed)] = clean
+  return next
 }
 
 // How far the road continues either way along one axis from a road tile.
@@ -2853,7 +2875,7 @@ function roadRunLength(grid, gridSize, index, axis) {
 // runs further through it — the long one is the street, the short one is the
 // turning off it — with east-west winning a tie so the answer is never
 // arbitrary.
-function roadStreet(grid, gridSize, index) {
+function roadStreet(grid, gridSize, index, names) {
   if (tileTypeOf(grid[index]) !== TILE_ROAD) return null
   var ew = roadRunLength(grid, gridSize, index, "ew")
   var ns = roadRunLength(grid, gridSize, index, "ns")
@@ -2861,18 +2883,19 @@ function roadStreet(grid, gridSize, index) {
   var run = axis === "ns" ? ns : ew
   var fixed = axis === "ns" ? index % gridSize : (index / gridSize) | 0
   return { axis: axis, fixed: fixed, from: run.from, to: run.to,
-    length: run.length, name: streetNameFor(axis, fixed) }
+    length: run.length, name: streetNameFor(axis, fixed, names),
+    named: !!(names && names[streetKey(axis, fixed)]) }
 }
 
 // The address of any tile: the street of the road it is actually served by, so
 // a complaint about Beacon Street is a complaint about a road that exists and
 // can be found. A lot with no road at all is on the outskirts, which is both
 // true and a hint about why its resident is unhappy.
-function streetOf(grid, gridSize, index) {
+function streetOf(grid, gridSize, index, names) {
   var roads = roadAccessIndices(grid, gridSize, index)
   var best = null
   for (var i = 0; i < roads.length; i++) {
-    var street = roadStreet(grid, gridSize, roads[i])
+    var street = roadStreet(grid, gridSize, roads[i], names)
     if (street && (!best || street.length > best.length)) best = street
   }
   return best ? best.name : "the outskirts"
@@ -2881,11 +2904,11 @@ function streetOf(grid, gridSize, index) {
 // Every street worth labelling on the map, longest first so a renderer short
 // of room draws the ones that matter. One entry per run, not per tile.
 var STREET_MIN_LENGTH = 4
-function streetRuns(grid, gridSize) {
+function streetRuns(grid, gridSize, names) {
   var seen = {}, out = []
   for (var i = 0; i < grid.length; i++) {
     if (tileTypeOf(grid[i]) !== TILE_ROAD) continue
-    var street = roadStreet(grid, gridSize, i)
+    var street = roadStreet(grid, gridSize, i, names)
     if (!street || street.length < STREET_MIN_LENGTH) continue
     var key = street.axis + ":" + street.from + ":" + street.to
     if (seen[key]) continue
@@ -3005,7 +3028,7 @@ function citizenBio(citizen, ctx) {
   return {
     name: citizen.n,
     index: citizen.i,
-    street: ctx && ctx.grid ? streetOf(ctx.grid, ctx.gridSize, citizen.i)
+    street: ctx && ctx.grid ? streetOf(ctx.grid, ctx.gridSize, citizen.i, ctx.streetNames)
       : streetName((ctx && ctx.gridSize) || GRID_SIZE, citizen.i),
     age: years,
     ageWords: ordinalWords(years + 1),
@@ -3015,7 +3038,8 @@ function citizenBio(citizen, ctx) {
     career: ctx && ctx.grid ? citizenCareer(ctx.grid, ctx.gridSize, citizen) : "",
     grievance: grievance ? grievance.key : "",
     complaint: grievance ? citizenLetter(citizen, grievance,
-      (ctx && ctx.gridSize) || GRID_SIZE, ctx && ctx.grid).text : "",
+      (ctx && ctx.gridSize) || GRID_SIZE, ctx && ctx.grid,
+      ctx && ctx.streetNames).text : "",
     // How close they are to giving up, for a panel that wants to warn.
     patience: citizen.p,
     settled: citizen.p >= CITIZEN_PATIENCE
@@ -3116,8 +3140,9 @@ var CITIZEN_PRAISE = [
     + "it was, and I should like that recorded."
 ]
 
-function citizenLetter(citizen, grievance, gridSize, grid) {
-  var street = grid ? streetOf(grid, gridSize, citizen.i) : streetName(gridSize, citizen.i)
+function citizenLetter(citizen, grievance, gridSize, grid, names) {
+  var street = grid ? streetOf(grid, gridSize, citizen.i, names)
+    : streetName(gridSize, citizen.i)
   var body = grievance
     ? CITIZEN_COMPLAINTS[grievance.key]
     : CITIZEN_PRAISE[cityHash(citizen.i, 5) % CITIZEN_PRAISE.length]
@@ -3138,7 +3163,7 @@ function citizenLetters(citizens, ctx, limit) {
   var out = []
   for (var i = 0; i < (citizens || []).length; i++) {
     var g = citizenGrievance(ctx, citizens[i].i)
-    out.push({ letter: citizenLetter(citizens[i], g, ctx.gridSize, ctx.grid),
+    out.push({ letter: citizenLetter(citizens[i], g, ctx.gridSize, ctx.grid, ctx.streetNames),
       severity: g ? g.severity : 0, index: citizens[i].i })
   }
   out.sort(function (a, b) {
@@ -3219,7 +3244,7 @@ function advanceCitizens(citizens, ctx) {
 
   for (var i = 0; i < (citizens || []).length; i++) {
     var person = citizens[i]
-    var street = streetOf(ctx.grid, ctx.gridSize, person.i)
+    var street = streetOf(ctx.grid, ctx.gridSize, person.i, ctx.streetNames)
     // Their house is gone — burnt down, bulldozed, or emptied by crime.
     if (living.indexOf(person.i) < 0) {
       departures.push({ name: person.n, street: street, reason: "gone", to: "" })
@@ -3257,7 +3282,7 @@ function advanceCitizens(citizens, ctx) {
     occupied[spot] = true
     next.push({ n: name, i: spot, s: Math.round(ctx.ageMinutes || 0), p: CITIZEN_PATIENCE,
       b: citizenBirthMinute(seed, ctx.ageMinutes || 0) })
-    arrivals.push({ name: name, street: streetOf(ctx.grid, ctx.gridSize, spot) })
+    arrivals.push({ name: name, street: streetOf(ctx.grid, ctx.gridSize, spot, ctx.streetNames) })
   }
   return { citizens: next, departures: departures, arrivals: arrivals, deaths: deaths }
 }
