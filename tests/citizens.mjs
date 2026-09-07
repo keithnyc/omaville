@@ -23,9 +23,13 @@ const seeded = (seed = 1) => () => ((seed = (seed * 1103515245 + 12345) & 0x7fff
 // tests below pass or fail on which corner a resident happened to land in.
 function town() {
   const g = M.emptyGrid(size);
+  // Roads every third row, so every house is genuinely on one. The first
+  // draft put a single road at the top and houses six rows deep behind it:
+  // most of them had no road access at all, which means no address and, in
+  // the real sim, no growth either.
   for (let x = 14; x <= 20; x++) {
-    g[at(x, 12)] = '#0';
-    for (let y = 13; y <= 18; y++) g[at(x, y)] = 'R2';
+    for (const y of [12, 15, 18]) g[at(x, y)] = '#0';
+    for (const y of HOUSE_ROWS) g[at(x, y)] = 'R2';
   }
   g[at(15, 11)] = 'E1'; g[at(16, 11)] = 'W1';
   g[at(17, 11)] = 'F1'; g[at(18, 11)] = 'S1';
@@ -34,14 +38,18 @@ function town() {
 }
 // Coverage is a true circle, not a square — the first draft of this fixture
 // looked well served and had corners 9.2 tiles from the firehouse.
-const HOME = at(17, 15);
+const HOUSE_ROWS = [13, 14, 16, 17];
+const HOME = at(17, 16);
 // Proves the fixture: nobody in it has anything to complain about.
 {
   const g = town(), ctx0 = { grid: g, gridSize: size, utilities: M.findUtilities(g),
     funding: M.defaultFunding(), traffic: null, crimes: [], fires: [] };
-  for (let x = 14; x <= 20; x++) for (let y = 13; y <= 18; y++)
+  for (let x = 14; x <= 20; x++) for (const y of HOUSE_ROWS) {
     assert.equal(M.citizenGrievance(ctx0, at(x, y)), null,
       `the fixture town serves ${x},${y}`);
+    assert.notEqual(M.streetOf(g, size, at(x, y)), 'the outskirts',
+      `and ${x},${y} is actually on a road`);
+  }
 }
 const context = (grid, over = {}) => Object.assign({
   grid, gridSize: size, utilities: M.findUtilities(grid), funding: M.defaultFunding(),
@@ -49,17 +57,54 @@ const context = (grid, over = {}) => Object.assign({
   neighbors: [{ name: 'Oakhurst' }, { name: 'Aldermill' }], random: seeded()
 }, over);
 
-// --- addresses ------------------------------------------------------------
+// --- addresses are roads --------------------------------------------------
+// A street used to be a band of the grid, which meant a resident could
+// complain about Beacon Street and there was no Beacon Street to go and look
+// at. An address is now the road the house is actually served by.
 {
-  assert.equal(M.streetName(size, at(14, 15)), M.streetName(size, at(14, 15)),
-    'a tile keeps its address');
-  assert.equal(M.streetName(size, at(14, 15)), M.streetName(size, at(16, 16)),
-    'and shares it with the neighbours on the same block');
-  const names = new Set();
-  for (let y = 0; y < size; y += 3) for (let x = 0; x < size; x += 12)
-    names.add(M.streetName(size, at(x, y)));
-  assert.ok(names.size > 12, `the map has more than a handful of street names, got ${names.size}`);
-  assert.ok(/^[A-Z][a-z]+ [A-Z][a-z]+$/.test(M.streetName(size, at(3, 3))), 'and they read as streets');
+  const g = M.emptyGrid(size);
+  for (let x = 10; x < 30; x++) g[at(x, 15)] = '#0';
+  for (let y = 8; y < 24; y++) g[at(25, y)] = '#0';
+  g[at(12, 16)] = 'R2'; g[at(13, 16)] = 'R2'; g[at(26, 12)] = 'R2';
+
+  const home = M.streetOf(g, size, at(12, 16));
+  assert.ok(/^[A-Z][a-z]+ [A-Z][a-z]+$/.test(home), `${home} reads as a street`);
+  assert.equal(M.streetOf(g, size, at(13, 16)), home, 'next door is the same street');
+  assert.notEqual(M.streetOf(g, size, at(26, 12)), home,
+    'a house on a different road has a different address');
+
+  // The property that matters: extending a road must not rename it. A letter
+  // written in March has to still be about somewhere that exists in June.
+  const longer = g.slice();
+  for (let x = 30; x < 50; x++) longer[at(x, 15)] = '#0';
+  for (let x = 2; x < 10; x++) longer[at(x, 15)] = '#0';
+  assert.equal(M.streetOf(longer, size, at(12, 16)), home,
+    'the street keeps its name when the road is extended at either end');
+
+  // A house with no road at all is honest about it, which is also a hint
+  // about why its resident is unhappy.
+  const bare = M.emptyGrid(size);
+  bare[at(30, 30)] = 'R2';
+  assert.equal(M.streetOf(bare, size, at(30, 30)), 'the outskirts');
+
+  // A crossroads belongs to whichever road runs further through it: the long
+  // one is the street, the short one is the turning off it.
+  assert.equal(M.roadStreet(g, size, at(25, 15)).axis, 'ew',
+    'the 20-tile road wins over the 16-tile one');
+  assert.equal(M.roadStreet(g, size, at(25, 15)).name, home);
+  assert.equal(M.roadStreet(g, size, at(12, 16)), null, 'a house is not a road');
+
+  // And the map can list them, longest first, skipping stubs too short to name.
+  const runs = M.streetRuns(g, size);
+  assert.ok(runs.length >= 2, `found ${runs.length} streets`);
+  assert.ok(runs[0].length >= runs[runs.length - 1].length, 'longest first');
+  for (const r of runs) {
+    assert.ok(r.length >= M.STREET_MIN_LENGTH, 'a driveway is not a street');
+    assert.ok(r.name && r.axis && Number.isFinite(r.from) && Number.isFinite(r.to));
+  }
+  assert.equal(new Set(runs.map(r => r.axis + ':' + r.from + ':' + r.to)).size, runs.length,
+    'each run is listed once, not once per tile');
+  assert.equal(M.streetRuns(M.emptyGrid(size), size).length, 0, 'no roads, no streets');
 }
 
 // --- who exists, and where ------------------------------------------------
@@ -108,8 +153,8 @@ const context = (grid, over = {}) => Object.assign({
 
   // Industry behind the house.
   const works = town();
-  for (let x = 14; x <= 20; x++) works[at(x, 21)] = 'I2';
-  assert.equal(M.citizenGrievance(context(works), at(17, 18)).key, 'industry');
+  for (let x = 14; x <= 20; x++) works[at(x, 20)] = 'I2';
+  assert.equal(M.citizenGrievance(context(works), at(17, 17)).key, 'industry');
 
   // Missing services, each in turn.
   for (const [tile, key] of [['F1', 'fire'], ['E1', 'power'], ['W1', 'water'],
@@ -124,13 +169,13 @@ const context = (grid, over = {}) => Object.assign({
   // pleasantness. A burning building outranks a distant school.
   const everything = town();
   for (let i = 0; i < everything.length; i++) if (everything[i] === 'N1') everything[i] = '_0';
-  for (let x = 14; x <= 20; x++) everything[at(x, 21)] = 'I2';
+  for (let x = 14; x <= 20; x++) everything[at(x, 20)] = 'I2';
   assert.equal(M.citizenGrievance(context(everything, {
     fires: [{ index: at(18, 16) }], crimes: [{ index: at(18, 16), ticks: 1 }]
   }), home).key, 'fire-now', 'the fire outranks everything else');
   // Judged at a house that is actually beside the works — the nuisance radius
   // is 3, and the same complaint is correctly absent four streets away.
-  assert.equal(M.citizenGrievance(context(everything), at(17, 18)).key, 'industry',
+  assert.equal(M.citizenGrievance(context(everything), at(17, 17)).key, 'industry',
     'and industry outranks a distant school');
   assert.equal(M.citizenGrievance(context(everything), at(17, 13)).key, 'schools',
     'while a house out of range of the works has only the school to complain about');
@@ -202,7 +247,7 @@ const context = (grid, over = {}) => Object.assign({
   // own. Removing the police station instead gave the whole town the same
   // complaint and drowned out everything local.
   const grid = town();
-  for (let x = 14; x <= 20; x++) grid[at(x, 21)] = 'I2';
+  for (let x = 14; x <= 20; x++) grid[at(x, 20)] = 'I2';
   const ctx = context(grid, {
     crimes: [{ index: at(15, 13), ticks: 1 }],
     fires: [{ index: at(20, 14) }],
@@ -212,8 +257,8 @@ const context = (grid, over = {}) => Object.assign({
     ['Ada Pike', at(20, 13)],    // beside the fire
     ['Cyril Rooke', at(15, 14)], // inside the crime wave
     ['Vera Chalk', at(17, 16)],  // on the jammed block
-    ['Percy Gaunt', at(17, 18)], // backing onto the works
-    ['Nora Quill', at(18, 17)]   // nothing wrong at all
+    ['Percy Gaunt', at(17, 17)], // backing onto the works
+    ['Nora Quill', at(14, 16)]   // nothing wrong at all
   ].map(([n, i]) => ({ n, i, s: 0, p: M.CITIZEN_PATIENCE }));
 
   for (const [person, expected] of [[cast[0], 'fire-now'], [cast[1], 'crime'],
@@ -244,8 +289,10 @@ const context = (grid, over = {}) => Object.assign({
     assert.ok(l.name && l.street && l.text, `${l.name} is printable`);
     assert.ok(!l.text.includes('$STREET'), 'no unfilled placeholder reaches the page');
     assert.ok(l.text.length > 40, 'a letter is a letter, not a label');
-    assert.equal(l.street, M.streetName(size, cast.find(c => c.n === l.name).i),
+    assert.equal(l.street, M.streetOf(grid, size, cast.find(c => c.n === l.name).i),
       'signed with their own address');
+    assert.equal(l.index, cast.find(c => c.n === l.name).i,
+      'and carries the tile, so the map can be asked to go there');
   }
   // Every complaint the model can raise must have something to say.
   for (const key of Object.keys(M.CITIZEN_COMPLAINTS))
@@ -271,6 +318,27 @@ const context = (grid, over = {}) => Object.assign({
   assert.equal(JSON.stringify(grid), gridBefore, 'and so is the map');
   assert.equal(M.advanceCitizens(null, context(grid)).citizens.length > 0, true,
     'a city that has never had named residents gets some');
+}
+
+// --- the address reaches the map ------------------------------------------
+// Naming a street is only worth doing if the player can be taken to it.
+{
+  const view = fs.readFileSync(new URL('../CityView.qml', import.meta.url), 'utf8');
+  assert.ok(/function goToTile\(index\)/.test(view), 'the map can be sent to a tile');
+  assert.ok(/root\.goToTile\(modelData\.index\)/.test(view),
+    'and a letter in the Gazette sends it there');
+  assert.ok(/root\.gazetteOpen = false\s*\n\s*root\.goToTile/.test(view),
+    'closing the paper first, so the map it just moved is actually visible');
+  assert.ok(/highlightIndex/.test(view), 'and marks where it landed');
+  assert.ok(/function drawStreetNames/.test(view), 'street names are drawn on the map');
+  assert.ok(/Model\.streetRuns\(root\.grid/.test(view), 'from the runs the model finds');
+  // About a millisecond per grid change on a mature city, which is 5% of the
+  // whole per-tile cost of a road drag — so it is gated on the zoom that can
+  // actually draw the labels, and zoomed out it does not touch the grid.
+  assert.ok(/readonly property var streetRuns: root\.effectiveCellSize >= root\.streetLabelZoom/
+    .test(view), 'street runs are only computed at a zoom that can show them');
+  assert.ok(/if \(cellSize < root\.streetLabelZoom\) return/.test(view),
+    'and the renderer uses the same threshold, so the two cannot drift');
 }
 
 console.log('PASS: named residents at real addresses, complaints that are true of their own ' +

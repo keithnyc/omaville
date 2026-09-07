@@ -626,6 +626,36 @@ Item {
       : Math.max(0, Math.min(contentSize - root.viewportHeight, root.panY))
   }
 
+  // Take the player to a tile. The reason the letters column names a street
+  // at all: a complaint about Beacon Street is only actionable if the map can
+  // be asked where Beacon Street is.
+  property int highlightIndex: -1
+  function goToTile(index) {
+    if (index < 0 || index >= root.gridSize * root.gridSize) return
+    if (root.zoom < 1.0) root.setZoom(1.0)
+    var cell = root.effectiveCellSize
+    root.panX = ((index % root.gridSize) + 0.5) * cell - root.viewportWidth / 2
+    root.panY = (Math.floor(index / root.gridSize) + 0.5) * cell - root.viewportHeight / 2
+    clampPan()
+    root.highlightIndex = index
+    highlightTimer.restart()
+  }
+  Timer {
+    id: highlightTimer
+    interval: 4000
+    onTriggered: root.highlightIndex = -1
+  }
+
+  // Street names for labelling the roads. Costs about a millisecond per grid
+  // change on a mature city, which is 5% of the whole per-tile cost of a road
+  // drag — so it is gated on the zoom that drawStreetNames needs anyway. A
+  // conditional binding only registers the dependencies of the branch it
+  // takes, so zoomed out this does not depend on the grid at all and a long
+  // drag pays nothing for it.
+  readonly property real streetLabelZoom: 26
+  readonly property var streetRuns: root.effectiveCellSize >= root.streetLabelZoom
+    ? Model.streetRuns(root.grid, root.gridSize) : []
+
   function centerOnGrid() {
     var mid = root.gridSize * root.effectiveCellSize / 2
     root.panX = mid - root.viewportWidth / 2
@@ -1074,6 +1104,65 @@ Item {
   // Highway stubs at the map edge, one per neighbouring town. Drawn on the
   // main tile canvas because they are terrain, not an alert — they only
   // change when the grid does.
+  // Street names, drawn along the carriageway the way they are on a map.
+  // Only when the tiles are big enough to read at, and only for roads long
+  // enough that the label fits — a name that overruns its own street is worse
+  // than no name, and the map is a place to find Beacon Street, not a list.
+  function drawStreetNames(ctx, cellSize, offsetX, offsetY, width, height) {
+    if (cellSize < root.streetLabelZoom) return
+    var runs = root.streetRuns
+    ctx.save()
+    ctx.font = Math.round(Math.max(9, cellSize * 0.30)) + "px sans-serif"
+    ctx.textBaseline = "middle"
+    for (var i = 0; i < runs.length; i++) {
+      var run = runs[i]
+      var fromX = (run.from % root.gridSize) * cellSize - offsetX
+      var fromY = Math.floor(run.from / root.gridSize) * cellSize - offsetY
+      var span = run.length * cellSize
+      var label = run.name
+      var textWidth = ctx.measureText(label).width
+      if (textWidth > span - cellSize) continue
+      // Skip a street that cannot be on screen at all, on its own axis as
+      // well as across it.
+      if (run.axis === "ns") {
+        if (fromX < -cellSize || fromX > width + cellSize) continue
+        if (fromY > height || fromY + span < 0) continue
+      } else {
+        if (fromY < -cellSize || fromY > height + cellSize) continue
+        if (fromX > width || fromX + span < 0) continue
+      }
+
+      // Repeated along the street rather than placed once at its midpoint.
+      // A 22-tile road is wider than the viewport, so a single central label
+      // is frequently off screen while the street itself is not — which is
+      // exactly the case this feature exists to serve. Real maps repeat them
+      // for the same reason.
+      var stride = Math.max(textWidth + cellSize * 4, cellSize * 10)
+      var copies = Math.max(1, Math.floor(span / stride))
+      var slot = span / copies
+      for (var c = 0; c < copies; c++) {
+        var along = c * slot + (slot - textWidth) / 2
+        ctx.save()
+        if (run.axis === "ns") {
+          // Rotated to run with the road, reading top to bottom.
+          ctx.translate(fromX + cellSize * 0.5, fromY + along)
+          ctx.rotate(Math.PI / 2)
+        } else {
+          ctx.translate(fromX + along, fromY + cellSize * 0.5)
+        }
+        // A dark backing stroke first, so the name stays legible over asphalt,
+        // markings and whatever traffic colour the overlay has put down.
+        ctx.strokeStyle = "rgba(18, 20, 24, 0.85)"
+        ctx.lineWidth = Math.max(2, cellSize * 0.09)
+        ctx.strokeText(label, 0, 0)
+        ctx.fillStyle = "rgba(236, 232, 214, 0.92)"
+        ctx.fillText(label, 0, 0)
+        ctx.restore()
+      }
+    }
+    ctx.restore()
+  }
+
   function drawNeighbors(ctx, cellSize, offsetX, offsetY, width, height) {
     var connected = root.connectedNeighbors
     for (var i = 0; i < root.neighbors.length; i++) {
@@ -4482,6 +4571,7 @@ Item {
             }
             root.drawGridOverlay(ctx, data, startCol, endCol, startRow, endRow, size, offsetX, offsetY, width, height)
             root.drawNeighbors(ctx, size, offsetX, offsetY, width, height)
+            root.drawStreetNames(ctx, size, offsetX, offsetY, width, height)
             for (var detailRow = startRow; detailRow <= endRow; detailRow++) {
               for (var detailCol = startCol; detailCol <= endCol; detailCol++) {
                 var detailIndex = detailRow * root.gridSize + detailCol
@@ -4814,11 +4904,16 @@ Item {
           property real offsetX: root.panX
           property real offsetY: root.panY
           property real cellSize: root.effectiveCellSize
-          onOffsetXChanged: if (root.growthFlashes.length) requestPaint()
-          onOffsetYChanged: if (root.growthFlashes.length) requestPaint()
-          onCellSizeChanged: if (root.growthFlashes.length) requestPaint()
+          onOffsetXChanged: if (root.growthFlashes.length || root.highlightIndex >= 0) requestPaint()
+          onOffsetYChanged: if (root.growthFlashes.length || root.highlightIndex >= 0) requestPaint()
+          onCellSizeChanged: if (root.growthFlashes.length || root.highlightIndex >= 0) requestPaint()
           onWidthChanged: requestPaint()
           onHeightChanged: requestPaint()
+
+          Connections {
+            target: root
+            function onHighlightIndexChanged() { growthFlashCanvas.requestPaint() }
+          }
 
           onPaint: {
             var ctx = getContext("2d")
@@ -4830,6 +4925,19 @@ Item {
               var cx = (f.index % root.gridSize) * cellSize - offsetX + cellSize / 2
               var cy = Math.floor(f.index / root.gridSize) * cellSize - offsetY + cellSize / 2
               root.drawGrowthFlash(ctx, cx, cy, cellSize, f, now)
+            }
+            // Where the paper just sent you. Fades on its own so it never
+            // becomes another thing to dismiss.
+            if (root.highlightIndex >= 0) {
+              var hx = (root.highlightIndex % root.gridSize) * cellSize - offsetX
+              var hy = Math.floor(root.highlightIndex / root.gridSize) * cellSize - offsetY
+              ctx.strokeStyle = "rgba(232, 168, 76, 0.95)"
+              ctx.lineWidth = Math.max(2, cellSize * 0.09)
+              ctx.strokeRect(hx + 1, hy + 1, cellSize - 2, cellSize - 2)
+              ctx.strokeStyle = "rgba(232, 168, 76, 0.35)"
+              ctx.lineWidth = Math.max(1, cellSize * 0.05)
+              ctx.strokeRect(hx - cellSize * 0.25, hy - cellSize * 0.25,
+                cellSize * 1.5, cellSize * 1.5)
             }
           }
         }
@@ -5451,12 +5559,26 @@ Item {
                   font.pixelSize: Style.font.caption
                 }
                 Text {
+                  id: signature
                   width: parent.width
                   horizontalAlignment: Text.AlignRight
+                  // Clickable: the point of naming the street is being able to
+                  // go and look at it. Closes the paper and takes the map there.
                   text: "— " + modelData.name + ", " + modelData.street
-                  color: gazetteCard.faded
+                    + (modelData.index >= 0 ? "  ›" : "")
+                  color: signatureMouse.containsMouse ? Color.accent : gazetteCard.faded
                   font.family: root.gazetteSerif
                   font.pixelSize: Style.font.caption
+                  MouseArea {
+                    id: signatureMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      root.gazetteOpen = false
+                      root.goToTile(modelData.index)
+                    }
+                  }
                 }
                 Item { width: 1; height: Style.space(3) }
               }

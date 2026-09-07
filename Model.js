@@ -2820,6 +2820,84 @@ function cityHash(a, b) {
 // A tile's address, stable for the life of the map. Banded rather than
 // per-tile so that neighbours genuinely share a street: everybody within
 // three rows and twelve columns has the same one, which is roughly a block.
+// A street is named from its axis and the line it runs along, not from where
+// the tarmac currently happens to stop. That is the whole trick: extend a road
+// by a tile and it must still be the same street, or a letter written in March
+// is about somewhere that no longer exists by June. Two roads on the same row
+// with a gap between them share a name, which is what real streets do anyway.
+function streetNameFor(axis, fixed) {
+  var h = cityHash(axis === "ns" ? 7919 : 104729, fixed + 1)
+  return STREET_HEAD[h % STREET_HEAD.length] + " "
+    + STREET_TAIL[Math.floor(h / STREET_HEAD.length) % STREET_TAIL.length]
+}
+
+// How far the road continues either way along one axis from a road tile.
+function roadRunLength(grid, gridSize, index, axis) {
+  var x = index % gridSize, y = (index / gridSize) | 0
+  var step = axis === "ns" ? gridSize : 1
+  var limit = axis === "ns" ? gridSize - y : gridSize - x
+  var back = axis === "ns" ? y : x
+  var length = 1, from = index, to = index
+  for (var f = 1; f < limit; f++) {
+    if (tileTypeOf(grid[index + f * step]) !== TILE_ROAD) break
+    to = index + f * step; length++
+  }
+  for (var b = 1; b <= back; b++) {
+    if (tileTypeOf(grid[index - b * step]) !== TILE_ROAD) break
+    from = index - b * step; length++
+  }
+  return { length: length, from: from, to: to }
+}
+
+// Which street a road tile belongs to. A crossroads belongs to whichever road
+// runs further through it — the long one is the street, the short one is the
+// turning off it — with east-west winning a tie so the answer is never
+// arbitrary.
+function roadStreet(grid, gridSize, index) {
+  if (tileTypeOf(grid[index]) !== TILE_ROAD) return null
+  var ew = roadRunLength(grid, gridSize, index, "ew")
+  var ns = roadRunLength(grid, gridSize, index, "ns")
+  var axis = ns.length > ew.length ? "ns" : "ew"
+  var run = axis === "ns" ? ns : ew
+  var fixed = axis === "ns" ? index % gridSize : (index / gridSize) | 0
+  return { axis: axis, fixed: fixed, from: run.from, to: run.to,
+    length: run.length, name: streetNameFor(axis, fixed) }
+}
+
+// The address of any tile: the street of the road it is actually served by, so
+// a complaint about Beacon Street is a complaint about a road that exists and
+// can be found. A lot with no road at all is on the outskirts, which is both
+// true and a hint about why its resident is unhappy.
+function streetOf(grid, gridSize, index) {
+  var roads = roadAccessIndices(grid, gridSize, index)
+  var best = null
+  for (var i = 0; i < roads.length; i++) {
+    var street = roadStreet(grid, gridSize, roads[i])
+    if (street && (!best || street.length > best.length)) best = street
+  }
+  return best ? best.name : "the outskirts"
+}
+
+// Every street worth labelling on the map, longest first so a renderer short
+// of room draws the ones that matter. One entry per run, not per tile.
+var STREET_MIN_LENGTH = 4
+function streetRuns(grid, gridSize) {
+  var seen = {}, out = []
+  for (var i = 0; i < grid.length; i++) {
+    if (tileTypeOf(grid[i]) !== TILE_ROAD) continue
+    var street = roadStreet(grid, gridSize, i)
+    if (!street || street.length < STREET_MIN_LENGTH) continue
+    var key = street.axis + ":" + street.from + ":" + street.to
+    if (seen[key]) continue
+    seen[key] = true
+    out.push(street)
+  }
+  out.sort(function (a, b) { return b.length - a.length })
+  return out
+}
+
+// The banded fallback the citizens used before streets were real roads. Kept
+// so a caller without a grid still gets a stable, plausible address.
 function streetName(gridSize, index) {
   var band = Math.floor(Math.floor(index / gridSize) / 3)
   var run = Math.floor((index % gridSize) / 12)
@@ -2909,14 +2987,17 @@ var CITIZEN_PRAISE = [
     + "it was, and I should like that recorded."
 ]
 
-function citizenLetter(citizen, grievance, gridSize) {
-  var street = streetName(gridSize, citizen.i)
+function citizenLetter(citizen, grievance, gridSize, grid) {
+  var street = grid ? streetOf(grid, gridSize, citizen.i) : streetName(gridSize, citizen.i)
   var body = grievance
     ? CITIZEN_COMPLAINTS[grievance.key]
     : CITIZEN_PRAISE[cityHash(citizen.i, 5) % CITIZEN_PRAISE.length]
   return {
     name: citizen.n,
     street: street,
+    // Carried so a reader can be taken there: a complaint about Beacon Street
+    // is only actionable if the map can be asked where Beacon Street is.
+    index: citizen.i,
     grievance: grievance ? grievance.key : "",
     text: body.split("$STREET").join(street)
   }
@@ -2928,7 +3009,7 @@ function citizenLetters(citizens, ctx, limit) {
   var out = []
   for (var i = 0; i < (citizens || []).length; i++) {
     var g = citizenGrievance(ctx, citizens[i].i)
-    out.push({ letter: citizenLetter(citizens[i], g, ctx.gridSize),
+    out.push({ letter: citizenLetter(citizens[i], g, ctx.gridSize, ctx.grid),
       severity: g ? g.severity : 0, index: citizens[i].i })
   }
   out.sort(function (a, b) {
@@ -2979,7 +3060,7 @@ function advanceCitizens(citizens, ctx) {
 
   for (var i = 0; i < (citizens || []).length; i++) {
     var person = citizens[i]
-    var street = streetName(ctx.gridSize, person.i)
+    var street = streetOf(ctx.grid, ctx.gridSize, person.i)
     // Their house is gone — burnt down, bulldozed, or emptied by crime.
     if (living.indexOf(person.i) < 0) {
       departures.push({ name: person.n, street: street, reason: "gone", to: "" })
@@ -3010,7 +3091,7 @@ function advanceCitizens(citizens, ctx) {
     if (clash) continue
     occupied[spot] = true
     next.push({ n: name, i: spot, s: Math.round(ctx.ageMinutes || 0), p: CITIZEN_PATIENCE })
-    arrivals.push({ name: name, street: streetName(ctx.gridSize, spot) })
+    arrivals.push({ name: name, street: streetOf(ctx.grid, ctx.gridSize, spot) })
   }
   return { citizens: next, departures: departures, arrivals: arrivals }
 }
