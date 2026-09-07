@@ -1114,6 +1114,11 @@ Item {
     ctx.save()
     ctx.font = Math.round(Math.max(9, cellSize * 0.30)) + "px sans-serif"
     ctx.textBaseline = "middle"
+    // Round joins, or the backing stroke below grows miter spikes out of every
+    // sharp corner in the type — a "W" at three pixels of line width throws
+    // black shards several pixels clear of the letter.
+    ctx.lineJoin = "round"
+    ctx.lineCap = "round"
     for (var i = 0; i < runs.length; i++) {
       var run = runs[i]
       var fromX = (run.from % root.gridSize) * cellSize - offsetX

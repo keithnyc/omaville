@@ -339,6 +339,17 @@ const context = (grid, over = {}) => Object.assign({
     .test(view), 'street runs are only computed at a zoom that can show them');
   assert.ok(/if \(cellSize < root\.streetLabelZoom\) return/.test(view),
     'and the renderer uses the same threshold, so the two cannot drift');
+
+  // The backing stroke behind a street name must use round joins. At the
+  // default miter, a thick stroke shoots black shards several pixels clear of
+  // every sharp corner in the type — a "W" is the worst of them.
+  const labelFn = view.slice(view.indexOf('function drawStreetNames'),
+    view.indexOf('function drawNeighbors'));
+  assert.ok(/strokeText/.test(labelFn), 'the label is stroked before it is filled');
+  assert.ok(/lineJoin = "round"/.test(labelFn) && /lineCap = "round"/.test(labelFn),
+    'with round joins, or the outline grows miter spikes');
+  assert.ok(labelFn.indexOf('lineJoin') < labelFn.indexOf('strokeText'),
+    'and set before the stroke, not after it');
 }
 
 console.log('PASS: named residents at real addresses, complaints that are true of their own ' +
