@@ -28,7 +28,7 @@ BarWidget {
 
   // Nerd-font glyphs, matching the rest of the bar rather than emoji.
   readonly property var alertIcons: ({
-    fire: "\uf06d", crime: "\uf132", brownout: "\uf0e7", budget: "\uf071"
+    office: "\uf023", fire: "\uf06d", crime: "\uf132", brownout: "\uf0e7", budget: "\uf071"
   })
   readonly property string icon: root.alertIcons[root.alertKind] || ""
 
@@ -50,9 +50,10 @@ BarWidget {
       s.cityName + " · " + cal.monthName + ", Year " + cal.year,
       "Pop " + root.population + " · " + root.money(root.treasury) + " · " + s.happiness + "% happy"
     ]
-    if (s.outOfOffice)
-      lines.push("\nOut of office · " + Math.max(1, Math.ceil(s.outOfOfficeUntil - s.ageMinutes))
-        + " months left")
+    if (s.outOfOffice) {
+      var left = Math.max(1, Math.ceil(s.outOfOfficeUntil - s.ageMinutes))
+      lines.push("\nOut of office · " + left + (left === 1 ? " month left" : " months left"))
+    }
     // Only the advisors with something to say — a wall of "all good" is not
     // worth the tooltip space. Severity is a single character on purpose: the
     // shell centres tooltip text, so a two-character "!!" against a one-

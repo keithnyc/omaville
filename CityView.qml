@@ -209,6 +209,10 @@ Item {
   readonly property var ordinances: root.serviceReady ? root.cityService.ordinances : []
   readonly property int approval: root.serviceReady ? root.cityService.approval : 0
   readonly property bool outOfOffice: root.serviceReady && root.cityService.outOfOffice
+  readonly property int monthsOutOfOffice: root.serviceReady
+    ? Math.max(1, Math.ceil(root.cityService.outOfOfficeUntil - root.cityService.ageMinutes)) : 0
+  readonly property string outOfOfficeSpan: root.monthsOutOfOffice
+    + (root.monthsOutOfOffice === 1 ? " more month" : " more months")
   readonly property var connectedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
   readonly property bool cityBurning: root.fires.length > 0
   property string overlayMode: ""
@@ -439,6 +443,9 @@ Item {
   }
 
   function toolStatusText() {
+    if (root.outOfOffice && root.serviceReady)
+      return "Out of office — the interim administration is building nothing for "
+        + root.outOfOfficeSpan
     var t = root.hoveredToolType !== "" ? root.hoveredToolType : root.activeTool
     if (t === Model.TILE_ROAD) return "Road — $10 on land · $35 bridge over water" + root.monthlyNote(t, 0)
     if (t === Model.TOOL_AVENUE) return "Avenue — $30 new · $20 to widen a street · carries 2.5x a street"
@@ -3784,6 +3791,36 @@ Item {
         }
       }
 
+      // Being out of office makes every build silently do nothing, which reads
+      // as a broken game rather than a rule. This says so where the eye
+      // already is, rather than only inside the Budget card.
+      Rectangle {
+        width: parent.width
+        visible: root.outOfOffice
+        height: visible ? outOfOfficeText.implicitHeight + Style.space(14) : 0
+        radius: Style.cornerRadius
+        color: Qt.rgba(0.88, 0.42, 0.32, 0.16)
+        border.width: 1
+        border.color: "#e0806a"
+
+        Text {
+          id: outOfOfficeText
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.margins: Style.space(9)
+          anchors.verticalCenter: parent.verticalCenter
+          wrapMode: Text.WordWrap
+          text: root.serviceReady
+            ? "You are out of office. An interim administration runs "
+              + root.cityService.cityName + " for " + root.outOfOfficeSpan
+              + " — building, zoning and spending are disabled until then."
+            : ""
+          color: "#e0806a"
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+      }
+
       // RCI demand meter, SimCity-style: one bar per zone that rises above
       CoverageStatus {
         rows: root.serviceCoverage
@@ -3893,6 +3930,10 @@ Item {
         // window for four buttons.
         Column {
           id: paletteColumn
+          // Dimmed rather than disabled: the tools stay hoverable so their
+          // hints still explain what they would cost, but it is obvious at a
+          // glance that nothing will happen.
+          opacity: root.outOfOffice ? 0.4 : 1
           // Higher than the map Item beside it (default z: 0, but declared
           // *after* this Column so it paints on top when equal) — the tier
           // flyout escapes toolButton's own bounds to sit beside it, and
@@ -5785,7 +5826,7 @@ Item {
             var s = root.cityService
             if (root.outOfOffice)
               return "Out of office — an interim administration is running the city for "
-                + Math.max(1, Math.ceil(s.outOfOfficeUntil - s.ageMinutes)) + " more months."
+                + root.outOfOfficeSpan + "."
             var due = Math.max(0, Math.ceil(s.nextElectionAt - s.ageMinutes))
             return "Approval " + root.approval + "% · election in " + due
               + (due === 1 ? " month" : " months")

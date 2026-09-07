@@ -192,7 +192,11 @@ Item {
   property int sustainableAt: 0
   // Anything actively going wrong, most urgent first — what the bar widget
   // swaps its icon for.
-  readonly property string alertKind: root.fires.length > 0 ? "fire"
+  // Out of office outranks everything: a mayor who cannot act at all needs to
+  // know that before they need to know the city is on fire, because they
+  // cannot do anything about the fire either.
+  readonly property string alertKind: root.outOfOffice ? "office"
+    : root.fires.length > 0 ? "fire"
     : root.crimes.length > 0 ? "crime"
     : (root.load && (root.load.power < 1 || root.load.water < 1)) ? "brownout"
     : root.budgetCrisisActive ? "budget" : ""
