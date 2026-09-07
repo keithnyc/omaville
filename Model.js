@@ -47,16 +47,34 @@ var TILE_LABELS = {
 var DECORATION_RADIUS = 3
 var MAX_PROPERTY_BONUS = 25
 
-function propertyValueBonus(grid, gridSize, index) {
-  var x = index % gridSize, y = Math.floor(index / gridSize), bonus = 0
+// The offsets inside the decoration radius, with their falloff already
+// divided out. Built once at load instead of recomputing a square root and
+// allocating a parsed tile for all 49 cells around every residential lot,
+// every tick — which was the single largest cost in summarize.
+var DECORATION_OFFSETS = (function () {
+  var out = []
   for (var dy = -DECORATION_RADIUS; dy <= DECORATION_RADIUS; dy++) {
     for (var dx = -DECORATION_RADIUS; dx <= DECORATION_RADIUS; dx++) {
-      var nx = x + dx, ny = y + dy, distance = Math.sqrt(dx * dx + dy * dy)
-      if (nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize || distance === 0 || distance > DECORATION_RADIUS) continue
-      var type = parseTile(grid[ny * gridSize + nx]).type
-      if (type === TILE_TREE) bonus += 6 / distance
-      else if (type === TILE_FLOWERS) bonus += 8 / distance
+      var distance = Math.sqrt(dx * dx + dy * dy)
+      if (distance === 0 || distance > DECORATION_RADIUS) continue
+      out.push({ dx: dx, dy: dy, d: distance, tree: 6 / distance, flowers: 8 / distance })
     }
+  }
+  // Nearest first, so a scan that only wants the closest match can stop at the
+  // first hit. propertyValueBonus sums them all, so order is free there.
+  out.sort(function (a, b) { return a.d - b.d })
+  return out
+})()
+
+function propertyValueBonus(grid, gridSize, index) {
+  var x = index % gridSize, y = (index / gridSize) | 0, bonus = 0
+  for (var i = 0; i < DECORATION_OFFSETS.length; i++) {
+    var o = DECORATION_OFFSETS[i]
+    var nx = x + o.dx, ny = y + o.dy
+    if (nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize) continue
+    var type = tileTypeOf(grid[ny * gridSize + nx])
+    if (type === TILE_TREE) bonus += o.tree
+    else if (type === TILE_FLOWERS) bonus += o.flowers
   }
   return Math.min(MAX_PROPERTY_BONUS, Math.round(bonus)) + waterfrontBonus(grid, gridSize, index)
 }
@@ -67,13 +85,21 @@ function isWaterTile(value) {
 }
 
 function waterfrontBonus(grid, gridSize, index) {
-  var x = index % gridSize, y = Math.floor(index / gridSize), nearest = Infinity
-  for (var dy = -3; dy <= 3; dy++) for (var dx = -3; dx <= 3; dx++) {
-    var nx = x + dx, ny = y + dy, distance = Math.sqrt(dx * dx + dy * dy)
-    if (!distance || distance > 3 || nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize) continue
-    if (isWaterTile(grid[ny * gridSize + nx])) nearest = Math.min(nearest, distance)
+  var x = index % gridSize, y = (index / gridSize) | 0
+  // The result is banded, so only the nearest water matters — walking the
+  // offsets nearest-first means the common case stops almost immediately
+  // instead of measuring all forty-nine cells and taking a minimum.
+  for (var i = 0; i < DECORATION_OFFSETS.length; i++) {
+    var o = DECORATION_OFFSETS[i]
+    var nx = x + o.dx, ny = y + o.dy
+    if (nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize) continue
+    var raw = grid[ny * gridSize + nx]
+    var type = tileTypeOf(raw)
+    var wet = type === TILE_LAKE
+      || (type === TILE_ROAD && tileLevelOf(raw) % 2 === 1)
+    if (wet) return o.d <= 1 ? 12 : o.d <= 2 ? 8 : 4
   }
-  return nearest <= 1 ? 12 : nearest <= 2 ? 8 : nearest <= 3 ? 4 : 0
+  return 0
 }
 
 function shoreAdjacent(grid, gridSize, index) {
@@ -366,6 +392,20 @@ function parseTile(str) {
   return { type: str[0], level: isFinite(level) ? level : 0 }
 }
 
+// Read a tile's parts without allocating. parseTile builds an object per call,
+// which is fine when a caller wants one tile and ruinous in the hot loops:
+// summarize touches all 4096 every tick, and localOpportunity scans an 11x11
+// box around every built lot — about 48,000 parsed tiles per tick between them.
+function tileTypeOf(value) {
+  return (typeof value === "string" && value.length > 1) ? value[0] : TILE_EMPTY
+}
+
+function tileLevelOf(value) {
+  if (typeof value !== "string" || value.length < 2) return 0
+  var code = value.charCodeAt(1) - 48
+  return (code >= 0 && code <= 9) ? code : 0
+}
+
 function makeTile(type, level) {
   return type + String(Math.max(0, Math.min(3, level)))
 }
@@ -445,7 +485,8 @@ function isCovered(gridSize, plants, index, baseRadius) {
 function findUtilities(grid) {
   var power = [], water = [], fire = [], police = [], schools = [], medical = [], transit = []
   for (var i = 0; i < grid.length; i++) {
-    var t = parseTile(grid[i])
+    var raw = grid[i]
+    var t = { type: tileTypeOf(raw), level: tileLevelOf(raw) }
     if (t.type === TILE_POWER) power.push({ index: i, level: t.level })
     else if (t.type === TILE_WATER) water.push({ index: i, level: t.level })
     else if (t.type === TILE_FIRE) fire.push({ index: i, level: t.level })
@@ -479,9 +520,11 @@ function serviceCoverageStats(grid, gridSize) {
   ]
   for (var r = 0; r < rows.length; r++) { rows[r].residents = 0; rows[r].served = 0 }
   for (var i = 0; i < grid.length; i++) {
-    var tile = parseTile(grid[i])
-    if (tile.type !== TILE_RES || tile.level <= 0) continue
-    var people = tile.level * RES_CAP_PER_LEVEL
+    var raw = grid[i]
+    if (tileTypeOf(raw) !== TILE_RES) continue
+    var level = tileLevelOf(raw)
+    if (level <= 0) continue
+    var people = level * RES_CAP_PER_LEVEL
     for (var r = 0; r < rows.length; r++) {
       rows[r].residents += people
       if (isCovered(gridSize, utilities[rows[r].key], i, rows[r].radius)) rows[r].served += people
@@ -504,6 +547,7 @@ function serviceCoverageStats(grid, gridSize) {
 // One pass over the grid: population/jobs/counts, used both to drive this
 // tick's growth decisions and to report bar-widget stats.
 function summarize(grid) {
+  var gridSize = Math.round(Math.sqrt(grid.length))
   var stats = {
     population: 0, jobsCommercial: 0, jobsIndustrial: 0,
     roadCount: 0, avenueCount: 0, parkCount: 0, resCount: 0, comCount: 0, indCount: 0,
@@ -517,17 +561,21 @@ function summarize(grid) {
     treeCount: 0, flowerCount: 0, decorationPoints: 0, taxablePopulation: 0, transitCount: 0
   }
   for (var i = 0; i < grid.length; i++) {
-    var tile = parseTile(grid[i])
-    switch (tile.type) {
+    // Plain locals, not a parsed object: this loop runs over all 4096 tiles
+    // every tick and an allocation per tile is the single largest cost in it.
+    var raw = grid[i]
+    var type = tileTypeOf(raw)
+    var level = tileLevelOf(raw)
+    switch (type) {
     case TILE_ROAD:
       stats.roadCount++
-      if (tile.level >= 2) stats.avenueCount++
+      if (level >= 2) stats.avenueCount++
       break
     case TILE_TREE: stats.treeCount++; stats.decorationPoints += 2; stats.decorationUpkeep += 0.03; break
     case TILE_FLOWERS: stats.flowerCount++; stats.decorationPoints += 3; stats.decorationUpkeep += 0.06; break
     case TILE_PARK:
       stats.parkCount++
-      stats.parkHappinessBonus += PARK_BONUS_PER_LEVEL[tile.level]
+      stats.parkHappinessBonus += PARK_BONUS_PER_LEVEL[level]
       break
     case TILE_WATERFRONT_PARK:
       stats.parkCount++
@@ -535,11 +583,11 @@ function summarize(grid) {
       break
     case TILE_POWER:
       stats.powerCount++
-      stats.powerUpkeep += POWER_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
+      stats.powerUpkeep += POWER_UPKEEP * INFRA_UPKEEP_SCALE[level]
       break
     case TILE_WATER:
       stats.waterCount++
-      stats.waterUpkeep += WATER_UPKEEP * INFRA_UPKEEP_SCALE[tile.level]
+      stats.waterUpkeep += WATER_UPKEEP * INFRA_UPKEEP_SCALE[level]
       break
     // Staffed departments are billed per resident served through the funding
     // budget (departmentSpend), not per building like the power and water
@@ -566,20 +614,20 @@ function summarize(grid) {
       break
     case TILE_RES:
       stats.resCount++
-      stats.population += tile.level * RES_CAP_PER_LEVEL
-      stats.taxablePopulation += tile.level * RES_CAP_PER_LEVEL
-        * (1 + propertyValueBonus(grid, Math.round(Math.sqrt(grid.length)), i) / 100)
-      stats.builtDensity += tile.level
+      stats.population += level * RES_CAP_PER_LEVEL
+      stats.taxablePopulation += level * RES_CAP_PER_LEVEL
+        * (1 + propertyValueBonus(grid, gridSize, i) / 100)
+      stats.builtDensity += level
       break
     case TILE_COM:
       stats.comCount++
-      stats.jobsCommercial += tile.level * COM_JOBS_PER_LEVEL
-      stats.builtDensity += tile.level
+      stats.jobsCommercial += level * COM_JOBS_PER_LEVEL
+      stats.builtDensity += level
       break
     case TILE_IND:
       stats.indCount++
-      stats.jobsIndustrial += tile.level * IND_JOBS_PER_LEVEL
-      stats.builtDensity += tile.level
+      stats.jobsIndustrial += level * IND_JOBS_PER_LEVEL
+      stats.builtDensity += level
       break
     }
   }
@@ -766,12 +814,14 @@ function localOpportunity(grid, gridSize, index, type) {
       var nx = x + dx
       if (nx < 0 || nx >= gridSize) continue
       if (dx * dx + dy * dy > r2) continue
-      var t = parseTile(grid[ny * gridSize + nx])
-      if (t.level < 1) continue
+      var raw = grid[ny * gridSize + nx]
+      var lv = tileLevelOf(raw)
+      if (lv < 1) continue
+      var ty = tileTypeOf(raw)
       if (type === TILE_RES) {
-        if (t.type === TILE_COM) total += t.level * COM_JOBS_PER_LEVEL
-        else if (t.type === TILE_IND) total += t.level * IND_JOBS_PER_LEVEL
-      } else if (t.type === TILE_RES) total += t.level * RES_CAP_PER_LEVEL
+        if (ty === TILE_COM) total += lv * COM_JOBS_PER_LEVEL
+        else if (ty === TILE_IND) total += lv * IND_JOBS_PER_LEVEL
+      } else if (ty === TILE_RES) total += lv * RES_CAP_PER_LEVEL
     }
   }
   return total

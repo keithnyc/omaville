@@ -4313,10 +4313,34 @@ Item {
               return row * root.gridSize + col
             }
 
+            // The last tile actually painted, so a drag can fill in the tiles
+            // between two mouse samples. Mouse moves are delivered per frame
+            // and coalesced, so a fast drag — or a slow frame — skips whole
+            // runs of tiles. Sampling positions can never be enough on its
+            // own: the gap has to be walked.
+            property int lastPaintedIndex: -1
+
             function applyAt(mx, my) {
               if (root.activeTool === "") return
               var idx = tileIndexAt(mx, my)
               if (idx < 0) return
+              if (lastPaintedIndex >= 0 && idx !== lastPaintedIndex) {
+                var size = root.gridSize
+                var x0 = lastPaintedIndex % size, y0 = Math.floor(lastPaintedIndex / size)
+                var x1 = idx % size, y1 = Math.floor(idx / size)
+                var steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))
+                for (var step = 1; step < steps; step++) {
+                  var t = step / steps
+                  applyIndex(Math.round(y0 + (y1 - y0) * t) * size
+                    + Math.round(x0 + (x1 - x0) * t))
+                }
+              }
+              lastPaintedIndex = idx
+              applyIndex(idx)
+            }
+
+            function applyIndex(idx) {
+              if (idx < 0 || idx >= root.gridSize * root.gridSize) return
               if (root.activeTool === "inspect") { root.inspectedIndex = idx; return }
               if (paintedTiles[idx]) return
               paintedTiles[idx] = true
@@ -4332,6 +4356,7 @@ Item {
 
             onPressed: function(mouse) {
               paintedTiles = ({})
+              lastPaintedIndex = -1
               painting = false
               panning = false
               if (mouse.button === Qt.MiddleButton) {
