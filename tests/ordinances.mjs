@@ -108,12 +108,21 @@ for (const v of [M.computeApproval(0, clean, 9, 9, -9999, 450),
 
 // --- elections come round on schedule ------------------------------------
 assert.equal(M.electionDue(0, 0), false, 'not due the moment a city is founded');
-assert.equal(M.electionDue(M.ELECTION_INTERVAL_TICKS - 1, 0), false);
-assert.equal(M.electionDue(M.ELECTION_INTERVAL_TICKS, 0), true);
 assert.equal(M.electionDue(M.ELECTION_INTERVAL_TICKS + 5, M.ELECTION_INTERVAL_TICKS), false,
   'and not again until the next full term');
-assert.ok(M.nextElectionTick(0) === M.ELECTION_INTERVAL_TICKS);
-assert.ok(M.nextElectionTick(M.ELECTION_INTERVAL_TICKS + 1) === M.ELECTION_INTERVAL_TICKS * 2);
+// A founding mayor gets a longer first term and a lower bar: a six-month-old
+// town cannot have parks, coverage or a surplus, so judging it like an
+// established city measures how fast it could spend, not how well it was run.
+assert.equal(M.nextElectionTick(0, 0), M.FIRST_ELECTION_TICKS, 'the first term is longer');
+assert.ok(M.FIRST_ELECTION_TICKS > M.ELECTION_INTERVAL_TICKS);
+assert.equal(M.nextElectionTick(80, 72), 72 + M.ELECTION_INTERVAL_TICKS,
+  'and every term after it is the normal length');
+assert.equal(M.electionDue(M.FIRST_ELECTION_TICKS - 1, 0), false, 'not due early');
+assert.equal(M.electionDue(M.FIRST_ELECTION_TICKS, 0), true, 'due on time');
+assert.equal(M.electionThreshold(0), M.FIRST_ELECTION_THRESHOLD, 'a gentler first bar');
+assert.equal(M.electionThreshold(72), M.ELECTION_THRESHOLD, 'the usual bar thereafter');
+assert.ok(M.FIRST_ELECTION_THRESHOLD > 0 && M.FIRST_ELECTION_THRESHOLD < M.ELECTION_THRESHOLD,
+  'gentler, but still losable');
 
 // Losing must be survivable: the penalty is a fixed term out of office, which
 // is short next to the interval, so a city is never lost to one bad quarter.
@@ -126,3 +135,56 @@ assert.ok(M.ELECTION_THRESHOLD > 0 && M.ELECTION_THRESHOLD < 100,
 console.log('PASS: well-formed ordinances with no free wins, cost scaling, stacking effects, ' +
   'real tradeoffs in water/demand/disaster odds, approval as a summary judgement, ' +
   'and an election that can be lost but never loses the city.');
+
+// --- a founding mayor must have a real chance -----------------------------
+// Keith was voted out of a brand-new town and could not have avoided it: at
+// month 48 a young city has no parks to offset its industry, no full service
+// coverage, and no surplus. This pins that a plausible young city clears its
+// own bar, and that an established one is still held to the higher one.
+{
+  const young = M.emptyGrid(size);
+  let n = 0;
+  for (let r = 20; r < 27; r++)
+    for (let c = 20; c < 33; c++)
+      young[r * size + c] = (r % 3 === 0) ? '#0' : ((n++ % 5 === 0) ? 'I2' : (n % 3 === 0 ? 'C1' : 'R2'));
+  // Enough plants to actually cover the block: a tier-0 generator only reaches
+  // about five tiles, so one of each would model an incompetently built town
+  // rather than the competently run one this test is about.
+  for (const c of [22, 28]) { young[19 * size + c] = 'E0'; young[19 * size + c + 2] = 'W0'; }
+  // The basic four services, which cost about $350 to build — affordable by
+  // the end of a first term, and the thing the electorate is really asking
+  // about. A town that has not built them should struggle; this one has.
+  young[19 * size + 25] = 'F0'; young[27 * size + 22] = 'S0';
+  young[27 * size + 26] = 'N0'; young[27 * size + 30] = 'H0';
+
+  const stats = M.summarize(young);
+  assert.ok(stats.population > 200, 'a real young town');
+  assert.ok(stats.parkHappinessBonus === 0, 'with no parks yet, as a new city has none');
+
+  const coverage = M.serviceCoverageStats(young, size);
+  const income = M.incomeFor(stats, 10);
+  const upkeep = M.computeUpkeep(stats, M.defaultFunding(), []);
+  const approval = M.computeApproval(M.computeHappiness(10, stats), coverage, 0, 0,
+    income - upkeep, stats.population);
+
+  assert.ok(approval >= M.FIRST_ELECTION_THRESHOLD,
+    `a competently run new town survives its first election (approval ${approval})`);
+  assert.ok(approval < 90, 'without the first term being a free pass');
+
+  // The industrial penalty scales with share, not headcount: the same ratio
+  // costs the same whatever the city's size, which is what makes it a dial
+  // the player can actually turn rather than a flat tax on having factories.
+  const small = { resCount: 40, comCount: 10, indCount: 10 };
+  const large = { resCount: 400, comCount: 100, indCount: 100 };
+  assert.ok(Math.abs(M.industrialMood(small) - M.industrialMood(large)) < 1e-9,
+    'the same industrial share costs the same at any size');
+  assert.ok(M.industrialMood({ resCount: 90, comCount: 5, indCount: 5 })
+    < M.industrialMood(small), 'a lighter industrial share costs less');
+  assert.equal(M.industrialMood({ resCount: 0, comCount: 0, indCount: 0 }), 0,
+    'an empty city is not unhappy about factories it does not have');
+  assert.equal(M.industrialMood({ resCount: 0, comCount: 0, indCount: 50 }),
+    M.INDUSTRIAL_HAPPINESS_MAX, 'and an all-industry city takes the full hit');
+}
+
+console.log('PASS: a founding term long enough and judged gently enough to be winnable, ' +
+  'and an industrial penalty that scales with share rather than headcount.');

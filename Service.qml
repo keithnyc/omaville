@@ -328,7 +328,8 @@ Item {
     ? Model.computeApproval(root.happiness, root.coverage, root.fires.length,
         root.crimes.length, root.income - root.upkeep, root.population)
     : 0
-  readonly property real nextElectionAt: root.lastElectionTick + Model.ELECTION_INTERVAL_TICKS
+  readonly property real nextElectionAt: Model.nextElectionTick(root.ageMinutes, root.lastElectionTick)
+  readonly property int electionBar: Model.electionThreshold(root.lastElectionTick)
 
   // Losing does not delete the city — it puts the player out of office for a
   // year. A game left running for hours should never be able to throw that
@@ -338,7 +339,8 @@ Item {
     var score = root.approval
     root.lastApproval = score
     root.lastElectionTick = root.ageMinutes
-    if (score >= Model.ELECTION_THRESHOLD) {
+    // A founding administration is judged on a lower bar than an incumbent.
+    if (score >= Model.electionThreshold(root.lastElectionTick)) {
       root.notify(root.cityName + " — re-elected",
         Model.mayorTitle(root.mayorName) + " keeps the office with "
           + score + "% approval.")

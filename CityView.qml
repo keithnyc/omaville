@@ -5830,10 +5830,10 @@ Item {
             var due = Math.max(0, Math.ceil(s.nextElectionAt - s.ageMinutes))
             return "Approval " + root.approval + "% · election in " + due
               + (due === 1 ? " month" : " months")
-              + (root.approval < Model.ELECTION_THRESHOLD ? " · you would lose today" : "")
+              + (root.serviceReady && root.approval < root.cityService.electionBar ? " · you would lose today" : "")
           }
           wrapMode: Text.WordWrap
-          color: root.outOfOffice || root.approval < Model.ELECTION_THRESHOLD
+          color: root.outOfOffice || root.serviceReady && root.approval < root.cityService.electionBar
             ? "#e0806a" : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.75)
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption

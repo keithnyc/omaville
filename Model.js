@@ -587,10 +587,31 @@ function summarize(grid) {
   return stats
 }
 
+// How much the smokestacks cost the mood. Proportional to industry's share of
+// the built city, not its absolute size — a flat two points per tile meant a
+// twelve-tile industrial district cost the same 24 points in a town of 500 as
+// in a city of 8000. Since a new city has to zone industry for jobs and has no
+// parks yet to offset it, that alone could put a first-term mayor below the
+// election threshold before they had done anything wrong.
+var INDUSTRIAL_HAPPINESS_MAX = 25
+// Share of built lots at which the penalty maxes out. Deliberately close to
+// what a normal city already runs (~20%), so this fixes the *shape* — a
+// light-industry city is now rewarded for it — without handing every existing
+// city a large happiness rebate it never earned.
+var INDUSTRIAL_HAPPINESS_SHARE = 0.25
+
+function industrialMood(stats) {
+  var built = (stats.resCount || 0) + (stats.comCount || 0) + (stats.indCount || 0)
+  if (built <= 0) return 0
+  var share = (stats.indCount || 0) / built
+  return Math.min(INDUSTRIAL_HAPPINESS_MAX,
+    INDUSTRIAL_HAPPINESS_MAX * share / INDUSTRIAL_HAPPINESS_SHARE)
+}
+
 function computeHappiness(taxRatePercent, stats, trafficPenalty) {
   var taxPenalty = Math.max(0, taxRatePercent - 10) * 1.5
   var parkBonus = Math.min(28, stats.parkHappinessBonus)
-  var industrialPenalty = Math.min(25, stats.indCount * 2)
+  var industrialPenalty = industrialMood(stats)
   return Math.round(clamp(
     70 - taxPenalty + parkBonus - industrialPenalty - (trafficPenalty || 0), 0, 100))
 }
@@ -2752,12 +2773,33 @@ function computeApproval(happiness, coverage, fires, crimes, netIncome, populati
   return Math.round(clamp(approval, 0, 100))
 }
 
-function nextElectionTick(ageMinutes) {
-  return (Math.floor(ageMinutes / ELECTION_INTERVAL_TICKS) + 1) * ELECTION_INTERVAL_TICKS
+function nextElectionTick(ageMinutes, lastElectionTick) {
+  var last = lastElectionTick || 0
+  if (last > 0) return last + ELECTION_INTERVAL_TICKS
+  return FIRST_ELECTION_TICKS
+}
+
+// A founding mayor gets a longer first term. Services cost money a new city
+// does not have, so judging a six-month-old town by the same bar as an
+// established one is judging it on how fast it could spend, not how well it
+// was run.
+var FIRST_ELECTION_TICKS = 72
+// Voters give a founding administration the benefit of the doubt. A six-month
+// old town cannot have parks, full service coverage or a surplus, so holding
+// it to the same bar as an established city judges how fast it could spend
+// rather than how well it was run.
+var FIRST_ELECTION_THRESHOLD = 35
+
+function electionInterval(lastElectionTick) {
+  return (lastElectionTick || 0) > 0 ? ELECTION_INTERVAL_TICKS : FIRST_ELECTION_TICKS
+}
+
+function electionThreshold(lastElectionTick) {
+  return (lastElectionTick || 0) > 0 ? ELECTION_THRESHOLD : FIRST_ELECTION_THRESHOLD
 }
 
 function electionDue(ageMinutes, lastElectionTick) {
-  return ageMinutes - lastElectionTick >= ELECTION_INTERVAL_TICKS
+  return ageMinutes - (lastElectionTick || 0) >= electionInterval(lastElectionTick)
 }
 
 // --- the long goal --------------------------------------------------------
