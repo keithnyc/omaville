@@ -1009,22 +1009,39 @@ Item {
   // category behind its own switch (and retain the procedural draw functions
   // below) so either visual pass remains independently reversible.
   property bool useResidentialSprites: true
+  // Four more of each tier-3 building are commissioned (assets/BRIEF-more-
+  // variants.md). A mature city is almost entirely tier 3 — 147 houses, 135
+  // works and 97 shopfronts on a real save — so four sprites means every
+  // building appears about thirty-five times and the map reads as a pattern.
+  //
+  // Off until the files exist AND their crop frames have been measured, since
+  // a tier-3 sprite drawn without one is stretched to the wrong aspect. The
+  // order is: drop the files, run tools/measure-frames.mjs, paste the rows
+  // into matureSpriteFrames, flip this. tests/sprite-budget.mjs will not let
+  // any of those three steps be skipped.
+  readonly property bool useExtraVariants: false
+  function tier3(base, extra) {
+    return root.useExtraVariants ? base.concat(extra) : base
+  }
   readonly property var residentialSpriteUrls: [
     [Qt.resolvedUrl("assets/residential/r1.png").toString(), Qt.resolvedUrl("assets/residential/r1b.png").toString()],
     [Qt.resolvedUrl("assets/residential/r2.png").toString(), Qt.resolvedUrl("assets/residential/r2b.png").toString()],
-    [Qt.resolvedUrl("assets/residential/r3.png").toString(), Qt.resolvedUrl("assets/residential/r3b.png").toString(), Qt.resolvedUrl("assets/residential/r3c.png").toString(), Qt.resolvedUrl("assets/residential/r3d.png").toString()]
+    root.tier3([Qt.resolvedUrl("assets/residential/r3.png").toString(), Qt.resolvedUrl("assets/residential/r3b.png").toString(), Qt.resolvedUrl("assets/residential/r3c.png").toString(), Qt.resolvedUrl("assets/residential/r3d.png").toString()],
+      [Qt.resolvedUrl("assets/residential/r3e.png").toString(), Qt.resolvedUrl("assets/residential/r3f.png").toString(), Qt.resolvedUrl("assets/residential/r3g.png").toString(), Qt.resolvedUrl("assets/residential/r3h.png").toString()])
   ]
   property bool useCommercialSprites: true
   readonly property var commercialSpriteUrls: [
     [Qt.resolvedUrl("assets/commercial/c1a.png").toString(), Qt.resolvedUrl("assets/commercial/c1b.png").toString()],
     [Qt.resolvedUrl("assets/commercial/c2a.png").toString(), Qt.resolvedUrl("assets/commercial/c2b.png").toString()],
-    [Qt.resolvedUrl("assets/commercial/c3a.png").toString(), Qt.resolvedUrl("assets/commercial/c3b.png").toString(), Qt.resolvedUrl("assets/commercial/c3c.png").toString(), Qt.resolvedUrl("assets/commercial/c3d.png").toString()]
+    root.tier3([Qt.resolvedUrl("assets/commercial/c3a.png").toString(), Qt.resolvedUrl("assets/commercial/c3b.png").toString(), Qt.resolvedUrl("assets/commercial/c3c.png").toString(), Qt.resolvedUrl("assets/commercial/c3d.png").toString()],
+      [Qt.resolvedUrl("assets/commercial/c3e.png").toString(), Qt.resolvedUrl("assets/commercial/c3f.png").toString(), Qt.resolvedUrl("assets/commercial/c3g.png").toString(), Qt.resolvedUrl("assets/commercial/c3h.png").toString()])
   ]
   property bool useIndustrialSprites: true
   readonly property var industrialSpriteUrls: [
     [Qt.resolvedUrl("assets/industrial/i1a.png").toString(), Qt.resolvedUrl("assets/industrial/i1b.png").toString()],
     [Qt.resolvedUrl("assets/industrial/i2a.png").toString(), Qt.resolvedUrl("assets/industrial/i2b.png").toString()],
-    [Qt.resolvedUrl("assets/industrial/i3a.png").toString(), Qt.resolvedUrl("assets/industrial/i3b.png").toString(), Qt.resolvedUrl("assets/industrial/i3c.png").toString(), Qt.resolvedUrl("assets/industrial/i3d.png").toString()]
+    root.tier3([Qt.resolvedUrl("assets/industrial/i3a.png").toString(), Qt.resolvedUrl("assets/industrial/i3b.png").toString(), Qt.resolvedUrl("assets/industrial/i3c.png").toString(), Qt.resolvedUrl("assets/industrial/i3d.png").toString()],
+      [Qt.resolvedUrl("assets/industrial/i3e.png").toString(), Qt.resolvedUrl("assets/industrial/i3f.png").toString(), Qt.resolvedUrl("assets/industrial/i3g.png").toString(), Qt.resolvedUrl("assets/industrial/i3h.png").toString()])
   ]
   // Infrastructure tiers are zero-based (unlike the 1–3 zone growth levels).
   property bool useInfrastructureSprites: true

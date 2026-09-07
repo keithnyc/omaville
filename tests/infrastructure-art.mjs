@@ -11,7 +11,11 @@ const qml = fs.readFileSync(new URL('CityView.qml', base), 'utf8');
 // roadConnCache is a QML binding rather than a function, so the harness
 // supplies it directly. Empty here, which is what an empty grid produces and
 // which exercises connectionsAt's out-of-range fallback.
-const root = { grid: [], gridSize: 64, roadConnCache: [],
+// See mature-art.mjs: the extra tier-3 variants are gated, and with the gate
+// off the sprite tables are the four of each that ship today.
+const root = { useExtraVariants: false,
+  tier3(base, extra) { return this.useExtraVariants ? base.concat(extra) : base },
+  grid: [], gridSize: 64, roadConnCache: [],
   useInfrastructureSprites: true, useResidentialSprites: true,
   useCommercialSprites: true, useIndustrialSprites: true };
 const Model = { TILE_RES: 'R', TILE_COM: 'C', TILE_IND: 'I', TILE_PARK: 'P',

@@ -11,7 +11,10 @@ const declarations = ['residentialSpriteUrls', 'commercialSpriteUrls'].map(name 
 declarations.push(qml.match(/  readonly property var matureSpriteFrames: \(\{[\s\S]*?\}\)/)[0]);
 const names = ['spriteSourceFor','drawMatureVariant','drawLotDressing','drawResidentialSprite','drawCommercialSprite'];
 const functions = names.map(name => qml.match(new RegExp('  function '+name+'\\([\\s\\S]*?\\n  \\}'))[0]);
-const root = {useResidentialSprites:true,useCommercialSprites:true,drawSpriteLot() {}};
+// tier3 gates the four extra variants of each tier-3 building behind
+// useExtraVariants; with it off the tables are the four that ship today.
+const root = {useResidentialSprites:true,useCommercialSprites:true,drawSpriteLot() {},
+  useExtraVariants:false, tier3(base,extra){return this.useExtraVariants?base.concat(extra):base}};
 const ctx = vm.createContext({root,Qt:{resolvedUrl:s=>s},cityCanvas:{isImageLoaded:()=>true}});
 for (const declaration of declarations) {
   const [,name,expression] = declaration.match(/property var (\w+): ([\s\S]*)/);
