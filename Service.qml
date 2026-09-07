@@ -114,6 +114,11 @@ Item {
   // itself is derived from the log and the history rather than stored — a save
   // with a hard 64KB cap has no room for archived newspapers.
   property real lastGazetteMinute: 0
+  // A dozen named residents at real addresses. Small enough to cost nothing in
+  // the tick or the save, and the only thing in the game that can tell the
+  // player *where* something is wrong rather than what percentage of the city
+  // it affects.
+  property var citizens: []
   property bool brownoutActive: false
 
   property bool initialized: false
@@ -448,6 +453,7 @@ Item {
     root.cityLog = []
     root.lastSeenMinute = 0
     root.lastGazetteMinute = 0
+    root.citizens = []
     root.brownoutActive = false
     root.ageMinutes = 0
     root.foundedAtMs = Date.now()
@@ -586,6 +592,25 @@ Item {
       root.grid = result.grid
       root.traffic = result.traffic
       root.refreshRedundancy()
+
+      // The named residents, after the month's growth and disasters have
+      // settled — somebody whose house burnt down this month has moved out,
+      // not merely become unhappy about it.
+      var moved = Model.advanceCitizens(root.citizens, {
+        grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
+        funding: root.funding, traffic: root.traffic, crimes: root.crimes,
+        fires: root.fires, population: result.population,
+        ageMinutes: root.ageMinutes, neighbors: root.neighbors
+      })
+      root.citizens = moved.citizens
+      for (var d = 0; d < moved.departures.length; d++) {
+        var who = moved.departures[d]
+        // A house that simply stopped existing is already reported by whatever
+        // destroyed it; only somebody giving up on the city is news.
+        if (who.reason === "gone" || who.to === "") continue
+        root.logEvent("departure", who.name + " of " + who.street
+          + " has left for " + who.to + ".")
+      }
       root.population = result.population
       root.jobs = result.jobs
       root.happiness = result.happiness
@@ -887,7 +912,8 @@ Item {
       history: Model.packHistory(root.history),
       cityLog: root.cityLog,
       lastSeenMinute: root.lastSeenMinute,
-      lastGazetteMinute: root.lastGazetteMinute
+      lastGazetteMinute: root.lastGazetteMinute,
+      citizens: root.citizens
     }, null, 2) + "\n")
   }
 
@@ -969,6 +995,7 @@ Item {
       cityLog = Model.migrateLogKinds(Array.isArray(saved.cityLog) ? saved.cityLog : [])
       lastSeenMinute = Math.max(0, num(saved.lastSeenMinute, 0))
       lastGazetteMinute = Math.max(0, num(saved.lastGazetteMinute, 0))
+      citizens = Array.isArray(saved.citizens) ? saved.citizens : []
     } catch (error) {
       saveProblem = "not valid JSON (" + error + ")"
       foundedAtMs = 0

@@ -40,7 +40,12 @@ Item {
         log: root.cityLog, history: root.cityHistory, stats: root.budgetStats,
         happiness: root.happiness, treasury: root.treasury,
         jammed: Model.jammedLotShare(root.serviceReady ? root.cityService.traffic : null),
-        unserved: root.unservedResidents
+        unserved: root.unservedResidents,
+        letters: Model.citizenLetters(root.cityService.citizens, {
+          grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
+          funding: root.cityService.funding, traffic: root.cityService.traffic,
+          crimes: root.crimes, fires: root.fires
+        }, 3)
       })
     : null
   readonly property int unservedResidents: {
@@ -5313,6 +5318,50 @@ Item {
                 serif: root.gazetteSerif
                 ink: gazetteCard.ink
                 faded: gazetteCard.faded
+              }
+            }
+          }
+
+          // The letters column. The one place in the game that says *where*
+          // something is wrong rather than what percentage of the city it
+          // affects — and the reason to name residents at all.
+          Column {
+            visible: gazetteCard.page && gazetteCard.page.letters.length > 0
+            width: parent.width
+            spacing: Style.space(4)
+            Item { width: 1; height: Style.space(2) }
+            Rectangle { width: parent.width; height: 1; color: gazetteCard.rule }
+            Text {
+              text: "LETTERS TO THE EDITOR"
+              color: gazetteCard.faded
+              font.family: root.gazetteSerif
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+            Repeater {
+              model: gazetteCard.page ? gazetteCard.page.letters : []
+              Column {
+                required property var modelData
+                width: gazetteColumn.width
+                spacing: Style.space(1)
+                Text {
+                  width: parent.width
+                  text: "“" + modelData.text + "”"
+                  wrapMode: Text.WordWrap
+                  color: gazetteCard.ink
+                  font.family: root.gazetteSerif
+                  font.italic: true
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  width: parent.width
+                  horizontalAlignment: Text.AlignRight
+                  text: "— " + modelData.name + ", " + modelData.street
+                  color: gazetteCard.faded
+                  font.family: root.gazetteSerif
+                  font.pixelSize: Style.font.caption
+                }
+                Item { width: 1; height: Style.space(3) }
               }
             }
           }

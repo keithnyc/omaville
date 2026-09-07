@@ -2671,6 +2671,239 @@ function logSince(log, minute) {
   return out
 }
 
+// --- the people who live here ---------------------------------------------
+// A city of four thousand residents in which not one person exists is a
+// spreadsheet. A handful of named citizens, each living at an actual tile,
+// turns "94% fire coverage" into a woman on Mill Road who cannot get anyone to
+// come when the works catch light — which is the same move that made spare
+// buildings land: a statistic nobody reads becoming a person with an address.
+//
+// Deliberately a handful. Simulating four thousand people would cost more than
+// the rest of the tick put together and read as noise; a dozen is enough for
+// the letters column to always have somebody in it.
+
+var CITIZEN_FIRST = ["Elsie", "Walter", "Mabel", "Arthur", "Ada", "Cyril",
+  "Nora", "Alfred", "Hettie", "Stanley", "Vera", "Horace", "Lottie", "Ernest",
+  "Gladys", "Percy", "Doris", "Wilfred", "Maud", "Reginald", "Ivy", "Clifford"]
+var CITIZEN_LAST = ["Halloway", "Pike", "Ashby", "Trent", "Corbett", "Wexley",
+  "Mudd", "Fairclough", "Barrow", "Quill", "Hemsley", "Rooke", "Battle",
+  "Chalk", "Sowerby", "Prentice", "Gaunt", "Twill", "Marchbank", "Stavely"]
+var STREET_HEAD = ["Mill", "Bell", "Quarry", "Harbour", "Chapel", "Foundry",
+  "Orchard", "Station", "Kiln", "Weaver", "Anchor", "Bramble", "Cooper",
+  "Tannery", "Marsh", "Beacon", "Cinder", "Wharf", "Sexton", "Gasworks"]
+var STREET_TAIL = ["Road", "Street", "Lane", "Row", "Hill", "Way", "Terrace", "Walk"]
+
+// Deterministic and cheap. Only needs to be well spread, not cryptographic.
+function cityHash(a, b) {
+  var h = (Math.round(a) * 73856093) ^ (Math.round(b) * 19349663)
+  h = (h ^ (h >>> 13)) * 1274126177
+  return Math.abs(h ^ (h >>> 16))
+}
+
+// A tile's address, stable for the life of the map. Banded rather than
+// per-tile so that neighbours genuinely share a street: everybody within
+// three rows and twelve columns has the same one, which is roughly a block.
+function streetName(gridSize, index) {
+  var band = Math.floor(Math.floor(index / gridSize) / 3)
+  var run = Math.floor((index % gridSize) / 12)
+  var h = cityHash(band + 1, run + 1)
+  return STREET_HEAD[h % STREET_HEAD.length] + " "
+    + STREET_TAIL[Math.floor(h / STREET_HEAD.length) % STREET_TAIL.length]
+}
+
+function citizenName(seed) {
+  var h = cityHash(seed + 1, seed * 7 + 3)
+  return CITIZEN_FIRST[h % CITIZEN_FIRST.length] + " "
+    + CITIZEN_LAST[Math.floor(h / CITIZEN_FIRST.length) % CITIZEN_LAST.length]
+}
+
+// How long somebody puts up with a grievance before packing. Long enough that
+// a problem the player is already fixing does not cost them a resident.
+var CITIZEN_PATIENCE = 6
+var CITIZEN_MAX = 12
+
+// What is wrong where somebody lives, worst first. The order is the order a
+// person would actually care: whether the place is safe, then whether it
+// works, then whether it is pleasant.
+function citizenGrievance(ctx, index) {
+  var grid = ctx.grid, gridSize = ctx.gridSize
+  var utilities = ctx.utilities || {}
+  var funding = ctx.funding
+  for (var f = 0; f < (ctx.fires || []).length; f++)
+    if (withinRadius(gridSize, ctx.fires[f].index, index, 2))
+      return { key: "fire-now", severity: 5 }
+  for (var c = 0; c < (ctx.crimes || []).length; c++)
+    if (withinRadius(gridSize, ctx.crimes[c].index, index, CRIME_RADIUS))
+      return { key: "crime", severity: 5 }
+  if (!isCovered(gridSize, utilities.fire || [], index,
+      FIRE_RADIUS * fundingRadiusScale(fundingLevel(funding, "F"))))
+    return { key: "fire", severity: 4 }
+  if (!isCovered(gridSize, utilities.power || [], index, POWER_RADIUS))
+    return { key: "power", severity: 4 }
+  if (!isCovered(gridSize, utilities.water || [], index, WATER_RADIUS))
+    return { key: "water", severity: 4 }
+  if (!isCovered(gridSize, utilities.police || [], index,
+      POLICE_RADIUS * fundingRadiusScale(fundingLevel(funding, "S"))))
+    return { key: "police", severity: 3 }
+  if (lotCongestion(ctx.traffic, index) >= CONGESTION_JAM)
+    return { key: "traffic", severity: 3 }
+  var zone = nearbyZoneEffect(grid, gridSize, index)
+  if (zone && zone.nearIndustrial) return { key: "industry", severity: 2 }
+  if (!isCovered(gridSize, utilities.medical || [], index,
+      MEDICAL_RADIUS * fundingRadiusScale(fundingLevel(funding, "H"))))
+    return { key: "medical", severity: 2 }
+  if (!isCovered(gridSize, utilities.schools || [], index,
+      SCHOOL_RADIUS * fundingRadiusScale(fundingLevel(funding, "N"))))
+    return { key: "schools", severity: 2 }
+  return null
+}
+
+// The letters column. Written as a person would write it — a specific
+// complaint about a specific street, never a restatement of the coverage
+// percentage the player can already read off the card.
+var CITIZEN_COMPLAINTS = {
+  "fire-now": "There is a fire burning within sight of my window and I have "
+    + "watched it spread for want of an engine.",
+  crime: "We do not go out after dark on $STREET any more. I am told there is "
+    + "a constabulary. I have never seen it.",
+  fire: "There is no fire station within reach of $STREET. I have taken to "
+    + "keeping a bucket by the door, which I am told is not a fire service.",
+  power: "The lights have never once come on in this house. I am assured the "
+    + "city has a generator. It is not connected to $STREET.",
+  water: "We draw our water by hand. I would not raise the matter except that "
+    + "the city calls itself modern.",
+  police: "$STREET has no police to speak of. Twice this month I have been "
+    + "obliged to deal with matters myself.",
+  traffic: "It takes me longer to leave $STREET than it does to cross the "
+    + "whole city once I am out of it. Something must be done about the road.",
+  industry: "Since the works opened behind my house I cannot dry washing, and "
+    + "the windows want cleaning twice a week.",
+  medical: "There is no doctor within reach of $STREET. We manage. I would "
+    + "rather not have to.",
+  schools: "My children walk a very long way to school, and in winter they "
+    + "walk it in the dark. A schoolhouse nearer $STREET would be a kindness."
+}
+var CITIZEN_PRAISE = [
+  "I have lived on $STREET for some years now and find I have nothing to "
+    + "complain of, which I did not expect to be writing to a newspaper about.",
+  "The trees along $STREET have come on well and the street is the better for "
+    + "them. Credit where it is due.",
+  "Whatever the council is doing, $STREET is a pleasanter place to live than "
+    + "it was, and I should like that recorded."
+]
+
+function citizenLetter(citizen, grievance, gridSize) {
+  var street = streetName(gridSize, citizen.i)
+  var body = grievance
+    ? CITIZEN_COMPLAINTS[grievance.key]
+    : CITIZEN_PRAISE[cityHash(citizen.i, 5) % CITIZEN_PRAISE.length]
+  return {
+    name: citizen.n,
+    street: street,
+    grievance: grievance ? grievance.key : "",
+    text: body.split("$STREET").join(street)
+  }
+}
+
+// Up to `limit` letters, angriest first, so the column leads on whatever is
+// actually worst in the city rather than on whoever happens to be first.
+function citizenLetters(citizens, ctx, limit) {
+  var out = []
+  for (var i = 0; i < (citizens || []).length; i++) {
+    var g = citizenGrievance(ctx, citizens[i].i)
+    out.push({ letter: citizenLetter(citizens[i], g, ctx.gridSize),
+      severity: g ? g.severity : 0, index: citizens[i].i })
+  }
+  out.sort(function (a, b) {
+    return b.severity === a.severity ? a.index - b.index : b.severity - a.severity
+  })
+  // One letter per complaint, for the same reason the front page runs one
+  // story per desk: four different grievances tell the player four things,
+  // where two pairs of near-identical letters tell them two and read as a
+  // form letter. At most one contented letter as well — a real column is
+  // people complaining, and three residents agreeing the trees are nice is
+  // wallpaper. One is worth keeping, so a well-run city still hears back.
+  var letters = [], praised = false, heard = []
+  for (var k = 0; k < out.length && letters.length < (limit || 2); k++) {
+    var letter = out[k].letter
+    if (letter.grievance === "") {
+      if (praised) continue
+      praised = true
+    } else {
+      if (heard.indexOf(letter.grievance) >= 0) continue
+      heard.push(letter.grievance)
+    }
+    letters.push(letter)
+  }
+  return letters
+}
+
+// How many named residents a city of this size supports. A hamlet with one
+// letter-writer is right; so is a city with a full column.
+function citizenTarget(population) {
+  return Math.max(0, Math.min(CITIZEN_MAX, Math.floor((population || 0) / 250)))
+}
+
+function residentialTiles(grid) {
+  var out = []
+  for (var i = 0; i < grid.length; i++)
+    if (tileTypeOf(grid[i]) === TILE_RES && tileLevelOf(grid[i]) > 0) out.push(i)
+  return out
+}
+
+// One month in the lives of the named. Returns the new list plus what happened
+// to anybody who left, so the caller can put it in the log without working it
+// out again.
+function advanceCitizens(citizens, ctx) {
+  var random = ctx.random || Math.random
+  var living = residentialTiles(ctx.grid)
+  var occupied = {}
+  var next = [], departures = [], arrivals = []
+
+  for (var i = 0; i < (citizens || []).length; i++) {
+    var person = citizens[i]
+    var street = streetName(ctx.gridSize, person.i)
+    // Their house is gone — burnt down, bulldozed, or emptied by crime.
+    if (living.indexOf(person.i) < 0) {
+      departures.push({ name: person.n, street: street, reason: "gone", to: "" })
+      continue
+    }
+    var grievance = citizenGrievance(ctx, person.i)
+    var patience = grievance
+      ? person.p - 1
+      : Math.min(CITIZEN_PATIENCE, person.p + 1)
+    if (patience <= 0) {
+      departures.push({ name: person.n, street: street,
+        reason: grievance ? grievance.key : "gone", to: pickNeighborName(ctx, random) })
+      continue
+    }
+    next.push({ n: person.n, i: person.i, s: person.s, p: patience })
+    occupied[person.i] = true
+  }
+
+  var want = citizenTarget(ctx.population)
+  var guard = 0
+  while (next.length < want && living.length > next.length && guard++ < 64) {
+    var spot = living[Math.floor(random() * living.length)]
+    if (occupied[spot]) continue
+    var seed = cityHash(spot, Math.round(ctx.ageMinutes || 0) + guard)
+    var name = citizenName(seed)
+    var clash = false
+    for (var n = 0; n < next.length; n++) if (next[n].n === name) clash = true
+    if (clash) continue
+    occupied[spot] = true
+    next.push({ n: name, i: spot, s: Math.round(ctx.ageMinutes || 0), p: CITIZEN_PATIENCE })
+    arrivals.push({ name: name, street: streetName(ctx.gridSize, spot) })
+  }
+  return { citizens: next, departures: departures, arrivals: arrivals }
+}
+
+function pickNeighborName(ctx, random) {
+  var towns = ctx.neighbors || []
+  if (towns.length === 0) return ""
+  return towns[Math.floor((random || Math.random)() * towns.length)].name || ""
+}
+
 // --- the city Gazette -----------------------------------------------------
 // An idle game's problem is that its best moments happen while nobody is
 // watching, and all the player gets on their return is a number that went up.
@@ -2709,6 +2942,9 @@ var GAZETTE_DESKS = {
     calm: ["THE LIGHTS COME BACK ON", "POWER RESTORED", "THE GRID HOLDS AGAIN"] },
   neighbor: { weight: 74, spot: "road",
     heads: ["THE ROAD IS OPEN", "A NEW WAY OUT", "NEIGHBOURS AT LAST"] },
+  // People leaving is news, and they leave by road.
+  departure: { weight: 76, spot: "road",
+    heads: ["ANOTHER FAMILY GOES", "THE CITY LOSES A RESIDENT", "PACKED AND GONE"] },
   crime: { weight: 70, spot: "crime",
     heads: ["LAWLESSNESS IN THE DISTRICT", "TROUBLE IN THE STREETS", "A DISTRICT UNDER SIEGE"],
     calm: ["ORDER RESTORED", "THE CONSTABULARY PREVAILS", "THE STREETS ARE QUIET"] },
@@ -2856,6 +3092,7 @@ function gazette(ctx) {
     almanac: gazetteAlmanac(ctx.happiness || 0, ctx.jammed || 0, ctx.unserved || 0),
     // A quiet stretch is worth printing too. An idle game that says nothing
     // happened is telling the truth, and a slow news day is a real front page.
+    letters: ctx.letters || [],
     quiet: stories.length === 0,
     quietNote: "No fires, no scandals, no elections. The presses ran anyway."
   }
