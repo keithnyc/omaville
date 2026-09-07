@@ -3883,11 +3883,18 @@ Item {
         spacing: Style.space(8)
         readonly property real cellWidth:
           (width - spacing * (columns - 1)) / columns
+        // Both cards take the taller one's height. Side by side at their own
+        // natural sizes they sat at different heights with mismatched tops,
+        // which reads as a layout accident rather than a pair.
+        readonly property real cellHeight:
+          Math.max(coverageCard.implicitHeight, demandCard.implicitHeight)
 
         CoverageStatus {
+          id: coverageCard
           rows: root.serviceCoverage
           active: root.active
           width: instrumentRow.cellWidth
+          height: instrumentRow.cellHeight
         }
 
       // RCI demand meter, SimCity-style: one bar per zone that rises above
@@ -3898,8 +3905,10 @@ Item {
       // the Pop/Jobs/$/Happy row) so it reads as one grouped instrument
       // instead of three numbers floating loose in the layout.
       Rectangle {
+        id: demandCard
         width: instrumentRow.cellWidth
-        height: demandColumn.implicitHeight + Style.space(16)
+        implicitHeight: demandColumn.implicitHeight + Style.space(16)
+        height: instrumentRow.cellHeight
         radius: Style.cornerRadius
         color: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 0.55)
         border.width: 1

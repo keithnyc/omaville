@@ -16,7 +16,10 @@ FocusScope {
   readonly property string summary: current
     ? current.name + " " + current.coverage + "% covered · " + current.unmet + " residents unserved"
     : rows.length && rows[0].residents > 0 ? "All residential services covered" : "No populated homes yet"
-  height: summaryText.implicitHeight + Style.space(16)
+  // implicitHeight so a caller placing this beside another card can read its
+  // natural size and match the two; height still defaults to it when nobody does.
+  implicitHeight: summaryText.implicitHeight + Style.space(16)
+  height: implicitHeight
   activeFocusOnTab: true
   Accessible.role: Accessible.Button
   Accessible.name: "Service coverage. " + summary + ". Open full list."
