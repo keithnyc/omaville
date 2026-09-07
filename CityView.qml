@@ -6414,6 +6414,17 @@ Item {
             readonly property int threshold: Model.UPGRADE_THRESHOLDS[tierIndex]
             readonly property bool unlocked: root.population >= threshold
               && Model.civicAllowsTier(root.civicLevel, tierEntry.tierIndex)
+            // Resolved here rather than inside the ToolTip below, for the
+            // scope reason noted at its use.
+            readonly property string hint: root.flyoutDecorations
+              ? root.toolHint(tierEntry.ttype)
+              : tierEntry.tierName + " · " + (tierEntry.unlocked
+                  ? "$" + Model.totalInvestment(tierEntry.ttype, tierEntry.tierIndex)
+                    + " new; upgrades pay the difference"
+                  : (root.population < tierEntry.threshold
+                      ? "Unlocks at population " + tierEntry.threshold
+                      : "Needs " + Model.civicLabel(tierEntry.tierIndex + 1).toLowerCase()
+                        + " status — build and fund schools"))
             spacing: Style.space(2)
             width: Style.space(64)
 
@@ -6486,13 +6497,7 @@ Item {
               }
               ToolHint {
                 visible: tierMouse.containsMouse
-                text: root.flyoutDecorations ? root.toolHint(tierEntry.ttype)
-                  : tierEntry.tierName + " · " + (tierEntry.unlocked
-                    ? "$" + Model.totalInvestment(tierEntry.ttype, tierEntry.tierIndex) + " new; upgrades pay the difference"
-                    : (root.population < tierEntry.threshold
-                        ? "Unlocks at population " + tierEntry.threshold
-                        : "Needs " + Model.civicLabel(tierEntry.tierIndex + 1).toLowerCase()
-                          + " status — build and fund schools"))
+                text: tierEntry.hint
               }
             }
 
