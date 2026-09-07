@@ -82,10 +82,23 @@ const A = load('Ambience.js');
   const boat = A.createOnWater('boat', runs);
   assert.equal(boat.y0, 5.5, 'it stays in its lane');
   assert.equal(boat.y1, 5.5);
-  assert.ok(Math.abs(boat.x1 - boat.x0) > 9, 'and crosses the whole stretch');
-  // Entering and leaving off the ends, rather than appearing mid-water.
-  assert.ok(Math.min(boat.x0, boat.x1) < 2.5 && Math.max(boat.x0, boat.x1) > 11.5,
-    'starting and finishing off the ends of the run');
+  assert.ok(Math.abs(boat.x1 - boat.x0) > 8, 'and crosses the stretch');
+  // Never past the ends. Overshooting looked like drifting in and out on a
+  // long river; on a small pond it was most of the journey spent on grass.
+  assert.ok(Math.min(boat.x0, boat.x1) >= 2.5 && Math.max(boat.x0, boat.x1) <= 11.5,
+    'and never travels beyond the water it was given');
+
+  // The same has to hold on a short run, which is where it actually showed.
+  const pond = [{ x0: 4.5, y0: 4.5, x1: 6.5, y1: 4.5 }];
+  for (let i = 0; i < 40; i++) {
+    const small = A.createOnWater(i % 2 ? 'boat' : 'ducks', pond);
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      const p = A.pose({ ...small, age: small.duration * t });
+      assert.ok(p.x >= 4.5 - 1e-9 && p.x <= 6.5 + 1e-9,
+        `stays on a three-tile pond the whole way (x ${p.x.toFixed(2)})`);
+      assert.ok(Math.abs(p.y - 4.5) < 1e-9, 'and in its lane');
+    }
+  }
 
   const ducks = A.createOnWater('ducks', runs);
   assert.ok(ducks.duration > boat.duration, 'ducks paddle slower than a boat sails');

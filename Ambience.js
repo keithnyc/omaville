@@ -15,14 +15,15 @@ function initialState() {
 function createOnWater(kind, runs) {
   var run = runs[Math.floor(Math.random() * runs.length)]
   var forward = Math.random() > 0.5
-  var pad = 1.5
   var dx = run.x1 - run.x0, dy = run.y1 - run.y0
   var len = Math.sqrt(dx * dx + dy * dy) || 1
-  // Start and finish just off the ends so it drifts in and out rather than
-  // popping into existence mid-water.
-  var ux = dx / len, uy = dy / len
-  var a = { x: run.x0 - ux * pad, y: run.y0 - uy * pad }
-  var b = { x: run.x1 + ux * pad, y: run.y1 + uy * pad }
+  // Strictly between the centres of the end tiles, never past them. Running
+  // on a tile or two beyond the ends looked like drifting in and out on a
+  // long river, but on a small pond it is most of the journey and the boat
+  // is plainly sailing across grass. pose() already fades it in and out, so
+  // it does not need to start off the water to avoid popping into view.
+  var a = { x: run.x0, y: run.y0 }
+  var b = { x: run.x1, y: run.y1 }
   var from = forward ? a : b, to = forward ? b : a
   return { kind: kind, age: 0,
     // Slow: a boat that crossed as fast as a plane would read as a jetski.
