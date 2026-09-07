@@ -598,7 +598,7 @@ var INDUSTRIAL_HAPPINESS_MAX = 25
 // what a normal city already runs (~20%), so this fixes the *shape* — a
 // light-industry city is now rewarded for it — without handing every existing
 // city a large happiness rebate it never earned.
-var INDUSTRIAL_HAPPINESS_SHARE = 0.25
+var INDUSTRIAL_HAPPINESS_SHARE = 0.4
 
 function industrialMood(stats) {
   var built = (stats.resCount || 0) + (stats.comCount || 0) + (stats.indCount || 0)
@@ -2013,7 +2013,53 @@ function safetyAdvice(coverage, funding, fires, crimes) {
     "Fire and police both reach every resident.")
 }
 
-function wellbeingAdvice(coverage, stats, funding) {
+// Every term that moves the mood, so an advisor can name the largest cause
+// instead of leaving the player to infer it. Signs match their effect: parks
+// are positive, everything else drags.
+function moodBreakdown(taxRatePercent, stats, trafficPenalty, policyHappiness) {
+  return [
+    { key: "industry", label: "industry crowding the city",
+      fix: "Parks and greenery offset it, and so does zoning more homes and shops beside it.",
+      amount: -industrialMood(stats) },
+    { key: "tax", label: "the tax rate",
+      fix: "Anything above 10% costs goodwill.",
+      amount: -Math.max(0, (taxRatePercent || 0) - 10) * 1.5 },
+    { key: "traffic", label: "congestion",
+      fix: "See the Traffic overlay for where it is worst.",
+      amount: -(trafficPenalty || 0) },
+    { key: "ordinances", label: "unpopular ordinances",
+      fix: "Check which ones you have enacted in the Budget.",
+      amount: Math.min(0, policyHappiness || 0) },
+    { key: "parks", label: "parks and greenery",
+      fix: "", amount: Math.min(28, (stats && stats.parkHappinessBonus) || 0) }
+  ]
+}
+
+// The biggest single drag on the mood, or null if nothing is dragging.
+function worstMood(rows) {
+  var worst = null
+  for (var i = 0; i < rows.length; i++)
+    if (rows[i].amount < -0.5 && (!worst || rows[i].amount < worst.amount)) worst = rows[i]
+  return worst
+}
+
+function wellbeingAdvice(coverage, stats, funding, mood) {
+  if (mood && mood.happiness !== undefined && mood.rows) {
+    var drag = worstMood(mood.rows)
+    var parks = 0
+    for (var m = 0; m < mood.rows.length; m++)
+      if (mood.rows[m].key === "parks") parks = mood.rows[m].amount
+    if (mood.happiness < 50 && drag)
+      return advice("wellbeing", SEVERITY_URGENT, "Residents are unhappy",
+        "Happiness is " + mood.happiness + "%. The biggest drag is " + drag.label
+        + " (" + Math.round(drag.amount) + " points)."
+        + (parks < 8 ? " You have almost no parks; they are the main way to win goodwill back."
+                     : " " + drag.fix))
+    if (mood.happiness < 65 && drag)
+      return advice("wellbeing", SEVERITY_WATCH, "The city could be happier",
+        "Happiness is " + mood.happiness + "%, held down mostly by " + drag.label
+        + " (" + Math.round(drag.amount) + " points). " + drag.fix)
+  }
   var schools = coverageRow(coverage, "schools"), medical = coverageRow(coverage, "medical")
   var worst = schools.unmet >= medical.unmet ? schools : medical
   var isSchool = worst === schools
@@ -2069,7 +2115,7 @@ function cityAdvice(ctx) {
     transportAdvice(ctx.stats, ctx.traffic, ctx.coverage,
       ctx.neighborsLinked, ctx.neighborsTotal),
     safetyAdvice(ctx.coverage, ctx.funding, ctx.fires, ctx.crimes),
-    wellbeingAdvice(ctx.coverage, ctx.stats, ctx.funding),
+    wellbeingAdvice(ctx.coverage, ctx.stats, ctx.funding, ctx.mood),
     financeAdvice(ctx.stats, ctx.income, ctx.upkeep, ctx.treasury, ctx.loans, ctx.taxRatePercent)
   ]
 }

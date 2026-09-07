@@ -206,3 +206,47 @@ for (const a of M.cityAdvice(ctxFor(dark)))
 
 console.log('PASS: advisor coverage/zoning/budget reactions, stable ordering, loan ' +
   'eligibility, schedule, burden cap and exact payoff, and overlays that agree with tickGrid.');
+
+// --- somebody has to say why the city is miserable ------------------------
+// Six advisors covered coverage, traffic, money and zoning, and not one of
+// them ever mentioned happiness. Keith's city sat at 44% with 30% of its lots
+// industrial and a single park, and nothing in the game connected the two.
+{
+  const town = M.emptyGrid(M.GRID_SIZE);
+  let n = 0;
+  for (let r = 20; r < 27; r++)
+    for (let c = 20; c < 33; c++)
+      town[r * M.GRID_SIZE + c] = (r % 3 === 0) ? '#0' : ((n++ % 3 === 0) ? 'I2' : 'R2');
+  const stats = M.summarize(town);
+  const coverage = M.serviceCoverageStats(town, M.GRID_SIZE);
+
+  const rows = M.moodBreakdown(10, stats, 0, 0);
+  const byKey = Object.fromEntries(rows.map(r => [r.key, r]));
+  for (const key of ['industry', 'tax', 'traffic', 'ordinances', 'parks'])
+    assert.ok(byKey[key], `${key} is accounted for`);
+  assert.ok(byKey.industry.amount < 0, 'a heavily industrial city is dragged down by it');
+  assert.ok(byKey.parks.amount >= 0, 'parks are the positive term');
+  assert.equal(M.worstMood(rows).key, 'industry', 'and the worst drag is nameable');
+  assert.equal(M.worstMood(M.moodBreakdown(10, { parkHappinessBonus: 20 }, 0, 0)), null,
+    'a contented city has no drag to report');
+
+  const speak = (happiness, moodStats) => M.wellbeingAdvice(coverage, stats, M.defaultFunding(),
+    { happiness, rows: M.moodBreakdown(10, moodStats || stats, 0, 0) });
+
+  const miserable = speak(44);
+  assert.equal(miserable.severity, M.SEVERITY_URGENT, 'a miserable city is urgent');
+  assert.match(miserable.headline, /unhappy/i);
+  assert.match(miserable.detail, /industry/i, 'and names the cause');
+  assert.match(miserable.detail, /park/i, 'and the lever, since parks are how you buy goodwill back');
+
+  const middling = speak(60);
+  assert.equal(middling.severity, M.SEVERITY_WATCH, 'a middling city is a watch, not an alarm');
+  assert.match(middling.detail, /industry/i);
+
+  // Once the mood is fine the advisor goes back to schools and clinics.
+  assert.ok(!/unhapp/i.test(speak(80).headline), 'a happy city hears about something else');
+  assert.ok(!/unhapp/i.test(M.wellbeingAdvice(coverage, stats, M.defaultFunding()).headline),
+    'and omitting the mood entirely is safe for older callers');
+}
+
+console.log('PASS: an advisor that names the largest drag on happiness and the lever to fix it.');

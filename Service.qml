@@ -157,6 +157,9 @@ Item {
     income: root.income, upkeep: root.upkeep, treasury: root.treasury,
     funding: root.funding, loans: root.loans, taxRatePercent: root.taxRatePercent,
     fires: root.fires, crimes: root.crimes, load: root.load, traffic: root.traffic,
+    mood: { happiness: root.happiness,
+      rows: Model.moodBreakdown(root.taxRatePercent, root.cityStats,
+        Model.trafficHappinessPenalty(root.traffic), root.policy.happiness) },
     neighborsLinked: root.linkedNeighbors.length,
     neighborsTotal: root.neighbors ? root.neighbors.length : 0
   }) : []
