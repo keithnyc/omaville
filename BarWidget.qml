@@ -32,15 +32,8 @@ BarWidget {
   })
   readonly property string icon: root.alertIcons[root.alertKind] || ""
 
-  function money(value) {
-    var whole = String(Math.round(Math.abs(value)))
-    var out = ""
-    for (var i = 0; i < whole.length; i++) {
-      if (i > 0 && (whole.length - i) % 3 === 0) out += ","
-      out += whole[i]
-    }
-    return (value < 0 ? "-$" : "$") + out
-  }
+  // Shared with the panel via Model, so the same treasury never reads two ways.
+  function money(value) { return Model.money(value) }
 
   function summaryLine() {
     if (!root.serviceReady) return "Omaville"

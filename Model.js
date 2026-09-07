@@ -3245,3 +3245,17 @@ function liquidateFor(holdings, neighbors, connectedNames, tick, stats, needed) 
   }
   return { holdings: next, raised: raised, sold: sold }
 }
+
+// Thousands separators for money shown to the player. Lives here rather than
+// in a view so the bar widget and the panel cannot disagree about how the same
+// treasury is written.
+function money(value) {
+  var n = Math.round(Math.abs(Number(value) || 0))
+  var whole = String(n)
+  var out = ""
+  for (var i = 0; i < whole.length; i++) {
+    if (i > 0 && (whole.length - i) % 3 === 0) out += ","
+    out += whole[i]
+  }
+  return ((Number(value) || 0) < 0 ? "-$" : "$") + out
+}

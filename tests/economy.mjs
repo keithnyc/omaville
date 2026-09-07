@@ -351,3 +351,21 @@ console.log('PASS: a civic level earned from schooling, lost when it lapses, gat
 }
 
 console.log('PASS: civic gating forgives a rounding gap and never demotes a city on load.');
+
+// --- money is written one way everywhere ---------------------------------
+// The bar widget had its own copy of this and the panel had none, so the same
+// treasury appeared with separators in one place and without them in another.
+{
+  assert.equal(M.money(0), '$0');
+  assert.equal(M.money(999), '$999', 'no separator below a thousand');
+  assert.equal(M.money(1000), '$1,000');
+  assert.equal(M.money(161320), '$161,320');
+  assert.equal(M.money(1234567), '$1,234,567');
+  assert.equal(M.money(-4500), '-$4,500', 'a deficit keeps its sign outside the symbol');
+  assert.equal(M.money(3.7), '$4', 'rounded, since cents are never shown');
+  // Anything the UI might hand it before the city has loaded.
+  for (const empty of [null, undefined, NaN, ''])
+    assert.equal(M.money(empty), '$0', `${String(empty)} reads as nothing, not NaN`);
+}
+
+console.log('PASS: one money formatter, with separators, signs and safe defaults.');

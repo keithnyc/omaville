@@ -3829,7 +3829,7 @@ Item {
           font.pixelSize: Style.font.bodySmall
         }
         Text {
-          text: "$" + Math.round(root.treasury)
+          text: Model.money(root.treasury)
           color: root.treasury < 0 ? Color.urgent : (root.bar ? root.bar.foreground : Color.foreground)
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.bodySmall
@@ -5309,8 +5309,8 @@ Item {
             width: parent.width
             wrapMode: Text.WordWrap
             text: root.serviceReady
-              ? "Invested $" + Math.round(root.cityService.portfolioCost)
-                + " · now worth $" + Math.round(root.cityService.portfolioValue)
+              ? "Invested " + Model.money(root.cityService.portfolioCost)
+                + " · now worth " + Model.money(root.cityService.portfolioValue)
                 + ". This money is not in the treasury: if the city cannot pay its "
                 + "bills it will be sold at a loss to cover the gap."
               : ""
