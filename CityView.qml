@@ -3629,6 +3629,41 @@ Item {
   // shows its real coverage. Same circle either way, since the math
   // (Model.withinRadius) is literally the circle radius, not an
   // approximation of a square.
+  // With a service building armed, mark every one already standing. Hunting
+  // for the fire station you meant to upgrade is the tedious part of a big
+  // city, and the information is already on screen — it just was not drawn.
+  // R/C/I are excluded on purpose: those grow on their own, are everywhere,
+  // and marking them would light up half the map.
+  function drawSameTypeMarkers(ctx, data, cellSize, offsetX, offsetY, viewW, viewH) {
+    var type = root.activeTool
+    if (root.upgradeableTypes.indexOf(type) < 0) return
+    var target = root.upgradeTarget === type ? root.selectedTier : 0
+    var startCol = Math.max(0, Math.floor(offsetX / cellSize))
+    var endCol = Math.min(root.gridSize - 1, Math.ceil((offsetX + viewW) / cellSize))
+    var startRow = Math.max(0, Math.floor(offsetY / cellSize))
+    var endRow = Math.min(root.gridSize - 1, Math.ceil((offsetY + viewH) / cellSize))
+    var inset = Math.max(1, cellSize * 0.06)
+    ctx.lineWidth = Math.max(1.5, cellSize * 0.055)
+    for (var row = startRow; row <= endRow; row++) {
+      for (var col = startCol; col <= endCol; col++) {
+        var tile = Model.parseTile(data[row * root.gridSize + col])
+        if (tile.type !== type) continue
+        var gx = col * cellSize - offsetX, gy = row * cellSize - offsetY
+        // Bright where clicking would actually raise the tier, muted where the
+        // building already meets it — so the map answers "which of these still
+        // needs my money" rather than just "where are they".
+        var upgradeable = tile.level < target
+        ctx.fillStyle = upgradeable
+          ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.20)
+          : root.neutralTint(0.08)
+        ctx.fillRect(gx, gy, cellSize + 1, cellSize + 1)
+        ctx.strokeStyle = upgradeable ? Color.accent : root.neutralTint(0.45)
+        ctx.strokeRect(gx + inset, gy + inset,
+          cellSize - inset * 2, cellSize - inset * 2)
+      }
+    }
+  }
+
   function drawCoverageOverlay(ctx, data, hoverIndex, cellSize, offsetX, offsetY) {
     if (hoverIndex < 0) return
     var utilType = null
@@ -4371,12 +4406,15 @@ Item {
           property real offsetY: root.panY
           property real cellSize: root.effectiveCellSize
           property int hoverIndex: gridMouse.hoverIndex
-          // drawCoverageOverlay draws nothing without a hovered tile, so a
-          // pan with no cursor on the map has nothing to redraw.
-          onOffsetXChanged: if (hoverIndex >= 0) requestPaint()
-          onOffsetYChanged: if (hoverIndex >= 0) requestPaint()
-          onCellSizeChanged: if (hoverIndex >= 0) requestPaint()
+          // Two jobs: the hover coverage circle, and marking every building of
+          // the armed type. The second does not need a cursor on the map, so
+          // the pan guard has to allow for it as well as for hovering.
+          readonly property bool marking: root.upgradeableTypes.indexOf(root.activeTool) >= 0
+          onOffsetXChanged: if (hoverIndex >= 0 || marking) requestPaint()
+          onOffsetYChanged: if (hoverIndex >= 0 || marking) requestPaint()
+          onCellSizeChanged: if (hoverIndex >= 0 || marking) requestPaint()
           onHoverIndexChanged: requestPaint()
+          onMarkingChanged: requestPaint()
           onWidthChanged: requestPaint()
           onHeightChanged: requestPaint()
 
@@ -4388,6 +4426,7 @@ Item {
           onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
+            root.drawSameTypeMarkers(ctx, root.grid, cellSize, offsetX, offsetY, width, height)
             root.drawCoverageOverlay(ctx, root.grid, hoverIndex, cellSize, offsetX, offsetY)
           }
         }
@@ -5387,6 +5426,32 @@ Item {
             color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
+          }
+
+          // Civic standing: what the schools currently entitle the city to
+          // build. It had no home in the UI at all, so a tier quietly
+          // unlocking (or quietly locking again) was invisible.
+          Item {
+            width: parent.width
+            height: civicText.implicitHeight + Style.space(8)
+            visible: root.serviceReady
+            Text {
+              id: civicText
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              wrapMode: Text.WordWrap
+              text: root.serviceReady
+                ? Model.civicLabel(root.civicLevel) + " · tier "
+                  + Math.max(1, Math.min(3, Math.floor(root.civicLevel)))
+                  + " buildings unlocked"
+                  + (root.civicLevel >= Model.CIVIC_MAX ? ""
+                     : " · schools carry it toward " + Model.civicLabel(Math.floor(root.civicLevel) + 1).toLowerCase())
+                : ""
+              color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.75)
+              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              font.pixelSize: Style.font.caption
+            }
           }
 
           // Progress bar for the streak.

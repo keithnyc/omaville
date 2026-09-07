@@ -617,12 +617,24 @@ Item {
       var before = Math.floor(root.civicLevel)
       root.civicLevel = Model.advanceCivic(root.civicLevel, root.civicTarget)
       var after = Math.floor(root.civicLevel)
-      if (after > before)
+      // Unlocking a whole building tier is one of the biggest things that can
+      // happen to a city, and it used to arrive as a line in the history that
+      // nobody had reason to open. Both directions are worth a notification:
+      // losing a tier silently would be worse still.
+      if (after > before) {
+        root.notify(root.cityName + " — " + Model.civicLabel(root.civicLevel),
+          "Your schools have earned the city tier " + after
+            + " buildings. They are unlocked in the build palette now.")
         root.logEvent("milestone", "The city reaches " + Model.civicLabel(root.civicLevel).toLowerCase()
-          + " status — tier " + (after) + " building unlocked.")
-      else if (after < before)
+          + " status — tier " + after + " building unlocked.")
+      } else if (after < before) {
+        root.notify(root.cityName + " — standing lost",
+          "Schooling has slipped, and the city is back to "
+            + Model.civicLabel(root.civicLevel).toLowerCase() + " status. Tier "
+            + before + " buildings can no longer be built until it recovers.")
         root.logEvent("loss", "Schooling has slipped: the city is back to "
           + Model.civicLabel(root.civicLevel).toLowerCase() + " status.")
+      }
 
       var heldBefore = root.sustainedTicks
       root.sustainedTicks = Model.advanceSustainability(goal, heldBefore)
