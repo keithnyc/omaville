@@ -2132,15 +2132,21 @@ Item {
   }
 
   // Bounds of the painted cutouts, excluding transparent export padding.
-  // Keep the original generated alpha/files intact; crop only while drawing.
-  // Uniform fit preserves each building's natural proportions and lot gaps.
+  // Crop only while drawing; uniform fit preserves each building's natural
+  // proportions and lot gaps.
+  //
+  // These are source-pixel rectangles, so they belong to a particular file at
+  // a particular size. Downscaling the six sprites they describe from 1254px
+  // to 256px put every one of them out of bounds and the canvas started
+  // logging "drawImage(), index size error" on every repaint. Measured from
+  // the shipped files rather than converted, and pinned by tests/sprite-budget.
   readonly property var matureSpriteFrames: ({
-    "r3c.png": [208, 49, 831, 1155],
-    "r3d.png": [99, 59, 1055, 1105],
-    "c3c.png": [217, 13, 800, 1186],
-    "c3d.png": [70, 21, 1119, 1173],
-    "i3c.png": [0, 21, 1215, 1179],
-    "i3d.png": [17, 14, 1222, 1212]
+    "r3c.png": [43, 10, 169, 235],
+    "r3d.png": [21, 12, 214, 225],
+    "c3c.png": [45, 3, 162, 241],
+    "c3d.png": [15, 5, 227, 238],
+    "i3c.png": [10, 38, 237, 179],
+    "i3d.png": [4, 3, 248, 233]
   })
 
   function drawMatureVariant(ctx, source, gx, gy, cellSize) {
