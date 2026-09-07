@@ -614,6 +614,20 @@ Item {
         ageMinutes: root.ageMinutes, neighbors: root.neighbors
       })
       root.citizens = moved.citizens
+      // Deaths are the one thing here worth a notice of its own. The paper
+      // prints the obituary; the log carries the name so the "while you were
+      // away" summary does too.
+      for (var v = 0; v < moved.deaths.length; v++) {
+        var gone2 = moved.deaths[v]
+        // The obituary itself goes in the log, so the Gazette prints exactly
+        // what the city recorded and no second source of truth exists. The
+        // population the city had when they arrived comes from the history
+        // that is kept anyway; older than that and the clause is simply left
+        // out rather than guessed at.
+        var then = Model.historyAt(root.history, gone2.arrivedYear * 12)
+        root.logEvent("death",
+          Model.obituary(gone2, root.cityName, then ? then.p : 0))
+      }
       for (var d = 0; d < moved.departures.length; d++) {
         var who = moved.departures[d]
         // A house that simply stopped existing is already reported by whatever
@@ -1030,7 +1044,10 @@ Item {
       cityLog = Model.migrateLogKinds(Array.isArray(saved.cityLog) ? saved.cityLog : [])
       lastSeenMinute = Math.max(0, num(saved.lastSeenMinute, 0))
       lastGazetteMinute = Math.max(0, num(saved.lastGazetteMinute, 0))
-      citizens = Array.isArray(saved.citizens) ? saved.citizens : []
+      // Residents saved before anybody had a birthday would otherwise all read
+      // as born in Year 1 and die on the next tick.
+      citizens = Model.seedCitizenLives(
+        Array.isArray(saved.citizens) ? saved.citizens : [], ageMinutes)
     } catch (error) {
       saveProblem = "not valid JSON (" + error + ")"
       foundedAtMs = 0

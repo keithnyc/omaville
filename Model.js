@@ -2912,6 +2912,135 @@ function citizenName(seed) {
     + CITIZEN_LAST[Math.floor(h / CITIZEN_FIRST.length) % CITIZEN_LAST.length]
 }
 
+// --- a life, rather than a name on a tile ---------------------------------
+// The point of naming residents was never the names. It is that an idle game
+// has one thing no other game has: it has genuinely been running since Year 94,
+// and somebody has genuinely lived on Mill Road the whole time. None of that
+// means anything until the city can be asked who they are.
+
+var CITIZEN_ARRIVAL_AGE_MIN = 18
+var CITIZEN_ARRIVAL_AGE_MAX = 54
+// Old age begins to tell here, and nobody sees past the second figure.
+var CITIZEN_FRAIL_AGE = 68
+var CITIZEN_MAX_AGE = 96
+// Chance of dying in a given month once frail, rising with every year past it.
+var CITIZEN_DEATH_BASE = 0.004
+var CITIZEN_DEATH_SLOPE = 0.0016
+
+// Trades, chosen from what a resident could plausibly walk to. A city of
+// chimneys makes fitters; a street of shopfronts makes clerks.
+var TRADES_INDUSTRIAL = ["a fitter at the works", "a moulder", "a boilermaker",
+  "a warehouseman", "a machinist", "a stoker at the works"]
+var TRADES_COMMERCIAL = ["a draper's assistant", "a clerk", "a grocer",
+  "a publican", "a bookkeeper", "a shopkeeper"]
+var TRADES_PLAIN = ["a carter", "a laundress", "a jobbing builder",
+  "a seamstress", "a labourer"]
+var TRADE_RETIRED = "retired"
+
+function citizenAgeYears(citizen, ageMinutes) {
+  var born = citizen && isFinite(citizen.b) ? citizen.b : 0
+  return Math.max(0, Math.floor((Math.max(0, ageMinutes || 0) - born) / 12))
+}
+
+function citizenYearsInCity(citizen, ageMinutes) {
+  return Math.max(0, Math.floor((Math.max(0, ageMinutes || 0) - (citizen.s || 0)) / 12))
+}
+
+// What somebody living here does for a living, from what is actually built
+// around them. Deterministic, so a resident does not change trade every time
+// the panel is opened.
+function citizenTrade(grid, gridSize, citizen, ageMinutes) {
+  if (citizenAgeYears(citizen, ageMinutes) >= CITIZEN_FRAIL_AGE) return TRADE_RETIRED
+  return citizenCareer(grid, gridSize, citizen)
+}
+
+// The trade regardless of age. An obituary wants what somebody did with their
+// life, not the fact that they had stopped doing it.
+function citizenCareer(grid, gridSize, citizen) {
+  var x = citizen.i % gridSize, y = (citizen.i / gridSize) | 0
+  var industrial = 0, commercial = 0
+  for (var dy = -6; dy <= 6; dy++) {
+    for (var dx = -6; dx <= 6; dx++) {
+      var nx = x + dx, ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize) continue
+      var raw = grid[ny * gridSize + nx]
+      var level = tileLevelOf(raw)
+      if (level < 1) continue
+      var type = tileTypeOf(raw)
+      if (type === TILE_IND) industrial += level * IND_JOBS_PER_LEVEL
+      else if (type === TILE_COM) commercial += level * COM_JOBS_PER_LEVEL
+    }
+  }
+  var seed = cityHash(citizen.i, (citizen.s || 0) + 17)
+  if (industrial === 0 && commercial === 0)
+    return TRADES_PLAIN[seed % TRADES_PLAIN.length]
+  var trades = industrial >= commercial ? TRADES_INDUSTRIAL : TRADES_COMMERCIAL
+  return trades[seed % trades.length]
+}
+
+var ORDINAL_UNITS = ["", "first", "second", "third", "fourth", "fifth", "sixth",
+  "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth", "thirteenth",
+  "fourteenth", "fifteenth", "sixteenth", "seventeenth", "eighteenth", "nineteenth"]
+var ORDINAL_TENS = ["", "", "twentieth", "thirtieth", "fortieth", "fiftieth",
+  "sixtieth", "seventieth", "eightieth", "ninetieth"]
+var CARDINAL_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty",
+  "seventy", "eighty", "ninety"]
+
+// "eighty-first". A paper of this period would not print a numeral in an
+// obituary, and the whole column lives or dies on sounding like one.
+function ordinalWords(value) {
+  var n = Math.max(0, Math.floor(value || 0))
+  if (n < 20) return ORDINAL_UNITS[n] || "first"
+  var tens = Math.floor(n / 10), units = n % 10
+  if (units === 0) return ORDINAL_TENS[tens] || "hundredth"
+  return CARDINAL_TENS[tens] + "-" + ORDINAL_UNITS[units]
+}
+
+// Everything the city knows about one resident, for the panel and the paper.
+function citizenBio(citizen, ctx) {
+  var now = Math.max(0, (ctx && ctx.ageMinutes) || 0)
+  var years = citizenAgeYears(citizen, now)
+  var tenure = citizenYearsInCity(citizen, now)
+  var grievance = ctx && ctx.grid ? citizenGrievance(ctx, citizen.i) : null
+  return {
+    name: citizen.n,
+    index: citizen.i,
+    street: ctx && ctx.grid ? streetOf(ctx.grid, ctx.gridSize, citizen.i)
+      : streetName((ctx && ctx.gridSize) || GRID_SIZE, citizen.i),
+    age: years,
+    ageWords: ordinalWords(years + 1),
+    arrivedYear: calendarFor(citizen.s || 0).year,
+    yearsHere: tenure,
+    trade: ctx && ctx.grid ? citizenTrade(ctx.grid, ctx.gridSize, citizen, now) : "",
+    career: ctx && ctx.grid ? citizenCareer(ctx.grid, ctx.gridSize, citizen) : "",
+    grievance: grievance ? grievance.key : "",
+    complaint: grievance ? citizenLetter(citizen, grievance,
+      (ctx && ctx.gridSize) || GRID_SIZE, ctx && ctx.grid).text : "",
+    // How close they are to giving up, for a panel that wants to warn.
+    patience: citizen.p,
+    settled: citizen.p >= CITIZEN_PATIENCE
+  }
+}
+
+// A death notice. Written from the same facts the panel shows, so the paper
+// can never eulogise somebody the city does not recognise.
+function obituary(bio, cityName, populationThen) {
+  var line = bio.name + ", of " + bio.street + ", in the " + bio.ageWords + " year."
+  var came = " Came to " + (cityName || "the city") + " in Year " + bio.arrivedYear
+  if (populationThen > 0) came += ", when it numbered " + groupDigits(populationThen)
+  came += "."
+  var stayed = bio.yearsHere >= 2
+    ? " Lived on " + bio.street + " for " + bio.yearsHere + " years." : ""
+  // What they did, not the fact that they had stopped doing it — everybody in
+  // this column is retired by the time it is written.
+  var work = bio.career ? " " + capitalise(bio.career) + "." : ""
+  return line + came + stayed + work
+}
+
+function capitalise(text) {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : ""
+}
+
 // How long somebody puts up with a grievance before packing. Long enough that
 // a problem the player is already fixing does not cost them a resident.
 var CITIZEN_PATIENCE = 6
@@ -3049,14 +3178,44 @@ function residentialTiles(grid) {
   return out
 }
 
+// Somebody arriving is an adult with a life already behind them, not a
+// newborn. Deterministic from the tile and the month so a resident does not
+// change age between two reads of the same save.
+function citizenBirthMinute(seed, ageMinutes) {
+  var span = CITIZEN_ARRIVAL_AGE_MAX - CITIZEN_ARRIVAL_AGE_MIN
+  var years = CITIZEN_ARRIVAL_AGE_MIN + (seed % (span + 1))
+  return Math.round(ageMinutes) - years * 12
+}
+
+// Residents saved before anybody had a birthday. Without this they all read as
+// having been born in the city's Year 1, and a hundred-year-old city kills
+// every one of them the moment it loads.
+function seedCitizenLives(citizens, ageMinutes) {
+  var out = []
+  for (var i = 0; i < (citizens || []).length; i++) {
+    var person = citizens[i]
+    if (isFinite(person.b)) { out.push(person); continue }
+    out.push({ n: person.n, i: person.i, s: person.s, p: person.p,
+      b: citizenBirthMinute(cityHash(person.i, 5), person.s || ageMinutes || 0) })
+  }
+  return out
+}
+
+function citizenDeathChance(age) {
+  if (age >= CITIZEN_MAX_AGE) return 1
+  if (age < CITIZEN_FRAIL_AGE) return 0
+  return CITIZEN_DEATH_BASE + CITIZEN_DEATH_SLOPE * (age - CITIZEN_FRAIL_AGE)
+}
+
 // One month in the lives of the named. Returns the new list plus what happened
-// to anybody who left, so the caller can put it in the log without working it
-// out again.
+// to anybody who left or died, so the caller can put it in the log without
+// working it out again.
 function advanceCitizens(citizens, ctx) {
   var random = ctx.random || Math.random
   var living = residentialTiles(ctx.grid)
   var occupied = {}
-  var next = [], departures = [], arrivals = []
+  var next = [], departures = [], arrivals = [], deaths = []
+  citizens = seedCitizenLives(citizens, ctx.ageMinutes)
 
   for (var i = 0; i < (citizens || []).length; i++) {
     var person = citizens[i]
@@ -3064,6 +3223,12 @@ function advanceCitizens(citizens, ctx) {
     // Their house is gone — burnt down, bulldozed, or emptied by crime.
     if (living.indexOf(person.i) < 0) {
       departures.push({ name: person.n, street: street, reason: "gone", to: "" })
+      continue
+    }
+    // Old age, before anything else this month. Somebody who dies is not also
+    // recorded as having moved away in disgust.
+    if (random() < citizenDeathChance(citizenAgeYears(person, ctx.ageMinutes))) {
+      deaths.push(citizenBio(person, ctx))
       continue
     }
     var grievance = citizenGrievance(ctx, person.i)
@@ -3075,7 +3240,7 @@ function advanceCitizens(citizens, ctx) {
         reason: grievance ? grievance.key : "gone", to: pickNeighborName(ctx, random) })
       continue
     }
-    next.push({ n: person.n, i: person.i, s: person.s, p: patience })
+    next.push({ n: person.n, i: person.i, s: person.s, p: patience, b: person.b })
     occupied[person.i] = true
   }
 
@@ -3090,10 +3255,11 @@ function advanceCitizens(citizens, ctx) {
     for (var n = 0; n < next.length; n++) if (next[n].n === name) clash = true
     if (clash) continue
     occupied[spot] = true
-    next.push({ n: name, i: spot, s: Math.round(ctx.ageMinutes || 0), p: CITIZEN_PATIENCE })
+    next.push({ n: name, i: spot, s: Math.round(ctx.ageMinutes || 0), p: CITIZEN_PATIENCE,
+      b: citizenBirthMinute(seed, ctx.ageMinutes || 0) })
     arrivals.push({ name: name, street: streetOf(ctx.grid, ctx.gridSize, spot) })
   }
-  return { citizens: next, departures: departures, arrivals: arrivals }
+  return { citizens: next, departures: departures, arrivals: arrivals, deaths: deaths }
 }
 
 function pickNeighborName(ctx, random) {
@@ -3143,6 +3309,11 @@ var GAZETTE_DESKS = {
   // People leaving is news, and they leave by road.
   departure: { weight: 76, spot: "road",
     heads: ["ANOTHER FAMILY GOES", "THE CITY LOSES A RESIDENT", "PACKED AND GONE"] },
+  // A death is not a disaster and must not be ranked as one, but a city that
+  // loses somebody who lived on the same street for thirty years should not
+  // hear about it below the stock market.
+  death: { weight: 68, spot: "civic",
+    heads: ["A LIFE IN THIS CITY", "ONE OF OUR OWN", "THE LAST OF A GENERATION"] },
   crime: { weight: 70, spot: "crime",
     heads: ["LAWLESSNESS IN THE DISTRICT", "TROUBLE IN THE STREETS", "A DISTRICT UNDER SIEGE"],
     calm: ["ORDER RESTORED", "THE CONSTABULARY PREVAILS", "THE STREETS ARE QUIET"] },
@@ -3406,6 +3577,7 @@ function gazette(ctx) {
     // A quiet stretch is worth printing too. An idle game that says nothing
     // happened is telling the truth, and a slow news day is a real front page.
     letters: ctx.letters || [],
+    obituaries: ctx.obituaries || [],
     editorial: ctx.editorial || null,
     quiet: stories.length === 0,
     quietNote: "No fires, no scandals, no elections. The presses ran anyway."

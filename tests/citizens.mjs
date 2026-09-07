@@ -352,6 +352,118 @@ const context = (grid, over = {}) => Object.assign({
     'and set before the stroke, not after it');
 }
 
+
+// --- lives, and ends ------------------------------------------------------
+// The reason for naming anybody. An idle game has one thing no other game has:
+// it has genuinely been running since Year 94, and somebody has genuinely
+// lived on Mill Road the whole time. None of that means anything until the
+// city can be asked who they are and told when they are gone.
+{
+  const grid = town();
+  const ctx = context(grid, { ageMinutes: 1200 });
+  const people = M.advanceCitizens([], ctx).citizens;
+
+  // Arrivals are adults with a life already behind them, not newborns.
+  for (const c of people) {
+    const age = M.citizenAgeYears(c, 1200);
+    assert.ok(age >= M.CITIZEN_ARRIVAL_AGE_MIN && age <= M.CITIZEN_ARRIVAL_AGE_MAX,
+      `${c.n} arrived aged ${age}`);
+    assert.ok(Number.isFinite(c.b), 'with a birthday');
+  }
+  // Deterministic: reading the same save twice must not age anybody.
+  assert.equal(M.citizenAgeYears(people[0], 1200), M.citizenAgeYears(people[0], 1200));
+  assert.equal(M.citizenAgeYears(people[0], 1212), M.citizenAgeYears(people[0], 1200) + 1,
+    'and a year passing ages them a year');
+
+  // A save from before anybody had a birthday. Without seeding, everyone reads
+  // as born in Year 1 and a century-old city kills them all on load.
+  const legacy = [{ n: 'Ada Pike', i: HOME, s: 900, p: M.CITIZEN_PATIENCE }];
+  const seeded = M.seedCitizenLives(legacy, 1200);
+  assert.ok(Number.isFinite(seeded[0].b), 'a birthday is invented');
+  assert.ok(M.citizenAgeYears(seeded[0], 1200) < M.CITIZEN_MAX_AGE,
+    'and it is not one that kills them immediately');
+  assert.equal(seeded[0].n, legacy[0].n, 'everything else survives');
+  assert.equal(M.seedCitizenLives(seeded, 1200)[0].b, seeded[0].b, 'and is stable once set');
+  assert.equal(M.seedCitizenLives([], 0).length, 0);
+
+  // Nobody dies young; everybody dies eventually.
+  assert.equal(M.citizenDeathChance(30), 0, 'the young do not die of old age');
+  assert.equal(M.citizenDeathChance(M.CITIZEN_FRAIL_AGE - 1), 0);
+  assert.ok(M.citizenDeathChance(M.CITIZEN_FRAIL_AGE + 10) > M.citizenDeathChance(M.CITIZEN_FRAIL_AGE),
+    'and the risk climbs with the years');
+  assert.equal(M.citizenDeathChance(M.CITIZEN_MAX_AGE), 1, 'nobody sees past the cap');
+
+  // Run a long time and check people actually die, and are replaced.
+  let living = people, gone = [];
+  for (let m = 1; m < 800; m++) {
+    const step = M.advanceCitizens(living, context(grid, { ageMinutes: 1200 + m }));
+    living = step.citizens;
+    gone = gone.concat(step.deaths);
+  }
+  assert.ok(gone.length > 0, 'sixty years and nobody died');
+  assert.ok(living.length > 0, 'and the street did not empty out');
+  for (const d of gone) {
+    assert.ok(d.age >= M.CITIZEN_FRAIL_AGE, `${d.name} died at ${d.age}`);
+    assert.ok(d.name && d.street && d.arrivedYear >= 1, 'a death notice is printable');
+  }
+}
+
+// --- an obituary is written from what the city knows -----------------------
+{
+  const grid = town();
+  const ctx = context(grid, { ageMinutes: 1200 });
+  const person = { n: 'Elsie Halloway', i: HOME, s: 12 * 94, p: 6, b: 12 * 94 - 12 * 37 };
+  const bio = M.citizenBio(person, ctx);
+  const text = M.obituary(bio, 'Cedar Pines', 900);
+
+  assert.ok(text.startsWith('Elsie Halloway'), 'it is about a person');
+  assert.ok(text.includes(bio.street), 'and names where they lived');
+  // Year 1 opens at minute 0, so a resident settled at month 12*94 arrived in
+  // Year 95 — read off the bio rather than assumed, since getting that wrong
+  // in the paper would be the sort of error nobody would ever notice.
+  assert.equal(bio.arrivedYear, M.calendarFor(person.s).year);
+  assert.ok(text.includes('Year ' + bio.arrivedYear), 'and when they came');
+  assert.ok(text.includes('900'), 'and what the city was then');
+  assert.ok(!/undefined|NaN|\[object/.test(text), text);
+  // A period paper does not print numerals in an obituary, and the column
+  // lives or dies on sounding like one.
+  assert.ok(/in the [a-z-]+ year/.test(text), `no ordinal words in: ${text}`);
+  for (const [n, want] of [[1, 'first'], [11, 'eleventh'], [20, 'twentieth'],
+    [21, 'twenty-first'], [44, 'forty-fourth'], [81, 'eighty-first'], [99, 'ninety-ninth']])
+    assert.equal(M.ordinalWords(n), want, `${n}`);
+
+  // What they did with their life, not the fact they had stopped: everybody in
+  // this column is retired by the time it is written.
+  // Born so as to be 75 at the moment the bio is taken, which is past frail.
+  const old = { n: 'Ada Pike', i: HOME, s: 12 * 94, p: 6, b: 1200 - 12 * 75 };
+  const oldBio = M.citizenBio(old, ctx);
+  assert.equal(oldBio.trade, M.TRADE_RETIRED, 'the panel says retired');
+  assert.ok(oldBio.career && oldBio.career !== M.TRADE_RETIRED, 'the obituary knows better');
+  assert.ok(M.obituary(oldBio, 'Cedar Pines', 0).includes(M.capitalise(oldBio.career)),
+    'and prints the trade they actually had');
+  // A city too young to remember leaves the clause out rather than guessing.
+  assert.ok(!M.obituary(bio, 'Cedar Pines', 0).includes('numbered'));
+}
+
+// --- a trade comes from what was built around them -------------------------
+{
+  const works = town();
+  for (let x = 14; x <= 20; x++) works[at(x, 20)] = 'I3';
+  const shops = town();
+  for (let x = 14; x <= 20; x++) shops[at(x, 20)] = 'C3';
+  const person = { n: 'Cyril Rooke', i: at(17, 17), s: 0, p: 6, b: -12 * 40 };
+
+  const atWorks = M.citizenTrade(works, size, person, 0);
+  const atShops = M.citizenTrade(shops, size, person, 0);
+  assert.ok(Array.from(M.TRADES_INDUSTRIAL).includes(atWorks),
+    `a street of chimneys makes ${atWorks}`);
+  assert.ok(Array.from(M.TRADES_COMMERCIAL).includes(atShops),
+    `a street of shopfronts makes ${atShops}`);
+  assert.ok(Array.from(M.TRADES_PLAIN).includes(M.citizenTrade(town(), size, person, 0)),
+    'and a street of neither still makes a living somehow');
+  assert.equal(atWorks, M.citizenTrade(works, size, person, 0), 'a trade does not change on a reread');
+}
+
 console.log('PASS: named residents at real addresses, complaints that are true of their own ' +
   'tile and ranked as a person would rank them, patience that recovers when the problem is ' +
-  'fixed, and a letters column that says something different in every letter.');
+  'fixed, and a letters column that says something different in every letter, on streets that are real roads, for people who arrive as adults, work at what was built around them, and are written up when they go.');

@@ -63,7 +63,8 @@ Item {
           grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
           funding: root.cityService.funding, traffic: root.cityService.traffic,
           crimes: root.crimes, fires: root.fires
-        }, 3)
+        }, 3),
+        obituaries: root.obituariesSinceEdition
       })
     : null
   // The biggest neighbour that has grown past this city, for the leader column.
@@ -77,6 +78,16 @@ Item {
   }
   // Households that gave up since the last edition — the paper counts what it
   // has already printed rather than the whole history of the city.
+  // The deaths since the last edition, straight from the log the city keeps —
+  // so the paper can only mourn people the city actually recognised.
+  readonly property var obituariesSinceEdition: {
+    var out = []
+    for (var i = 0; i < root.cityLog.length; i++) {
+      if (root.cityLog[i].m <= root.gazetteSince) break
+      if (root.cityLog[i].kind === "death") out.push(root.cityLog[i].text)
+    }
+    return out
+  }
   readonly property int departuresSinceEdition: {
     var n = 0
     for (var i = 0; i < root.cityLog.length; i++) {
@@ -430,6 +441,18 @@ Item {
   function inspectLines(info) {
     if (!info) return []
     var lines = []
+    // Who lives here, kept in its own list: the zone branch below replaces
+    // `lines` wholesale, so anything pushed before it would be silently
+    // discarded. Prepended at the return, because it is the only line on the
+    // card about a person and it should not be the fifth thing read.
+    var whoLines = []
+    var who = root.residentAt(info.index)
+    if (who) {
+      whoLines.push(who.name + ", " + who.age + " — " + (who.trade || "no trade recorded"))
+      whoLines.push("Of " + who.street + ", here since Year " + who.arrivedYear
+        + " (" + who.yearsHere + " years)")
+      if (who.grievance) whoLines.push("Unhappy: see the Gazette's letters column")
+    }
     var isZone = info.type === Model.TILE_RES || info.type === Model.TILE_COM || info.type === Model.TILE_IND
     if (isZone) {
       lines = [
@@ -494,7 +517,7 @@ Item {
       lines.push("Waterfront garden · contributes to park happiness")
     if (info.type === Model.TILE_PARK)
       lines.push("Park happiness contribution: +" + Model.PARK_BONUS_PER_LEVEL[info.level])
-    return lines
+    return whoLines.concat(lines)
   }
 
   // --- game menu: the third UX category (game-level actions, distinct
@@ -511,6 +534,29 @@ Item {
   property bool historyOpen: false
   property bool goalOpen: false
   property bool marketOpen: false
+  // The residents. The whole reason for naming anybody: being able to ask who
+  // lives here rather than only how many.
+  property bool residentsOpen: false
+  readonly property var citizenContext: root.serviceReady ? ({
+    grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
+    funding: root.cityService.funding, traffic: root.cityService.traffic,
+    crimes: root.crimes, fires: root.fires, ageMinutes: root.cityService.ageMinutes
+  }) : null
+  readonly property var residents: {
+    if (!root.serviceReady) return []
+    var out = []
+    var people = root.cityService.citizens
+    for (var i = 0; i < people.length; i++)
+      out.push(Model.citizenBio(people[i], root.citizenContext))
+    // Longest-standing first: the city's memory, not its arrivals board.
+    out.sort(function (a, b) { return b.yearsHere - a.yearsHere })
+    return out
+  }
+  function residentAt(index) {
+    for (var i = 0; i < root.residents.length; i++)
+      if (root.residents[i].index === index) return root.residents[i]
+    return null
+  }
   readonly property bool editingTownName:
     (root.settingsOpen && townNameInput.activeFocus)
     || (root.confirmNewGameOpen
@@ -541,6 +587,7 @@ Item {
     { action: "advisors", label: "Advisors", enabled: root.serviceReady },
     { action: "history", label: "History", enabled: root.serviceReady },
     { action: "market", label: "Market", enabled: root.serviceReady },
+    { action: "residents", label: "Residents", enabled: root.serviceReady },
     { action: "goal", label: "City Goal", enabled: root.serviceReady },
     { action: "name", label: "Name Town", enabled: root.serviceReady },
     { action: "", label: "", enabled: false, heading: true },
@@ -556,6 +603,7 @@ Item {
     else if (action === "history") root.historyOpen = true
     else if (action === "goal") root.goalOpen = true
     else if (action === "market") root.marketOpen = true
+    else if (action === "residents") root.residentsOpen = true
     else if (action === "settings") root.settingsOpen = true
     else if (action === "name") {
       root.settingsOpen = true
@@ -5129,12 +5177,12 @@ Item {
   // useless the moment the map pushed it out of view.
   Item {
     anchors.fill: parent
-    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || root.gazetteOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
+    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || root.residentsOpen || root.gazetteOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
 
     MouseArea {
       anchors.fill: parent
-      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || root.gazetteOpen
-      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false; root.goalOpen = false; root.marketOpen = false; root.gazetteOpen = false }
+      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || root.residentsOpen || root.gazetteOpen
+      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false; root.goalOpen = false; root.marketOpen = false; root.residentsOpen = false; root.gazetteOpen = false }
     }
 
     Rectangle {
@@ -5346,6 +5394,132 @@ Item {
             color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
+          }
+        }
+      }
+    }
+
+    // Who lives here. The roster the mayor can actually read: every named
+    // resident, oldest tenancy first, with what they do, how long they have
+    // been here and whether they are about to give up on the place. Clicking
+    // one goes and stands outside their house.
+    Rectangle {
+      id: residentsCard
+      visible: root.residentsOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(24), Style.space(400))
+      height: Math.min(parent.height - Style.space(24),
+        residentsColumn.implicitHeight + Style.space(28))
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      MouseArea { anchors.fill: parent }
+
+      Flickable {
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        contentHeight: residentsColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
+
+        Column {
+          id: residentsColumn
+          width: parent.width
+          spacing: Style.space(8)
+
+          Text {
+            text: "Residents"
+            color: Color.menu.text
+            font.bold: true
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+          }
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: root.residents.length > 0
+              ? "The people this office knows by name, longest-standing first. "
+                + "Click one to go to their street."
+              : "Nobody is known here by name yet. A city of a few hundred is "
+                + "still small enough to be a list of buildings."
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+
+          Repeater {
+            model: root.residents
+            Rectangle {
+              required property var modelData
+              width: residentsColumn.width
+              height: personColumn.implicitHeight + Style.space(12)
+              radius: Style.cornerRadius
+              color: personMouse.containsMouse
+                ? Qt.rgba(0.5, 0.6, 0.6, 0.14) : Qt.rgba(0.5, 0.6, 0.6, 0.06)
+              border.width: 1
+              border.color: modelData.grievance !== ""
+                ? Qt.rgba(0.88, 0.62, 0.22, 0.45) : root.neutralTint(0.2)
+
+              Column {
+                id: personColumn
+                x: Style.space(9)
+                y: Style.space(6)
+                width: parent.width - Style.space(18)
+                spacing: Style.space(1)
+                Text {
+                  width: parent.width
+                  elide: Text.ElideRight
+                  text: modelData.name + ", " + modelData.age
+                  color: Color.menu.text
+                  font.bold: true
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                }
+                Text {
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  text: Model.capitalise(modelData.trade) + ", of " + modelData.street
+                    + " · here since Year " + modelData.arrivedYear
+                    + (modelData.yearsHere >= 1 ? " (" + modelData.yearsHere + " years)" : "")
+                  color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.66)
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  visible: modelData.grievance !== ""
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  text: "“" + modelData.complaint + "”"
+                  color: "#e4bd78"
+                  font.italic: true
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                // Only worth saying when it is nearly too late to act on.
+                Text {
+                  visible: modelData.grievance !== ""
+                    && modelData.patience <= Math.ceil(Model.CITIZEN_PATIENCE / 2)
+                  width: parent.width
+                  text: "Packing: " + modelData.patience
+                    + (modelData.patience === 1 ? " month left" : " months left")
+                  color: "#e0806a"
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+              }
+              MouseArea {
+                id: personMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  root.residentsOpen = false
+                  root.goToTile(modelData.index)
+                }
+              }
+            }
           }
         }
       }
@@ -5586,6 +5760,36 @@ Item {
                   }
                 }
                 Item { width: 1; height: Style.space(3) }
+              }
+            }
+          }
+
+          // Deaths. An idle game's one unrepeatable asset is that it has
+          // genuinely been running since Year 94, and somebody has genuinely
+          // lived on Mill Road the whole time. This is where that is spent.
+          Column {
+            visible: gazetteCard.page && gazetteCard.page.obituaries.length > 0
+            width: parent.width
+            spacing: Style.space(3)
+            Item { width: 1; height: Style.space(2) }
+            Rectangle { width: parent.width; height: 1; color: gazetteCard.rule }
+            Text {
+              text: "DEATHS"
+              color: gazetteCard.faded
+              font.family: root.gazetteSerif
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+            Repeater {
+              model: gazetteCard.page ? gazetteCard.page.obituaries : []
+              Text {
+                required property var modelData
+                width: gazetteColumn.width
+                text: modelData
+                wrapMode: Text.WordWrap
+                color: gazetteCard.ink
+                font.family: root.gazetteSerif
+                font.pixelSize: Style.font.caption
               }
             }
           }
