@@ -109,8 +109,15 @@ Item {
   // the blink overlay redraws far more often than that, so it just reads
   // this cached plant list rather than rescanning the whole grid for it
   // on every animation frame.
-  readonly property var utilities: Model.findUtilities(root.grid)
-  readonly property var serviceCoverage: Model.serviceCoverageStats(root.grid, root.gridSize)
+  // Whole-grid figures come from the service, which computes them once for
+  // every open view. They used to be recomputed here as well, so a single
+  // painted tile cost two full grid scans with the panel open and three with
+  // the detached window beside it — which is what made painting a long road
+  // drop tiles. The fallbacks only run before a service is attached.
+  readonly property var utilities: root.cityService
+    ? root.cityService.utilities : Model.findUtilities(root.grid)
+  readonly property var serviceCoverage: root.cityService
+    ? root.cityService.coverage : Model.serviceCoverageStats(root.grid, root.gridSize)
   readonly property int population: cityService ? cityService.population : 0
   readonly property int jobs: cityService ? cityService.jobs : 0
   readonly property real treasury: cityService ? cityService.treasury : 0
@@ -187,20 +194,25 @@ Item {
   property string decorationTool: Model.TILE_TREE
   // One shared summarize for everything that needs whole-city figures — the
   // Budget card's rows would otherwise each rescan the grid on every change.
-  readonly property var budgetStats: Model.summarize(root.grid)
-  readonly property real budgetIncome: root.serviceReady
-    ? Model.incomeFor(root.budgetStats, root.taxRatePercent) : 0
-  readonly property real budgetUpkeep: root.serviceReady
-    ? Model.computeUpkeep(root.budgetStats, root.cityService.funding) : 0
+  readonly property var budgetStats: root.cityService
+    ? root.cityService.cityStats : Model.summarize(root.grid)
+  // Read from the service rather than recomputed, so the Budget card cannot
+  // quote a different bill from the one the treasury is actually charged.
+  // It used to: both of these omitted ordinances, so passing one moved the
+  // money without moving the number explaining it.
+  readonly property real budgetIncome: root.serviceReady ? root.cityService.income : 0
+  readonly property real budgetUpkeep: root.serviceReady ? root.cityService.upkeep : 0
   readonly property real budgetNet: root.budgetIncome - root.budgetUpkeep
   readonly property var cityHistory: root.serviceReady ? root.cityService.history : []
   readonly property var cityLog: root.serviceReady ? root.cityService.cityLog : []
   // Logged after the player last looked — drives the "while you were away"
   // summary and the unseen dots beside each entry.
   readonly property var unseenEvents: root.serviceReady ? root.cityService.unseenLog : []
-  readonly property var utilityLoad: Model.utilityLoad(root.grid, root.budgetStats)
-  readonly property var upkeepBill: root.serviceReady
-    ? Model.upkeepBreakdown(root.budgetStats, root.cityService.funding) : []
+  // Also from the service: without its ordinance effects, the water gauge
+  // showed the draw a city would have had without its conservation ordinance.
+  readonly property var utilityLoad: root.cityService
+    ? root.cityService.load : Model.utilityLoad(root.grid, root.budgetStats)
+  readonly property var upkeepBill: root.serviceReady ? root.cityService.upkeepBill : []
   // Active map data overlay ("" = off). The advisors name a problem; this is
   // how the player finds it on a 4096-tile map instead of hunting by hand.
   readonly property var fires: root.serviceReady ? root.cityService.fires : []
@@ -213,7 +225,9 @@ Item {
     ? Math.max(1, Math.ceil(root.cityService.outOfOfficeUntil - root.cityService.ageMinutes)) : 0
   readonly property string outOfOfficeSpan: root.monthsOutOfOffice
     + (root.monthsOutOfOffice === 1 ? " more month" : " more months")
-  readonly property var connectedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
+  readonly property var connectedNeighbors: root.cityService
+    ? root.cityService.linkedNeighbors
+    : Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
   readonly property bool cityBurning: root.fires.length > 0
   property string overlayMode: ""
   readonly property var overlayDef: root.overlayMode !== "" ? Model.overlayDef(root.overlayMode) : null

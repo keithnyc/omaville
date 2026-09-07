@@ -137,19 +137,28 @@ Item {
   readonly property var cityStats: Model.summarize(root.grid)
   readonly property var coverage: Model.serviceCoverageStats(root.grid, root.gridSize)
   readonly property var policy: Model.ordinanceEffects(root.ordinances)
+  readonly property var utilities: Model.findUtilities(root.grid)
   readonly property var load: Model.utilityLoad(root.grid, root.cityStats, root.policy)
   // Deliberately NOT a binding on the grid. Surveying traffic means walking
   // every lot's road access, which costs milliseconds on a mature city — fine
   // once a month, ruinous on every tile of a road drag. It refreshes on the
   // tick, and on demand when something is about to show it.
   property var traffic: Model.trafficSurvey(root.grid, root.gridSize,
-    Model.findUtilities(root.grid), root.funding, root.policy)
+    root.utilities, root.funding, root.policy)
   function refreshTraffic() {
     root.traffic = Model.trafficSurvey(root.grid, root.gridSize,
-      Model.findUtilities(root.grid), root.funding, root.policy)
+      root.utilities, root.funding, root.policy)
   }
   readonly property real income: Model.incomeFor(root.cityStats, root.taxRatePercent)
-  readonly property real upkeep: Model.computeUpkeep(root.cityStats, root.funding, root.ordinances)
+  // The itemised bill is the source, and the total is its sum — the same
+  // relationship computeUpkeep already has to upkeepBreakdown, but built once
+  // instead of once here and again in every open view.
+  readonly property var upkeepBill: Model.upkeepBreakdown(root.cityStats, root.funding, root.ordinances)
+  readonly property real upkeep: {
+    var total = 0
+    for (var i = 0; i < root.upkeepBill.length; i++) total += root.upkeepBill[i].amount
+    return total
+  }
   readonly property var linkedNeighbors: Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
   readonly property var advice: root.initialized ? Model.cityAdvice({
     stats: root.cityStats, coverage: root.coverage,
@@ -178,7 +187,7 @@ Item {
   // enough to want. Climbs and falls with education coverage and funding.
   property real civicLevel: Model.CIVIC_MIN
   readonly property real civicTarget: root.initialized
-    ? Model.civicTarget(root.coverage, root.funding, Model.findUtilities(root.grid))
+    ? Model.civicTarget(root.coverage, root.funding, root.utilities)
     : Model.CIVIC_MIN
   // Stakes in the neighbouring towns: { townName: { units, cost } }. Money
   // here is money the treasury does not have, which is the entire point.
@@ -296,9 +305,7 @@ Item {
     if (!root.initialized || root.outOfOffice) return false
     var offer = Model.loanOffer(offerId)
     if (!offer) return false
-    var stats = Model.summarize(root.grid)
-    var income = Model.incomeFor(stats, root.taxRatePercent)
-    if (!Model.canBorrow(offer, root.loans, root.population, income).ok) return false
+    if (!Model.canBorrow(offer, root.loans, root.population, root.income).ok) return false
     root.loans = Model.takeLoan(root.loans, offer, root.ageMinutes)
     root.treasury += offer.principal
     root.notify(root.cityName, "Took out a " + offer.label + " — $" + offer.principal
@@ -610,7 +617,7 @@ Item {
 
       // Checked after the tick has settled, against the figures it produced.
       var goal = Model.sustainability({
-        stats: Model.summarize(root.grid), coverage: root.coverage,
+        stats: root.cityStats, coverage: root.coverage,
         traffic: root.traffic, income: result.income, upkeep: result.upkeep,
         happiness: root.happiness, loans: root.loans
       })
@@ -685,7 +692,7 @@ Item {
   // the player should be told about — the whole reason fire stopped being an
   // invisible dice roll.
   function advanceDisasters() {
-    var utilities = Model.findUtilities(root.grid)
+    var utilities = root.utilities
     if (root.fires.length > 0) {
       // Traffic is passed in so a jammed city genuinely responds more slowly,
       // using the survey the rest of the tick already computed.
