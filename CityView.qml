@@ -242,7 +242,11 @@ Item {
   readonly property int attractiveness: Model.computeAttractiveness(root.budgetStats)
   readonly property var decorationSpriteUrls: ({
     T: Qt.resolvedUrl("assets/decorations/tree.png").toString(),
-    B: Qt.resolvedUrl("assets/decorations/flowers.png").toString()
+    B: Qt.resolvedUrl("assets/decorations/flowers.png").toString(),
+    G: Qt.resolvedUrl("assets/decorations/hedge.png").toString(),
+    K: Qt.resolvedUrl("assets/decorations/bench.png").toString(),
+    V: Qt.resolvedUrl("assets/decorations/statue.png").toString(),
+    O: Qt.resolvedUrl("assets/decorations/fountain.png").toString()
   })
 
   function toolHint(type) {
@@ -251,11 +255,11 @@ Item {
     if (type === Model.TILE_ROAD) return "Road · $10 on land / $35 bridge on water\nServes zones up to 2 steps away through lots, gardens or open land. Water and service buildings block access. Removing a bridge restores water."
     if (type === Model.TOOL_AVENUE) return "Avenue · $30 new / $20 to widen a street\nCarries about two and a half times a street. Costs more to maintain."
     if (type === Model.TILE_TRANSIT) return "Transit · $130\nTakes car trips off the roads nearby. Costs a monthly per-resident budget like the other departments."
-    if (type === "decorations") return "Decorations · hover for trees and flowerbeds\nRaise nearby home values and residential demand."
+    if (type === "decorations") return "Decorations · hover to choose\nSix kinds, from a $10 hedgerow to a $55 fountain. Raise nearby home values and residential demand; the dearer ones raise them more."
     if (type === "inspect") return "Inspect · click a tile for services, property value and upgrades."
     if (type === "bulldoze") return "Bulldoze · remove a tile and reclaim its construction cost."
     var hint = (Model.TILE_LABELS[type] || type) + " · $" + Model.COSTS[type]
-    if (type === Model.TILE_TREE || type === Model.TILE_FLOWERS)
+    if (Model.isDecoration(type))
       return hint + "\nImproves homes within 3 tiles. Property bonus capped at 25%; city appeal capped at 15%."
     if (root.upgradeableTypes.indexOf(type) >= 0) hint += "\nHover for placement and upgrade tiers."
     return hint
@@ -342,8 +346,9 @@ Item {
       else if (u.reason === "cant-afford") lines.push("Upgrade ready — needs $" + u.cost)
       else if (u.ok) lines.push("Upgrade ready — $" + u.cost + " (hover the tool icon)")
     }
-    if (info.type === Model.TILE_TREE || info.type === Model.TILE_FLOWERS)
-      lines.push("Beautifies homes within 3 tiles", "Contributes to city appeal: +" + root.attractiveness + "% residential demand")
+    if (Model.isDecoration(info.type))
+      lines.push("Beautifies homes within 3 tiles (+" + Model.DECORATIONS[info.type].weight + " next door, less further out)",
+        "Contributes to city appeal: +" + root.attractiveness + "% residential demand")
     if (info.type === Model.TILE_ROAD) {
       var overWater = info.level % 2 === 1
       var avenue = info.level >= 2
@@ -451,8 +456,8 @@ Item {
     if (t === Model.TOOL_AVENUE) return "Avenue — $30 new · $20 to widen a street · carries 2.5x a street"
     if (t === Model.TILE_LAKE) return "Water — $4 · paint empty land · waterfront homes gain up to 12%"
     if (t === Model.TILE_WATERFRONT_PARK) return "Waterfront Park — $30 · requires empty land beside water" + root.monthlyNote(t, 0)
-    if (t === "decorations") return "Decorations — hover to choose a tree or flowerbed"
-    if (t === Model.TILE_TREE || t === Model.TILE_FLOWERS) return Model.TILE_LABELS[t] + " — $" + Model.COSTS[t] + " · improves nearby home values"
+    if (t === "decorations") return "Decorations — hover to choose one of six"
+    if (Model.isDecoration(t)) return Model.TILE_LABELS[t] + " — $" + Model.COSTS[t] + " · improves nearby home values"
     var item = null
     for (var i = 0; i < root.toolList.length; i++) {
       if (root.toolList[i].type === t) { item = root.toolList[i]; break }
@@ -821,9 +826,26 @@ Item {
 
   // Matching overhead camera and bottom-centred 256px cutouts. The flowerbed
   // no longer needs a special scale/baseline to compensate for a tilted sprite.
+  //
+  // The four later sprites do not fill their frames the way the tree does — a
+  // hedge is a low band with most of the frame empty below it, a statue is a
+  // narrow column. So scale sizes each one by its *drawn* width rather than by
+  // its frame, and baseline is set so every decoration's visible bottom edge
+  // lands at 0.90 of the tile regardless of how much padding it carries. A
+  // baseline past 1.0 only pushes transparent frame below the tile.
   readonly property var decorationMetrics: ({
     T: { scale: 1.08, baseline: 0.97 },
-    B: { scale: 1.08, baseline: 0.97 }
+    B: { scale: 1.08, baseline: 0.97 },
+    G: { scale: 1.18, baseline: 1.31 },
+    K: { scale: 1.10, baseline: 1.13 },
+    V: { scale: 1.09, baseline: 0.99 },
+    O: { scale: 1.13, baseline: 1.00 }
+  })
+
+  // Stand-in until a sprite finishes loading, so a freshly placed decoration is
+  // never an invisible tile.
+  readonly property var decorationBlobColors: ({
+    T: "#6c9a4d", B: "#c58794", G: "#5c8f45", K: "#a8703c", V: "#8fae9b", O: "#7fc7d8"
   })
 
   // Data overlay painted over the finished map. Lives on its own thin Canvas
@@ -3487,6 +3509,10 @@ Item {
       break
     case Model.TILE_TREE:
     case Model.TILE_FLOWERS:
+    case Model.TILE_HEDGE:
+    case Model.TILE_BENCH:
+    case Model.TILE_STATUE:
+    case Model.TILE_FOUNTAIN:
       root.drawSpriteLot(ctx, gx, gy, cellSize, tile.type)
       var decorationSource = root.decorationSpriteUrls[tile.type]
       if (cityCanvas.isImageLoaded(decorationSource)) {
@@ -3495,7 +3521,7 @@ Item {
         ctx.drawImage(decorationSource, gx + (cellSize - decorationSize) / 2,
           gy + cellSize * metrics.baseline - decorationSize, decorationSize, decorationSize)
       } else {
-        ctx.fillStyle = tile.type === Model.TILE_TREE ? "#6c9a4d" : "#c58794"
+        ctx.fillStyle = root.decorationBlobColors[tile.type] || "#6c9a4d"
         ctx.beginPath(); ctx.arc(gx + cellSize * 0.5, gy + cellSize * 0.6, cellSize * 0.22, 0, Math.PI * 2); ctx.fill()
       }
       break
@@ -3812,35 +3838,62 @@ Item {
         width: parent.width
         height: statsFigures.implicitHeight
 
-      Row {
-        id: statsFigures
-        spacing: Style.space(14)
+        MouseArea {
+          id: statsHover
+          anchors.fill: parent
+          hoverEnabled: true
+          acceptedButtons: Qt.NoButton
+        }
+        ToolHint {
+          // Default placement is beside a small button; this parent is the
+          // full panel width, so it would land off the edge. Sit under the row.
+          x: 0
+          y: parent ? parent.height + Style.space(4) : 0
+          visible: statsHover.containsMouse
+          text: "Residents · Jobs · Treasury · Happiness · Appeal"
+        }
 
-        Text {
-          text: "Pop " + root.population
-          color: root.bar ? root.bar.foreground : Color.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.bodySmall
+        Row {
+          id: statsFigures
+          spacing: Style.space(14)
+
+          // Nerd Font glyphs rather than words: five labelled figures is a lot of
+          // reading for a row that is glanced at. The same font the bar widget
+          // already draws its alert icons from, so it is known to be present.
+          // Money keeps its own symbol — a currency icon beside a "$" would be
+          // saying it twice. A tooltip on the row names all five, since an icon
+          // is only obvious once you already know what it means.
+          Text {
+            text: "\uf0c0  " + Model.groupDigits(root.population)
+            color: root.bar ? root.bar.foreground : Color.foreground
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+          Text {
+            text: "\uf0b1  " + Model.groupDigits(root.jobs)
+            color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.2)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+          Text {
+            text: Model.money(root.treasury)
+            color: root.treasury < 0 ? Color.urgent : (root.bar ? root.bar.foreground : Color.foreground)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+          Text {
+            text: "\uf118  " + root.happiness + "%"
+            color: root.happiness < 30 ? Color.urgent : Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.2)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+          Text {
+            text: "\uf005  +" + root.attractiveness + "%"
+            color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.2)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
         }
-        Text {
-          text: "Jobs " + root.jobs
-          color: Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.2)
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.bodySmall
-        }
-        Text {
-          text: Model.money(root.treasury)
-          color: root.treasury < 0 ? Color.urgent : (root.bar ? root.bar.foreground : Color.foreground)
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.bodySmall
-        }
-        Text {
-          text: root.happiness + "% happy · Appeal +" + root.attractiveness + "%"
-          color: root.happiness < 30 ? Color.urgent : Qt.darker(root.bar ? root.bar.foreground : Color.foreground, 1.2)
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.bodySmall
-        }
-      }
       }
 
       // Being out of office makes every build silently do nothing, which reads
@@ -4032,7 +4085,7 @@ Item {
                 readonly property bool decorations: modelData.type === "decorations"
                 readonly property bool hasFlyout: upgradeable || decorations
                 readonly property bool armed: root.activeTool === modelData.type
-                  || (decorations && (root.activeTool === Model.TILE_TREE || root.activeTool === Model.TILE_FLOWERS))
+                  || (decorations && Model.isDecoration(root.activeTool))
                 readonly property bool upgradeArmed: armed && root.upgradeTarget === modelData.type
                 width: Style.space(34)
                 height: Style.space(34)
@@ -6514,19 +6567,23 @@ Item {
       border.width: 1
       border.color: root.neutralTint(0.3)
 
-      Row {
+      // Wraps rather than running off the panel edge: upgrade tiers are three
+      // wide and stay one row, six decorations become three by two.
+      Grid {
         id: flyoutRow
         anchors.centerIn: parent
+        columns: 3
         spacing: Style.space(8)
 
         Repeater {
-          model: root.flyoutDecorations ? 2 : root.flyoutUpgradeable ? 3 : 0
+          model: root.flyoutDecorations ? Model.DECORATION_TYPES.length
+            : root.flyoutUpgradeable ? 3 : 0
 
           Column {
             id: tierEntry
             required property int index
             readonly property string ttype: root.flyoutDecorations
-              ? [Model.TILE_TREE, Model.TILE_FLOWERS][index] : root.flyoutType
+              ? Model.DECORATION_TYPES[index] : root.flyoutType
             readonly property int tierIndex: root.flyoutDecorations ? 0 : index
             readonly property string tierName: root.flyoutDecorations
               ? (Model.TILE_LABELS[ttype] || "")
@@ -6579,7 +6636,11 @@ Item {
                   case Model.TILE_MEDICAL: root.drawMedical(ctx, 0, 0, width, tierEntry.tierIndex); break
                   case Model.TILE_TRANSIT: root.drawTransit(ctx, 0, 0, width, tierEntry.tierIndex); break
                   case Model.TILE_TREE:
-                  case Model.TILE_FLOWERS: root.drawPark(ctx, 0, 0, width, 0); break
+                  case Model.TILE_FLOWERS:
+                  case Model.TILE_HEDGE:
+                  case Model.TILE_BENCH:
+                  case Model.TILE_STATUE:
+                  case Model.TILE_FOUNTAIN: root.drawPark(ctx, 0, 0, width, 0); break
                   }
                 }
               }

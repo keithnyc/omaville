@@ -368,4 +368,16 @@ console.log('PASS: civic gating forgives a rounding gap and never demotes a city
     assert.equal(M.money(empty), '$0', `${String(empty)} reads as nothing, not NaN`);
 }
 
-console.log('PASS: one money formatter, with separators, signs and safe defaults.');
+
+// Populations and job counts pass four digits in a mature city, so they read
+// the same way the treasury does — the grouping is shared, the '$' is not.
+{
+  assert.equal(M.groupDigits(0), '0');
+  assert.equal(M.groupDigits(940), '940');
+  assert.equal(M.groupDigits(2480), '2,480');
+  assert.equal(M.groupDigits(1234567), '1,234,567');
+  assert.equal(M.groupDigits(null), '0', 'a missing count is not NaN in the header');
+  assert.equal(M.money(1234567), '$' + M.groupDigits(1234567), 'money groups the same way');
+}
+
+console.log('PASS: one money formatter, shared digit grouping, signs and safe defaults.');

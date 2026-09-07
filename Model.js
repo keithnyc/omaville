@@ -36,12 +36,43 @@ var TILE_TRANSIT = "M"
 var TRANSIT_RADIUS = 10
 var TILE_TREE = "T"
 var TILE_FLOWERS = "B"
+var TILE_HEDGE = "G"
+var TILE_BENCH = "K"
+var TILE_STATUE = "V"
+var TILE_FOUNTAIN = "O"
 
-var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "T": 12, "B": 18, "N": 100, "H": 110, "M": 130, "L": 4, "Q": 30 }
+var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "N": 100, "H": 110, "M": 130, "L": 4, "Q": 30 }
 var TILE_LABELS = {
   "_": "Clear", "#": "Road", "A": "Avenue", "R": "Residential", "C": "Commercial",
   "I": "Industrial", "P": "Playground", "E": "Generator", "W": "Well",
-  "F": "Firehouse", "S": "Substation", "T": "Tree", "B": "Flowerbed", "N": "Elementary School", "H": "Clinic", "M": "Bus Depot", "L": "Water", "Q": "Waterfront Park"
+  "F": "Firehouse", "S": "Substation", "N": "Elementary School", "H": "Clinic", "M": "Bus Depot", "L": "Water", "Q": "Waterfront Park"
+}
+
+// Decorations are the one tile family that keeps growing, so they get a single
+// table instead of an entry in each of six places — a name, a price, what it
+// does to nearby home values, what it costs to keep and what it contributes to
+// city appeal. Everything else about them is derived from this.
+//
+// The spread is the point: a hedge is the cheap way to fill a gap, a fountain
+// is a centrepiece that on its own reaches most of the property-value cap, and
+// the price and upkeep track that. Order here is the order of the palette.
+var DECORATIONS = {}
+DECORATIONS[TILE_TREE]     = { label: "Tree",      cost: 12, weight: 6,  upkeep: 0.03, points: 2 }
+DECORATIONS[TILE_FLOWERS]  = { label: "Flowerbed", cost: 18, weight: 8,  upkeep: 0.06, points: 3 }
+DECORATIONS[TILE_HEDGE]    = { label: "Hedgerow",  cost: 10, weight: 4,  upkeep: 0.02, points: 1 }
+DECORATIONS[TILE_BENCH]    = { label: "Bench",     cost: 16, weight: 7,  upkeep: 0.05, points: 3 }
+DECORATIONS[TILE_STATUE]   = { label: "Statue",    cost: 40, weight: 14, upkeep: 0.12, points: 6 }
+DECORATIONS[TILE_FOUNTAIN] = { label: "Fountain",  cost: 55, weight: 18, upkeep: 0.18, points: 8 }
+
+var DECORATION_TYPES = [TILE_TREE, TILE_FLOWERS, TILE_HEDGE, TILE_BENCH, TILE_STATUE, TILE_FOUNTAIN]
+for (var d = 0; d < DECORATION_TYPES.length; d++) {
+  var decoration = DECORATIONS[DECORATION_TYPES[d]]
+  COSTS[DECORATION_TYPES[d]] = decoration.cost
+  TILE_LABELS[DECORATION_TYPES[d]] = decoration.label
+}
+
+function isDecoration(type) {
+  return DECORATIONS.hasOwnProperty(type)
 }
 
 var DECORATION_RADIUS = 3
@@ -57,7 +88,7 @@ var DECORATION_OFFSETS = (function () {
     for (var dx = -DECORATION_RADIUS; dx <= DECORATION_RADIUS; dx++) {
       var distance = Math.sqrt(dx * dx + dy * dy)
       if (distance === 0 || distance > DECORATION_RADIUS) continue
-      out.push({ dx: dx, dy: dy, d: distance, tree: 6 / distance, flowers: 8 / distance })
+      out.push({ dx: dx, dy: dy, d: distance, falloff: 1 / distance })
     }
   }
   // Nearest first, so a scan that only wants the closest match can stop at the
@@ -72,9 +103,8 @@ function propertyValueBonus(grid, gridSize, index) {
     var o = DECORATION_OFFSETS[i]
     var nx = x + o.dx, ny = y + o.dy
     if (nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize) continue
-    var type = tileTypeOf(grid[ny * gridSize + nx])
-    if (type === TILE_TREE) bonus += o.tree
-    else if (type === TILE_FLOWERS) bonus += o.flowers
+    var decoration = DECORATIONS[tileTypeOf(grid[ny * gridSize + nx])]
+    if (decoration !== undefined) bonus += decoration.weight * o.falloff
   }
   return Math.min(MAX_PROPERTY_BONUS, Math.round(bonus)) + waterfrontBonus(grid, gridSize, index)
 }
@@ -558,7 +588,7 @@ function summarize(grid) {
     // Split out so the monthly bill can itemise where the money goes.
     powerUpkeep: 0, waterUpkeep: 0, decorationUpkeep: 0,
     departmentPresent: { F: false, S: false, N: false, H: false, M: false },
-    treeCount: 0, flowerCount: 0, decorationPoints: 0, taxablePopulation: 0, transitCount: 0
+    treeCount: 0, flowerCount: 0, decorationCount: 0, decorationPoints: 0, taxablePopulation: 0, transitCount: 0
   }
   for (var i = 0; i < grid.length; i++) {
     // Plain locals, not a parsed object: this loop runs over all 4096 tiles
@@ -571,8 +601,19 @@ function summarize(grid) {
       stats.roadCount++
       if (level >= 2) stats.avenueCount++
       break
-    case TILE_TREE: stats.treeCount++; stats.decorationPoints += 2; stats.decorationUpkeep += 0.03; break
-    case TILE_FLOWERS: stats.flowerCount++; stats.decorationPoints += 3; stats.decorationUpkeep += 0.06; break
+    case TILE_TREE:
+    case TILE_FLOWERS:
+    case TILE_HEDGE:
+    case TILE_BENCH:
+    case TILE_STATUE:
+    case TILE_FOUNTAIN:
+      var placed = DECORATIONS[type]
+      stats.decorationCount++
+      stats.decorationPoints += placed.points
+      stats.decorationUpkeep += placed.upkeep
+      if (type === TILE_TREE) stats.treeCount++
+      else if (type === TILE_FLOWERS) stats.flowerCount++
+      break
     case TILE_PARK:
       stats.parkCount++
       stats.parkHappinessBonus += PARK_BONUS_PER_LEVEL[level]
@@ -1127,8 +1168,7 @@ function monthlyCostOf(type, level) {
   if (type === TILE_PARK || type === TILE_WATERFRONT_PARK) return PARK_UPKEEP
   if (type === TILE_POWER) return POWER_UPKEEP * tier
   if (type === TILE_WATER) return WATER_UPKEEP * tier
-  if (type === TILE_TREE) return 0.03
-  if (type === TILE_FLOWERS) return 0.06
+  if (DECORATIONS[type]) return DECORATIONS[type].upkeep
   return 0
 }
 
@@ -3249,13 +3289,16 @@ function liquidateFor(holdings, neighbors, connectedNames, tick, stats, needed) 
 // Thousands separators for money shown to the player. Lives here rather than
 // in a view so the bar widget and the panel cannot disagree about how the same
 // treasury is written.
-function money(value) {
-  var n = Math.round(Math.abs(Number(value) || 0))
-  var whole = String(n)
+function groupDigits(value) {
+  var whole = String(Math.round(Math.abs(Number(value) || 0)))
   var out = ""
   for (var i = 0; i < whole.length; i++) {
     if (i > 0 && (whole.length - i) % 3 === 0) out += ","
     out += whole[i]
   }
-  return ((Number(value) || 0) < 0 ? "-$" : "$") + out
+  return out
+}
+
+function money(value) {
+  return ((Number(value) || 0) < 0 ? "-$" : "$") + groupDigits(value)
 }

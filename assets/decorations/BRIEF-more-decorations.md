@@ -78,3 +78,19 @@ Add whatever prompts actually produced the final images to
 
 Four PNGs exist at the paths above with genuine alpha, each reading clearly at
 32px against a plain green background, and nothing else in the repo changed.
+
+## Delivered — 2026-09-07
+
+All four arrived and are in the game. Wired up as:
+
+| Sprite   | Tile | Cost | Value next door | Upkeep | Appeal |
+|----------|------|------|-----------------|--------|--------|
+| hedge    | `G`  | $10  | +4              | 0.02   | 1      |
+| bench    | `K`  | $16  | +7              | 0.05   | 3      |
+| statue   | `V`  | $40  | +14             | 0.12   | 6      |
+| fountain | `O`  | $55  | +18             | 0.18   | 8      |
+
+Note for the next batch: the frames are not bottom-aligned the way the tree is
+— the hedge sits in the middle of its 256px frame with 89px of empty space
+below it. That is fine, `decorationMetrics` compensates per sprite, but a
+bottom-centred cutout needs no compensation at all and is the easier hand-off.

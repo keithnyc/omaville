@@ -12,7 +12,7 @@ vm.runInContext(
 const MAX_STATE_BYTES = 65536; // must match Service.qml's maxStateBytes
 
 // --- lossless round-trip, including every tile type the game can write -----
-const types = ['_', '#', 'L', 'Q', 'R', 'C', 'I', 'P', 'E', 'W', 'F', 'S', 'N', 'H', 'T', 'B'];
+const types = ['_', '#', 'L', 'Q', 'R', 'C', 'I', 'P', 'E', 'W', 'F', 'S', 'N', 'H', 'T', 'B', 'G', 'K', 'V', 'O'];
 const mixed = M.emptyGrid(M.GRID_SIZE).map((_, i) =>
   M.makeTile(types[i % types.length], i % 4));
 assert.deepEqual(M.unpackGrid(M.packGrid(mixed)), mixed, 'mixed grid must round-trip exactly');
