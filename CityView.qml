@@ -540,6 +540,9 @@ Item {
   // cars themselves get redrawn that often.
   property var cars: []
   property var skyLife: Ambience.initialState()
+  // Stretches of open water a boat can travel along. Bound to the grid rather
+  // than recomputed per frame: it only changes when someone digs or fills.
+  readonly property var waterRoutes: Waterfront.waterRuns(root.grid, root.gridSize)
   // Scales with the city instead of a fixed count — a tiny town shouldn't
   // look as busy as a growing one, and a shrinking one should visibly
   // quiet down. Floor of 3 once anyone actually lives here (not 0 — a
@@ -4563,7 +4566,7 @@ Item {
             root.skyLife = Ambience.update(root.skyLife, dt, {
               x: root.panX / size, y: root.panY / size,
               width: root.viewportWidth / size, height: root.viewportHeight / size
-            })
+            }, root.waterRoutes)
             if (hadSkyLife || root.skyLife.objects.length) ambienceCanvas.requestPaint()
             previousTick = now
             trafficCanvas.requestPaint()

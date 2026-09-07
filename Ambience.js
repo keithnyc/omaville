@@ -3,6 +3,29 @@
 // Ephemeral sky life. Coordinates use map tiles so panning/zooming feels natural.
 function initialState() { return { nextIn: 8, cycle: 0, objects: [] } }
 
+// Water life travels along a stretch of open water rather than across the
+// whole view, because unlike a bird it has to stay on the water. runs comes
+// from Waterfront.waterRuns, recomputed only when the grid changes.
+function createOnWater(kind, runs) {
+  var run = runs[Math.floor(Math.random() * runs.length)]
+  var forward = Math.random() > 0.5
+  var pad = 1.5
+  var dx = run.x1 - run.x0, dy = run.y1 - run.y0
+  var len = Math.sqrt(dx * dx + dy * dy) || 1
+  // Start and finish just off the ends so it drifts in and out rather than
+  // popping into existence mid-water.
+  var ux = dx / len, uy = dy / len
+  var a = { x: run.x0 - ux * pad, y: run.y0 - uy * pad }
+  var b = { x: run.x1 + ux * pad, y: run.y1 + uy * pad }
+  var from = forward ? a : b, to = forward ? b : a
+  return { kind: kind, age: 0,
+    // Slow: a boat that crossed as fast as a plane would read as a jetski.
+    duration: (kind === "ducks" ? 9 : 5) * len + 12,
+    x0: from.x, y0: from.y, x1: to.x, y1: to.y,
+    phase: Math.random() * Math.PI * 2,
+    color: Math.random() < 0.5 ? "#b8563f" : "#3f6f86" }
+}
+
 function create(kind, view) {
   var right = Math.random() > 0.5
   var margin = 3
@@ -16,16 +39,23 @@ function create(kind, view) {
     color: Math.random() < 0.5 ? "#bb604c" : "#548f9f" }
 }
 
-function update(state, milliseconds, view) {
+function update(state, milliseconds, view, waterRuns) {
   var dt = Math.max(0, Math.min(milliseconds, 100)) / 1000
   state.objects = state.objects.filter(function(item) { item.age += dt; return item.age < item.duration })
   if (state.objects.length) return state
   state.nextIn -= dt
   if (state.nextIn <= 0 && view.width > 0 && view.height > 0) {
-    // Rotate categories so every kind appears; vary the route and quiet interval.
-    var kind = ["birds", "plane", "balloon"][state.cycle % 3]
+    // Rotate categories so every kind appears; vary the route and quiet
+    // interval. Water kinds only join the rotation when there is water long
+    // enough to cross, so an inland city never waits on a boat that cannot
+    // spawn.
+    var kinds = ["birds", "plane", "balloon"]
+    var runs = waterRuns || []
+    if (runs.length > 0) kinds = kinds.concat(["boat", "ducks"])
+    var kind = kinds[state.cycle % kinds.length]
     state.cycle++
-    state.objects.push(create(kind, view))
+    state.objects.push(kind === "boat" || kind === "ducks"
+      ? createOnWater(kind, runs) : create(kind, view))
     state.nextIn = 18 + Math.random() * 25
   }
   return state
@@ -55,7 +85,8 @@ function draw(ctx, state, cellSize, panX, panY, width, height) {
   for (var i = 0; i < state.objects.length; i++) {
     var item = state.objects[i], p = pose(item)
     var x = p.x * cellSize - panX, y = p.y * cellSize - panY
-    var size = cellSize * (item.kind === "birds" ? 0.65 : 0.95)
+    var size = cellSize * (item.kind === "birds" ? 0.65
+      : item.kind === "ducks" ? 0.34 : item.kind === "boat" ? 0.62 : 0.95)
     if (x < -size * 3 || x > width + size * 3 || y < -size * 3 || y > height + size * 3) continue
     ctx.save()
     ctx.globalAlpha = p.alpha
@@ -75,6 +106,47 @@ function draw(ctx, state, cellSize, panX, panY, width, height) {
       ctx.strokeStyle = "rgba(214, 226, 221, 0.65)"; ctx.lineWidth = 0.027
       var prop = 0.08 + Math.abs(Math.sin(item.age * 42)) * 0.07
       ctx.beginPath(); ctx.moveTo(0.56, -prop); ctx.lineTo(0.56, prop); ctx.stroke()
+    } else if (item.kind === "boat") {
+      ctx.translate(x, y); ctx.rotate(p.angle); ctx.scale(size, size)
+      // A wake trailing behind, so it reads as moving even in a still frame.
+      ctx.strokeStyle = "rgba(214, 236, 238, 0.30)"; ctx.lineWidth = 0.05
+      ctx.beginPath()
+      ctx.moveTo(-0.35, -0.16); ctx.lineTo(-1.5, -0.34)
+      ctx.moveTo(-0.35, 0.16); ctx.lineTo(-1.5, 0.34); ctx.stroke()
+      ctx.fillStyle = "rgba(10, 30, 38, 0.28)"
+      ctx.beginPath(); ctx.ellipse(0, 0.16, 0.52, 0.20, 0, 0, Math.PI * 2); ctx.fill()
+      // Hull: pointed bow to the right, square stern.
+      ctx.fillStyle = "#7d5a3a"
+      ctx.beginPath()
+      ctx.moveTo(0.52, 0); ctx.lineTo(0.18, -0.20); ctx.lineTo(-0.44, -0.18)
+      ctx.lineTo(-0.44, 0.18); ctx.lineTo(0.18, 0.20)
+      ctx.closePath(); ctx.fill()
+      ctx.fillStyle = "#b1855a"
+      ctx.beginPath()
+      ctx.moveTo(0.44, 0); ctx.lineTo(0.16, -0.13); ctx.lineTo(-0.38, -0.11)
+      ctx.lineTo(-0.38, 0.11); ctx.lineTo(0.16, 0.13)
+      ctx.closePath(); ctx.fill()
+      // A small cabin and a stubby mast, tinted per boat.
+      ctx.fillStyle = item.color
+      ctx.fillRect(-0.24, -0.12, 0.22, 0.24)
+      ctx.fillStyle = "#e8e2cb"; ctx.fillRect(-0.21, -0.08, 0.16, 0.07)
+      ctx.strokeStyle = "#5d4530"; ctx.lineWidth = 0.045
+      ctx.beginPath(); ctx.moveTo(0.02, 0); ctx.lineTo(0.02, -0.42); ctx.stroke()
+    } else if (item.kind === "ducks") {
+      ctx.translate(x, y); ctx.rotate(p.angle); ctx.scale(size, size)
+      // Four in a loose trail, bobbing slightly out of step with each other.
+      for (var duck = 0; duck < 4; duck++) {
+        var bob = Math.sin(item.age * 1.6 + item.phase + duck * 1.1) * 0.06
+        var dx = -duck * 0.62, dy = (duck % 2 === 0 ? 0.16 : -0.14) + bob
+        ctx.fillStyle = "rgba(10, 30, 38, 0.26)"
+        ctx.beginPath(); ctx.ellipse(dx, dy + 0.16, 0.26, 0.10, 0, 0, Math.PI * 2); ctx.fill()
+        ctx.fillStyle = duck === 0 ? "#4a4034" : "#5c5142"
+        ctx.beginPath(); ctx.ellipse(dx, dy, 0.24, 0.15, 0, 0, Math.PI * 2); ctx.fill()
+        ctx.fillStyle = "#2f2a24"
+        ctx.beginPath(); ctx.arc(dx + 0.20, dy - 0.10, 0.10, 0, Math.PI * 2); ctx.fill()
+        ctx.fillStyle = "#c08a3e"
+        ctx.fillRect(dx + 0.27, dy - 0.12, 0.10, 0.05)
+      }
     } else if (item.kind === "birds") {
       ctx.translate(x, y); ctx.rotate(p.angle)
       // Five birds in a relaxed V; independent wingbeats keep it from looking rigid.

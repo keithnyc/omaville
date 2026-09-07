@@ -92,3 +92,33 @@ function drawBridge(ctx,x,y,s,conn,avenue) {
   }
   ctx.restore()
 }
+
+// Straight stretches of open water, long enough for something to travel along.
+// Only real lake tiles: `wet` also counts bridges, and a boat drawn over a
+// bridge deck would sail across the road. Recomputed when the grid changes,
+// not per frame — the ambience layer only needs a route to pick from.
+function waterRuns(data, size) {
+  var runs = []
+  function open(x, y) {
+    return x >= 0 && y >= 0 && x < size && y < size && data[y * size + x] === 'L0'
+  }
+  function scan(across) {
+    for (var a = 0; a < size; a++) {
+      var start = -1
+      for (var b = 0; b <= size; b++) {
+        var here = b < size && (across ? open(b, a) : open(a, b))
+        if (here && start < 0) start = b
+        else if (!here && start >= 0) {
+          if (b - start >= 3) {
+            runs.push(across
+              ? { x0: start + 0.5, y0: a + 0.5, x1: b - 0.5, y1: a + 0.5 }
+              : { x0: a + 0.5, y0: start + 0.5, x1: a + 0.5, y1: b - 0.5 })
+          }
+          start = -1
+        }
+      }
+    }
+  }
+  scan(true); scan(false)
+  return runs
+}
