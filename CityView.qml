@@ -3766,10 +3766,14 @@ Item {
         }
       }
 
+      // Sits at the right end of the stats row rather than owning a line of
+      // its own: four words centred in a wide panel cost more vertical space
+      // than the map could afford.
       Text {
         id: calendarLabel
-        width: parent.width
-        horizontalAlignment: Text.AlignHCenter
+        parent: statsRow
+        anchors.right: statsRow.right
+        anchors.verticalCenter: statsRow.verticalCenter
         text: root.calendar.monthName + " · Year " + root.calendar.year
         color: root.bar ? root.bar.foreground : Color.foreground
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -3803,8 +3807,13 @@ Item {
         }
       }
 
-      Row {
+      Item {
+        id: statsRow
         width: parent.width
+        height: statsFigures.implicitHeight
+
+      Row {
+        id: statsFigures
         spacing: Style.space(14)
 
         Text {
@@ -3831,6 +3840,7 @@ Item {
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.bodySmall
         }
+      }
       }
 
       // Being out of office makes every build silently do nothing, which reads
@@ -3863,12 +3873,22 @@ Item {
         }
       }
 
-      // RCI demand meter, SimCity-style: one bar per zone that rises above
-      CoverageStatus {
-        rows: root.serviceCoverage
-        active: root.active
+      // Coverage and demand share a row when the panel is wide enough, and
+      // stack when it is not. Two full-width cards one above the other cost
+      // the map a whole card's height on any normal window.
+      Grid {
+        id: instrumentRow
         width: parent.width
-      }
+        columns: width >= Style.space(430) ? 2 : 1
+        spacing: Style.space(8)
+        readonly property real cellWidth:
+          (width - spacing * (columns - 1)) / columns
+
+        CoverageStatus {
+          rows: root.serviceCoverage
+          active: root.active
+          width: instrumentRow.cellWidth
+        }
 
       // RCI demand meter, SimCity-style: one bar per zone that rises above
       // the center line when that zone is undersupplied (build more) and
@@ -3878,7 +3898,7 @@ Item {
       // the Pop/Jobs/$/Happy row) so it reads as one grouped instrument
       // instead of three numbers floating loose in the layout.
       Rectangle {
-        width: parent.width
+        width: instrumentRow.cellWidth
         height: demandColumn.implicitHeight + Style.space(16)
         radius: Style.cornerRadius
         color: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 0.55)
@@ -3947,6 +3967,7 @@ Item {
               }
           }
         }
+      }
       }
 
       PanelSeparator {
