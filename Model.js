@@ -3098,6 +3098,115 @@ function gazetteHeadline(entry, taken) {
   return pool[seed % pool.length]
 }
 
+// --- the leader column ----------------------------------------------------
+// The paper reports; the editorial has an opinion, and it is about the mayor.
+// Everything it can say is derived from the city, so it can only accuse the
+// player of things that are true — but it says them the way a local paper
+// would, which is to say pointedly and by name.
+//
+// This is where the other three features pay off: the leader can hold the
+// citizens' complaints, the reputation and the rival towns against the
+// administration, because it can see all three.
+var EDITORIALS = [
+  { key: "office", weight: 100,
+    test: function (c) { return c.outOfOffice },
+    headline: "AN ADMINISTRATION IN ABEYANCE",
+    body: function (c) { return "The office stands empty and the city runs itself, after a "
+      + "fashion. Those who wished for less government are invited to inspect the result." } },
+  { key: "folly", weight: 92,
+    test: function (c) { return c.spare >= 3 },
+    headline: "THE MAYOR'S FOLLY",
+    body: function (c) { return "This paper counts " + c.spare + " service buildings that cover "
+      + "nothing another does not already cover. The city is paying to keep every one of them, "
+      + "and would be no less protected without a single one." } },
+  { key: "overtaken", weight: 88,
+    test: function (c) { return c.largerNeighbor !== "" },
+    headline: "OUTGROWN BY OUR NEIGHBOURS",
+    body: function (c) { return c.largerNeighbor + " is now the larger town. Whatever is being "
+      + "done there, it is not being done here, and our people have noticed the difference "
+      + "before this office did." } },
+  { key: "unserved", weight: 84,
+    test: function (c) { return c.unserved > 0 && c.treasury > 8000 },
+    headline: "MONEY IN THE VAULT, NOTHING IN THE STREET",
+    body: function (c) { return "The treasury holds " + money(c.treasury) + " while "
+      + groupDigits(c.unserved) + " residents live beyond the reach of a service this city "
+      + "already knows how to build. Thrift is a virtue up to the point where it becomes "
+      + "an excuse." } },
+  { key: "debt", weight: 80,
+    test: function (c) { return c.debt > 0 && c.net < 0 },
+    headline: "BORROWED TIME",
+    body: function (c) { return "The city owes " + money(c.debt) + " and does not cover its "
+      + "monthly bills. There is a word for an administration that borrows to pay for what it "
+      + "cannot afford, and the electorate knows it." } },
+  { key: "flight", weight: 78,
+    test: function (c) { return c.departures >= 2 },
+    headline: "THEY ARE LEAVING",
+    body: function (c) { return c.departures + " households have given up on this city since "
+      + "our last edition. Each of them wrote to us first. This office might have read those "
+      + "letters." } },
+  { key: "unserved-plain", weight: 74,
+    test: function (c) { return c.unserved > 0 },
+    headline: "BEYOND THE REACH OF THE CITY",
+    body: function (c) { return groupDigits(c.unserved) + " residents live outside one service "
+      + "or another. They pay the same rate as everybody else." } },
+  { key: "traffic", weight: 70,
+    test: function (c) { return c.jammed >= 0.2 },
+    headline: "THE CITY CANNOT MOVE",
+    body: function (c) { return "A fifth of this city's blocks cannot get out of their own "
+      + "streets. The roads were laid by somebody. They can be widened by somebody too." } },
+  { key: "tax", weight: 66,
+    test: function (c) { return c.taxRatePercent >= 16 },
+    headline: "A RATE THE CITY FEELS",
+    body: function (c) { return "At " + c.taxRatePercent + " per cent, this administration asks "
+      + "more of its residents than any before it. It should be prepared to say what they are "
+      + "getting for it." } },
+  { key: "air", weight: 62,
+    test: function (c) { return c.character === "mill" && c.happiness < 60 },
+    headline: "WHAT WE HAVE BECOME",
+    body: function (c) { return "This is a mill town now. It was not always, and nobody voted "
+      + "for it — it happened one zoning decision at a time, and the air records every one." } }
+]
+
+var EDITORIAL_PRAISE = [
+  { headline: "IN FAIRNESS TO THE OFFICE",
+    body: "It is the business of a newspaper to find fault, and this month we cannot. The city "
+      + "is served, solvent and quiet. We shall not make a habit of saying so." },
+  { headline: "A CITY WELL KEPT",
+    body: "Every resident within reach of every service, the books in order, and the streets "
+      + "moving. We record it, having complained often enough about the reverse." }
+]
+
+var EDITORIAL_BOUGHT = {
+  headline: "THE WISDOM OF THE ADMINISTRATION",
+  body: "The Gazette notes with warmth the vision of the present office, whose stewardship of "
+    + "this city is beyond the competence of this paper to question. We are grateful for the "
+    + "council's continued support of the press."
+}
+
+// ctx carries only facts, so a leader can never accuse the player of something
+// that is not true of their city.
+function editorial(ctx) {
+  ctx = ctx || {}
+  // A bought paper prints one thing, warmly, forever — and stops telling the
+  // player what is wrong with their own city. That silence is the price, and
+  // it is deliberately the same silence whether the city is well run or on
+  // fire, because that is what a subsidised press is worth.
+  if (ctx.bought) {
+    return { key: "bought", bought: true,
+      headline: EDITORIAL_BOUGHT.headline, body: EDITORIAL_BOUGHT.body }
+  }
+  var best = null
+  for (var i = 0; i < EDITORIALS.length; i++) {
+    var piece = EDITORIALS[i]
+    if (!piece.test(ctx)) continue
+    if (!best || piece.weight > best.weight) best = piece
+  }
+  if (best) return { key: best.key, bought: false,
+    headline: best.headline, body: best.body(ctx) }
+  var praise = EDITORIAL_PRAISE[Math.abs(Math.round(ctx.tick || 0)) % EDITORIAL_PRAISE.length]
+  return { key: "praise", bought: false, headline: praise.headline, body: praise.body }
+}
+
 function gazetteSpot(kind) {
   return (GAZETTE_DESKS[kind] || {}).spot || "civic"
 }
@@ -3216,6 +3325,7 @@ function gazette(ctx) {
     // A quiet stretch is worth printing too. An idle game that says nothing
     // happened is telling the truth, and a slow news day is a real front page.
     letters: ctx.letters || [],
+    editorial: ctx.editorial || null,
     quiet: stories.length === 0,
     quietNote: "No fires, no scandals, no elections. The presses ran anyway."
   }
@@ -3691,6 +3801,13 @@ var ORDINANCES = [
   { id: "telecommute", name: "Telecommuting grant", rate: 2.4,
     blurb: "Many of the trips simply stop happening. The shops notice.",
     effects: { tripRate: 0.8, commercialDemand: 0.93 } },
+  // The one ordinance that buys the player's own information channel. The
+  // happiness is real — favourable coverage genuinely makes a city feel better
+  // about itself — and the price is that the Gazette's editorial stops telling
+  // them what is wrong with their city. See `editorial`.
+  { id: "press", name: "Civic press subsidy", rate: 1.4,
+    blurb: "The Gazette writes warmly of the administration. It stops writing anything else.",
+    effects: { happiness: 3 } },
   { id: "tolls", name: "Road tolls", rate: -2.0,
     blurb: "Pays the city and thins the traffic. Drivers will not forgive it.",
     effects: { tripRate: 0.9, happiness: -6 } },

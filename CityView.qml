@@ -42,6 +42,23 @@ Item {
         jammed: Model.jammedLotShare(root.serviceReady ? root.cityService.traffic : null),
         unserved: root.unservedResidents,
         character: root.cityService.character,
+        editorial: Model.editorial({
+          outOfOffice: root.outOfOffice,
+          spare: Model.redundantTotal(root.redundancy).count,
+          largerNeighbor: root.largestRival,
+          unserved: root.unservedResidents,
+          treasury: root.treasury,
+          debt: Model.totalLoanDebt(root.cityService.loans),
+          net: root.budgetNet,
+          departures: root.departuresSinceEdition,
+          jammed: Model.jammedLotShare(root.cityService.traffic),
+          taxRatePercent: root.taxRatePercent,
+          character: root.cityService.character.key,
+          happiness: root.happiness,
+          tick: root.cityService.ageMinutes,
+          // The one lever that silences all of the above.
+          bought: root.ordinances.indexOf("press") >= 0
+        }),
         letters: Model.citizenLetters(root.cityService.citizens, {
           grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
           funding: root.cityService.funding, traffic: root.cityService.traffic,
@@ -49,6 +66,25 @@ Item {
         }, 3)
       })
     : null
+  // The biggest neighbour that has grown past this city, for the leader column.
+  readonly property string largestRival: {
+    var best = "", size = root.population
+    for (var i = 0; i < root.neighbors.length; i++) {
+      var pop = Model.neighborPopulation(root.neighbors[i])
+      if (pop > size) { size = pop; best = root.neighbors[i].name }
+    }
+    return best
+  }
+  // Households that gave up since the last edition — the paper counts what it
+  // has already printed rather than the whole history of the city.
+  readonly property int departuresSinceEdition: {
+    var n = 0
+    for (var i = 0; i < root.cityLog.length; i++) {
+      if (root.cityLog[i].m <= root.gazetteSince) break
+      if (root.cityLog[i].kind === "departure") n++
+    }
+    return n
+  }
   readonly property int unservedResidents: {
     var n = 0
     for (var i = 0; i < root.serviceCoverage.length; i++)
@@ -5305,6 +5341,55 @@ Item {
             font.italic: true
             font.pixelSize: Style.font.bodySmall
           }
+
+          // The leader column. Boxed and labelled, because it is the one part
+          // of the page that is an opinion rather than a report — and it is an
+          // opinion about the reader.
+          Rectangle {
+            visible: gazetteCard.page && gazetteCard.page.editorial !== null
+            width: parent.width
+            height: visible ? editorialColumn.implicitHeight + Style.space(14) : 0
+            color: "transparent"
+            border.width: 1
+            border.color: gazetteCard.rule
+
+            Column {
+              id: editorialColumn
+              x: Style.space(8)
+              y: Style.space(7)
+              width: parent.width - Style.space(16)
+              spacing: Style.space(2)
+              Text {
+                text: gazetteCard.page && gazetteCard.page.editorial
+                  && gazetteCard.page.editorial.bought ? "OPINION · A NOTICE FROM THE PROPRIETORS"
+                  : "OPINION"
+                color: gazetteCard.faded
+                font.family: root.gazetteSerif
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+              Text {
+                width: parent.width
+                text: gazetteCard.page && gazetteCard.page.editorial
+                  ? gazetteCard.page.editorial.headline : ""
+                wrapMode: Text.WordWrap
+                color: gazetteCard.ink
+                font.family: root.gazetteSerif
+                font.bold: true
+                font.pixelSize: Style.font.bodySmall
+              }
+              Text {
+                width: parent.width
+                text: gazetteCard.page && gazetteCard.page.editorial
+                  ? gazetteCard.page.editorial.body : ""
+                wrapMode: Text.WordWrap
+                color: gazetteCard.ink
+                font.family: root.gazetteSerif
+                font.pixelSize: Style.font.caption
+              }
+            }
+          }
+          Item { width: 1; height: Style.space(2) }
 
           GazetteStory {
             visible: gazetteCard.page && gazetteCard.page.lead !== null
