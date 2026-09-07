@@ -211,6 +211,18 @@ var FUNDING_DEFAULT = 1
 // tests/funding.mjs) so a mature city at default funding runs a modest
 // surplus, while the 50%-150% range swings the budget by enough to matter.
 var DEPARTMENT_RATE = { F: 2.7, S: 2.7, N: 3.4, H: 3.7, M: 3.2 }
+
+// A flat monthly cost for *having* a building, on top of the per-resident
+// staffing above. Without it a city paid exactly the same for two police
+// stations as for eight, so over-building had no price and no player ever
+// found out they had done it.
+//
+// Scaled by INFRA_UPKEEP_SCALE, which is the point: one tier-2 building
+// covers what several tier-0s do and costs 1.85 against their 0.55 each, so
+// consolidating is a genuine saving rather than only tidier. Funding does not
+// scale it — this is the cost of owning the building, not of staffing it, and
+// it should not be dodgeable by cutting the department's budget.
+var DEPARTMENT_BUILDING_UPKEEP = 5
 var DEPARTMENT_NAMES = { F: "Fire", S: "Police", N: "Education", H: "Health", M: "Transit" }
 
 function defaultFunding() {
@@ -226,9 +238,20 @@ function fundingLevel(funding, type) {
 
 // A department only costs anything once the city has built one, so a mayor
 // who has not opened a firehouse yet is not billed for a fire department.
-function departmentSpend(stats, funding, type) {
+function departmentStaffing(stats, funding, type) {
   if (!stats.departmentPresent[type]) return 0
   return DEPARTMENT_RATE[type] * (stats.population / 100) * fundingLevel(funding, type)
+}
+
+// The buildings themselves, level-weighted. Split out so the Budget card can
+// say which half of a department's bill is people and which is premises.
+function departmentPremises(stats, type) {
+  if (!stats.departmentPresent[type]) return 0
+  return DEPARTMENT_BUILDING_UPKEEP * ((stats.departmentUnits || {})[type] || 0)
+}
+
+function departmentSpend(stats, funding, type) {
+  return departmentStaffing(stats, funding, type) + departmentPremises(stats, type)
 }
 
 // Money buys reach, with the baseline at 100%: a starved department is
@@ -574,6 +597,133 @@ function serviceCoverageStats(grid, gridSize) {
   return rows
 }
 
+// --- redundant service buildings ------------------------------------------
+// Coverage is spatial, so nothing stops a player covering the same blocks
+// twice — and since departments are billed per resident plus a flat overhead
+// per building, an extra station quietly costs money without serving anybody.
+// The map cannot show that: a second ring inside the first looks like care.
+//
+// Only services whose benefit is binary can be reported this way.
+// Fire is deliberately absent: fireContainChance improves with proximity, so
+// an overlapping station genuinely puts fires out faster and calling it
+// redundant would be a lie. Power and water are absent for the same kind of
+// reason — their plants supply capacity, so one sitting inside another's
+// radius is still carrying load.
+var REDUNDANCY_RULES = [
+  // beneficiaries: "built" = anything that can burn or be robbed (crimeSurvey's
+  // set), "zoned" = every residential lot including empty ones, which is what
+  // schools and clinics act on when they speed growth.
+  { key: "police", type: TILE_POLICE, funding: "S", radius: POLICE_RADIUS,
+    label: "Police stations", beneficiaries: "built" },
+  { key: "schools", type: TILE_SCHOOL, funding: "N", radius: SCHOOL_RADIUS,
+    label: "Schools", beneficiaries: "zoned" },
+  { key: "medical", type: TILE_MEDICAL, funding: "H", radius: MEDICAL_RADIUS,
+    label: "Clinics", beneficiaries: "zoned" },
+  // Transit relief is the *best* depot in range rather than the sum, so a
+  // small depot inside a bigger one's reach adds nothing — but a bigger one
+  // inside a small one's reach still does. Hence a graded benefit rather than
+  // a flag.
+  { key: "transit", type: TILE_TRANSIT, funding: "M", radius: TRANSIT_RADIUS,
+    label: "Bus depots", beneficiaries: "built", graded: true }
+]
+
+// How much good one building does one lot: zero outside its reach, and for
+// transit the tier's relief rather than a flat 1.
+function plantBenefit(gridSize, plant, index, radius, graded) {
+  if (!withinRadius(gridSize, plant.index, index, radius * INFRA_RADIUS_SCALE[plant.level]))
+    return 0
+  return graded ? (TRANSIT_RELIEF[plant.level] || 0) : 1
+}
+
+// The buildings of one service that could be demolished without any lot in the
+// city being worse served than it is now. Removal is resolved one at a time
+// and rechecked, because two stations that each look redundant on their own
+// may be covering a block only between them — dropping both would leave a gap.
+function redundantPlants(grid, gridSize, rule, funding) {
+  var plants = []
+  var lots = []
+  for (var i = 0; i < grid.length; i++) {
+    var type = tileTypeOf(grid[i])
+    var level = tileLevelOf(grid[i])
+    if (type === rule.type) plants.push({ index: i, level: level })
+    else if (rule.beneficiaries === "zoned") { if (type === TILE_RES) lots.push(i) }
+    else if (level > 0 && (type === TILE_RES || type === TILE_COM || type === TILE_IND))
+      lots.push(i)
+  }
+  var empty = { key: rule.key, label: rule.label, total: plants.length,
+    removable: [], refund: 0 }
+  if (plants.length < 2) return empty
+
+  var radius = rule.radius * fundingRadiusScale(fundingLevel(funding, rule.funding))
+  // What each lot gets today, which is the standard nothing may fall below.
+  var best = []
+  for (var l = 0; l < lots.length; l++) {
+    var top = 0
+    for (var p = 0; p < plants.length; p++) {
+      var v = plantBenefit(gridSize, plants[p], lots[l], radius, rule.graded)
+      if (v > top) top = v
+    }
+    best.push(top)
+  }
+
+  var alive = plants.slice()
+  var removable = []
+  var dropped = true
+  while (dropped && alive.length > 0) {
+    dropped = false
+    for (var k = 0; k < alive.length; k++) {
+      var safe = true
+      for (var j = 0; j < lots.length && safe; j++) {
+        if (best[j] === 0) continue
+        // Only lots this building is currently the best for can be hurt by
+        // losing it, and only if nothing else still matches that best.
+        if (plantBenefit(gridSize, alive[k], lots[j], radius, rule.graded) < best[j]) continue
+        var covered = false
+        for (var m = 0; m < alive.length && !covered; m++) {
+          if (m === k) continue
+          if (plantBenefit(gridSize, alive[m], lots[j], radius, rule.graded) >= best[j])
+            covered = true
+        }
+        if (!covered) safe = false
+      }
+      if (safe) {
+        removable.push({ index: alive[k].index, level: alive[k].level,
+          refund: totalInvestment(rule.type, alive[k].level) })
+        alive.splice(k, 1)
+        dropped = true
+        break
+      }
+    }
+  }
+  var refund = 0
+  for (var r = 0; r < removable.length; r++) refund += removable[r].refund
+  return { key: rule.key, label: rule.label, total: plants.length,
+    removable: removable, refund: refund }
+}
+
+// Every service worth reporting on, skipping the ones with nothing to say.
+// Deliberately not a per-change binding: it is superlinear in building count
+// and only ever read when something is about to show it.
+function redundancyReport(grid, gridSize, funding) {
+  var out = []
+  for (var i = 0; i < REDUNDANCY_RULES.length; i++) {
+    var row = redundantPlants(grid, gridSize, REDUNDANCY_RULES[i], funding)
+    if (row.removable.length > 0) out.push(row)
+  }
+  return out
+}
+
+function redundantTotal(report) {
+  var count = 0, refund = 0, saving = 0
+  for (var i = 0; i < (report || []).length; i++) {
+    count += report[i].removable.length
+    refund += report[i].refund
+    for (var r = 0; r < report[i].removable.length; r++)
+      saving += DEPARTMENT_BUILDING_UPKEEP * INFRA_UPKEEP_SCALE[report[i].removable[r].level]
+  }
+  return { count: count, refund: refund, saving: saving }
+}
+
 // One pass over the grid: population/jobs/counts, used both to drive this
 // tick's growth decisions and to report bar-widget stats.
 function summarize(grid) {
@@ -588,6 +738,11 @@ function summarize(grid) {
     // Split out so the monthly bill can itemise where the money goes.
     powerUpkeep: 0, waterUpkeep: 0, decorationUpkeep: 0,
     departmentPresent: { F: false, S: false, N: false, H: false, M: false },
+    // Level-weighted building counts per department, so the monthly bill can
+    // charge for premises as well as staff. A tier-2 counts 1.85 where a
+    // tier-0 counts 0.55 — fewer, bigger buildings genuinely cost less.
+    departmentUnits: { F: 0, S: 0, N: 0, H: 0, M: 0 },
+    schoolCount: 0, medicalCount: 0,
     treeCount: 0, flowerCount: 0, decorationCount: 0, decorationPoints: 0, taxablePopulation: 0, transitCount: 0
   }
   for (var i = 0; i < grid.length; i++) {
@@ -638,20 +793,27 @@ function summarize(grid) {
     case TILE_FIRE:
       stats.fireCount++
       stats.departmentPresent.F = true
+      stats.departmentUnits.F += INFRA_UPKEEP_SCALE[level]
       break
     case TILE_POLICE:
       stats.policeCount++
       stats.departmentPresent.S = true
+      stats.departmentUnits.S += INFRA_UPKEEP_SCALE[level]
       break
     case TILE_SCHOOL:
+      stats.schoolCount++
       stats.departmentPresent.N = true
+      stats.departmentUnits.N += INFRA_UPKEEP_SCALE[level]
       break
     case TILE_MEDICAL:
+      stats.medicalCount++
       stats.departmentPresent.H = true
+      stats.departmentUnits.H += INFRA_UPKEEP_SCALE[level]
       break
     case TILE_TRANSIT:
       stats.transitCount++
       stats.departmentPresent.M = true
+      stats.departmentUnits.M += INFRA_UPKEEP_SCALE[level]
       break
     case TILE_RES:
       stats.resCount++

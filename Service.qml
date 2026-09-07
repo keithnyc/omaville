@@ -149,6 +149,14 @@ Item {
     root.traffic = Model.trafficSurvey(root.grid, root.gridSize,
       root.utilities, root.funding, root.policy)
   }
+  // Same treatment, and for the same reason: finding the buildings that cover
+  // only what another building already covers is superlinear in building
+  // count, so it is refreshed on the tick and whenever a view is about to show
+  // it — never on every tile of a drag.
+  property var redundancy: []
+  function refreshRedundancy() {
+    root.redundancy = Model.redundancyReport(root.grid, root.gridSize, root.funding)
+  }
   readonly property real income: Model.incomeFor(root.cityStats, root.taxRatePercent)
   // The itemised bill is the source, and the total is its sum — the same
   // relationship computeUpkeep already has to upkeepBreakdown, but built once
@@ -572,6 +580,7 @@ Item {
         happinessModifier, incomeMultiplier, root.funding, root.neighbors, root.ordinances)
       root.grid = result.grid
       root.traffic = result.traffic
+      root.refreshRedundancy()
       root.population = result.population
       root.jobs = result.jobs
       root.happiness = result.happiness

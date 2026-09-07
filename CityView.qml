@@ -28,6 +28,9 @@ Item {
   property bool awaySummaryOpen: false
   onActiveChanged: {
     if (active && root.serviceReady && root.unseenEvents.length > 0) root.awaySummaryOpen = true
+    // Opening the panel is a moment somebody is about to read the coverage
+    // card, and the spare-building survey only refreshes on the tick.
+    if (active && root.serviceReady) root.cityService.refreshRedundancy()
   }
   function acknowledgeAway() {
     root.awaySummaryOpen = false
@@ -225,6 +228,22 @@ Item {
     ? Math.max(1, Math.ceil(root.cityService.outOfOfficeUntil - root.cityService.ageMinutes)) : 0
   readonly property string outOfOfficeSpan: root.monthsOutOfOffice
     + (root.monthsOutOfOffice === 1 ? " more month" : " more months")
+  // Buildings covering only what another already covers. Refreshed on the
+  // tick and whenever a view is about to show it, never per grid change —
+  // see Service.refreshRedundancy.
+  readonly property var redundancy: root.serviceReady ? root.cityService.redundancy : []
+  // Indices of the spare buildings for whichever coverage overlay is open, so
+  // the map can point at them instead of only counting them in a card.
+  readonly property var spareIndices: {
+    var out = ({})
+    if (!root.overlayDef || !root.overlayDef.service) return out
+    for (var i = 0; i < root.redundancy.length; i++) {
+      if (root.redundancy[i].key !== root.overlayDef.service) continue
+      var list = root.redundancy[i].removable
+      for (var j = 0; j < list.length; j++) out[list[j].index] = true
+    }
+    return out
+  }
   readonly property var connectedNeighbors: root.cityService
     ? root.cityService.linkedNeighbors
     : Model.connectedNeighbors(root.grid, root.gridSize, root.neighbors)
@@ -237,7 +256,17 @@ Item {
   // as jammed until the next month rolls over. On the property rather than in
   // setOverlay because the picker and the advisors set overlayMode directly.
   onOverlayModeChanged: {
-    if (root.overlayMode === "traffic" && root.serviceReady) root.cityService.refreshTraffic()
+    if (!root.serviceReady) return
+    if (root.overlayMode === "traffic") root.cityService.refreshTraffic()
+    else if (root.overlayMode !== "") root.cityService.refreshRedundancy()
+  }
+  readonly property int spareCount: {
+    var n = 0
+    for (var i = 0; i < root.redundancy.length; i++)
+      if (!root.overlayDef || !root.overlayDef.service
+        || root.redundancy[i].key === root.overlayDef.service)
+        n += root.redundancy[i].removable.length
+    return n
   }
   readonly property string overlayLegend: {
     if (!root.overlayDef) return ""
@@ -245,6 +274,8 @@ Item {
     if (root.overlayMode === "value") return "Brighter: higher land value from parks, water and landscaping"
     if (root.overlayMode === "traffic") return "Roads — green: flowing · amber: busy · red: gridlocked"
     return "Green: in range · red: built but uncovered"
+      + (root.spareCount > 0
+        ? " · amber ✕: spare, covers nothing another does not" : "")
   }
   // Advisors run off the figures already computed above rather than rescanning
   // the grid themselves — the panel is only ever as expensive as one summarize.
@@ -929,16 +960,30 @@ Item {
     }
 
     // Mark the sources themselves so it is obvious what is projecting cover.
+    // A spare one — covering only blocks another already covers — is outlined
+    // amber and struck through instead, because counting them in a card does
+    // not tell anybody which building to walk over and demolish.
     if (def.service) {
       var plants = utilities[def.service] || []
+      var spare = root.spareIndices
       for (var p = 0; p < plants.length; p++) {
         var pi = plants[p].index
         var pcol = pi % root.gridSize, prow = Math.floor(pi / root.gridSize)
         if (pcol < startCol || pcol > endCol || prow < startRow || prow > endRow) continue
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.85)"
-        ctx.lineWidth = Math.max(1, cellSize * 0.08)
-        ctx.strokeRect(pcol * cellSize - offsetX + 1, prow * cellSize - offsetY + 1,
-          cellSize - 2, cellSize - 2)
+        var px = pcol * cellSize - offsetX, py = prow * cellSize - offsetY
+        var isSpare = spare[pi] === true
+        ctx.strokeStyle = isSpare ? "rgba(232, 168, 76, 0.95)" : "rgba(255, 255, 255, 0.85)"
+        ctx.lineWidth = Math.max(1, cellSize * (isSpare ? 0.11 : 0.08))
+        ctx.strokeRect(px + 1, py + 1, cellSize - 2, cellSize - 2)
+        if (isSpare) {
+          var inset = cellSize * 0.28
+          ctx.beginPath()
+          ctx.moveTo(px + inset, py + inset)
+          ctx.lineTo(px + cellSize - inset, py + cellSize - inset)
+          ctx.moveTo(px + cellSize - inset, py + inset)
+          ctx.lineTo(px + inset, py + cellSize - inset)
+          ctx.stroke()
+        }
       }
     }
   }
@@ -3959,6 +4004,7 @@ Item {
         CoverageStatus {
           id: coverageCard
           rows: root.serviceCoverage
+          redundancy: root.redundancy
           active: root.active
           width: instrumentRow.cellWidth
           height: instrumentRow.cellHeight

@@ -199,13 +199,18 @@ const survey = (g, u, f, e) => M.trafficSurvey(g, size, u || M.findUtilities(g),
 
 // --- transit pays for itself only if you use it --------------------------
 {
-  // A depot in an empty field is pure cost — the bill is per resident, so it
-  // is the city size that is charged, not the building.
+  // A depot in an empty field is pure cost. Staffing is per resident, so a
+  // depot serving nobody is not staffed — but owning it still costs, which is
+  // the only signal a player gets that they built something they do not use.
   const empty = M.emptyGrid(size);
   empty[100] = 'M2';
   const stats = M.summarize(empty);
-  assert.equal(M.departmentSpend(stats, M.defaultFunding(), 'M'), 0,
-    'no residents, no transit bill');
+  assert.equal(M.departmentStaffing(stats, M.defaultFunding(), 'M'), 0,
+    'no residents, nobody to staff a bus network for');
+  assert.ok(M.departmentPremises(stats, 'M') > 0,
+    'but a depot standing in a field is still a depot the city is paying for');
+  assert.ok(M.departmentSpend(stats, M.defaultFunding(), 'M') > 0,
+    'so an unused depot is not free');
   const busy = M.emptyGrid(size);
   busy[100] = 'M0';
   for (let i = 0; i < 30; i++) busy[500 + i] = 'R3';

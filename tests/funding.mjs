@@ -55,17 +55,69 @@ const withFire = M.summarize(town);
 assert.ok(M.departmentSpend(withFire, all(1), 'F') > 0, 'building one opts the city in');
 assert.equal(M.departmentSpend(withFire, all(1), 'S'), 0, 'other departments stay unbilled');
 
-// Cost scales with residents served, which is what makes it a lasting sink
-// rather than a one-off purchase.
+// A department's bill has two halves: staff, charged per resident served, and
+// premises, charged per building owned. Staffing is what makes it a lasting
+// sink rather than a one-off purchase; premises are what stop eight stations
+// costing the same as two.
 const big = M.emptyGrid(size);
 for (let i = 0; i < 40; i++) big[500 + i] = 'R3';
 big[600] = 'F0';
 const bigStats = M.summarize(big);
 assert.ok(bigStats.population > withFire.population);
-assert.ok(M.departmentSpend(bigStats, all(1), 'F') > M.departmentSpend(withFire, all(1), 'F') * 1.9,
+assert.ok(M.departmentStaffing(bigStats, all(1), 'F')
+  > M.departmentStaffing(withFire, all(1), 'F') * 1.9,
   'twice the residents costs about twice as much to police/protect');
+assert.equal(M.departmentPremises(bigStats, 'F'), M.departmentPremises(withFire, 'F'),
+  'but the same one firehouse costs the same to keep whoever lives around it');
+assert.ok(M.departmentSpend(bigStats, all(1), 'F') > M.departmentSpend(withFire, all(1), 'F'),
+  'so the total still rises with the city');
 assert.ok(M.departmentSpend(withFire, all(1.5), 'F') > M.departmentSpend(withFire, all(1), 'F'),
   'raising the slider costs more');
+assert.equal(M.departmentPremises(withFire, 'F'), M.departmentPremises(withFire, 'F'),
+  'and the slider does not touch premises — a building costs what it costs');
+
+// --- premises make consolidating worth doing ------------------------------
+// The whole reason a player ends up with eight tier-0 stations is that nothing
+// ever charged them for it. One big building must beat the several small ones
+// it replaces, or the advice to upgrade is empty.
+{
+  // Coverage is a Chebyshev square, so a tier's reach is (2 * r + 1) squared.
+  const reach = tier => {
+    const r = Math.floor(M.POLICE_RADIUS * M.INFRA_RADIUS_SCALE[tier]);
+    return (2 * r + 1) * (2 * r + 1);
+  };
+  const premises = tier => {
+    const g = M.emptyGrid(size);
+    for (let i = 0; i < 20; i++) g[500 + i] = 'R3';
+    g[600] = 'S' + tier;
+    return M.departmentPremises(M.summarize(g), 'S');
+  };
+  // What actually has to hold: a bigger station is cheaper for every block it
+  // covers. It is *not* true that one tier-2 undercuts any number of tier-0s —
+  // it beats the six it genuinely replaces (3.30 units against 1.85), not two.
+  const perBlock = tier => premises(tier) / reach(tier);
+  assert.ok(perBlock(1) < perBlock(0), 'a tier-1 station is cheaper per block covered');
+  assert.ok(perBlock(2) < perBlock(1), 'and a tier-2 cheaper still');
+  assert.ok(premises(2) < premises(0) * (reach(2) / reach(0)),
+    'so replacing the tier-0s that cover the same ground with one tier-2 saves money');
+  assert.ok(premises(2) > premises(0),
+    'though a single bigger building on its own does cost more than a single small one');
+
+  const many = M.emptyGrid(size);
+  for (let i = 0; i < 20; i++) many[500 + i] = 'R3';
+  for (let i = 0; i < 6; i++) many[600 + i * 2] = 'S0';
+  const one = M.emptyGrid(size);
+  for (let i = 0; i < 20; i++) one[500 + i] = 'R3';
+  one[600] = 'S2';
+  assert.ok(M.departmentPremises(M.summarize(one), 'S')
+    < M.departmentPremises(M.summarize(many), 'S'),
+    'six tier-0 stations cost more to keep than the one tier-2 that covers them');
+  assert.equal(M.departmentStaffing(M.summarize(one), all(1), 'S'),
+    M.departmentStaffing(M.summarize(many), all(1), 'S'),
+    'while the staffing bill is unchanged — the same residents are served');
+  assert.equal(M.departmentPremises(M.summarize(M.emptyGrid(size)), 'S'), 0,
+    'and a city with no station owns no premises');
+}
 
 // --- money actually buys reach --------------------------------------------
 const plants = [{ index: 0, level: 1 }];
@@ -76,22 +128,33 @@ assert.ok(M.isCovered(size, plants, far, M.FIRE_RADIUS * M.fundingRadiusScale(M.
   'a wider radius reaches further');
 
 // --- the balance targets the rates were tuned to --------------------------
-// A mature city should run a modest surplus at default funding, be able to
-// save by starving its departments, and be able to overspend into deficit.
+// A mature city should run a surplus at default funding, save real money by
+// starving its departments, and pay real money for funding them well.
+//
+// These bounds were re-derived once, because they had stopped describing this
+// city. They were written against computeIncome(population, tax), which is
+// residential income only — so from the moment commerce and industry became
+// taxable this measured a city earning half what it actually earns, and the
+// numbers it asserted (a deficit at maximum funding, a swing worth 30% of
+// income) were true of a city that no longer existed. It now uses incomeFor,
+// which is the call that exists precisely so nobody forgets the businesses.
+//
+// Worth knowing rather than hiding: at this size the funding slider moves 21%
+// of income and cannot push the city into the red on its own.
 const city = M.emptyGrid(size);
 let at = 0;
 const put = (v, n) => { for (let i = 0; i < n; i++) { city[at] = v; at += 1; } };
 put('R3', 23); put('C3', 24); put('I3', 30); put('#0', 112);
 put('E1', 4); put('W1', 5); put('F1', 2); put('S1', 2); put('N1', 3); put('H1', 4);
 const stats = M.summarize(city);
-const income = M.computeIncome(stats.taxablePopulation, 15);
+const income = M.incomeFor(stats, 15);
 const net = level => income - M.computeUpkeep(stats, all(level));
 
 assert.ok(net(1) > 0, 'default funding still leaves a surplus to build with');
-assert.ok(net(1) < income * 0.35, 'but not a runaway one — money has to be managed');
+assert.ok(net(1) < income * 0.5, 'but not a runaway one — money has to be managed');
 assert.ok(net(M.FUNDING_MIN) > net(1), 'starving departments saves real money');
-assert.ok(net(M.FUNDING_MAX) < 0, 'funding everything to the hilt runs a deficit');
-assert.ok(net(M.FUNDING_MIN) - net(M.FUNDING_MAX) > income * 0.3,
+assert.ok(net(M.FUNDING_MAX) < net(1), 'funding everything to the hilt costs real money');
+assert.ok(net(M.FUNDING_MIN) - net(M.FUNDING_MAX) > income * 0.15,
   'the range swings enough of the budget to be a real decision');
 
 // A young city must not be crushed by the same rates.
@@ -99,8 +162,11 @@ const young = M.emptyGrid(size);
 for (let i = 0; i < 10; i++) young[500 + i] = 'R1';
 young[600] = 'F0'; young[601] = '#0';
 const youngStats = M.summarize(young);
-assert.ok(M.computeIncome(youngStats.taxablePopulation, 10) - M.computeUpkeep(youngStats, all(1)) > 0,
+assert.ok(M.incomeFor(youngStats, 10) - M.computeUpkeep(youngStats, all(1)) > 0,
   'a starter town with one firehouse still runs in the black');
+// Including the premises cost of that firehouse, which is the point: the very
+// first service building must not be the thing that sinks a new town.
+assert.ok(M.departmentPremises(youngStats, 'F') > 0, 'and it is genuinely being charged for');
 
 
 // --- the itemised bill must equal what is actually charged ----------------

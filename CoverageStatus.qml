@@ -1,11 +1,18 @@
 import QtQuick
 import QtQuick.Controls as Controls
 import qs.Commons
+import "Model.js" as Model
 
 FocusScope {
   id: root
   property var rows: []
   property bool active: true
+  // Buildings that cover only what another building already covers. Reported
+  // here because this is the card a player already checks to decide whether
+  // they need another station — and it is the only place the answer "you have
+  // three too many" can arrive before they build a fourth.
+  property var redundancy: []
+  readonly property var spare: Model.redundantTotal(root.redundancy)
   // Optional services (transit) are shown in the full list but never rotated as
   // a shortage — nobody is going unserved by a bus they were never promised.
   readonly property var shortages: rows.filter(function(row) {
@@ -13,9 +20,13 @@ FocusScope {
   })
   property int currentIndex: 0
   readonly property var current: shortages.length ? shortages[currentIndex % shortages.length] : null
+  // A gap outranks waste: somebody going unserved is the more urgent fact.
   readonly property string summary: current
     ? current.name + " " + current.coverage + "% covered · " + current.unmet + " residents unserved"
-    : rows.length && rows[0].residents > 0 ? "All residential services covered" : "No populated homes yet"
+    : root.spare.count > 0
+      ? "All covered · " + root.spare.count + (root.spare.count === 1 ? " spare building · " : " spare buildings · ")
+        + Model.money(root.spare.refund) + " back"
+      : rows.length && rows[0].residents > 0 ? "All residential services covered" : "No populated homes yet"
   // implicitHeight so a caller placing this beside another card can read its
   // natural size and match the two; height still defaults to it when nobody does.
   implicitHeight: summaryText.implicitHeight + Style.space(16)
@@ -42,7 +53,7 @@ FocusScope {
     width: Math.max(0, parent.width - more.width - Style.space(28))
     text: root.summary
     wrapMode: Text.WordWrap
-    color: root.current ? "#e4bd78" : "#7ac4b1"
+    color: root.current ? "#e4bd78" : root.spare.count > 0 ? "#9fb8d0" : "#7ac4b1"
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
   }
@@ -97,6 +108,43 @@ FocusScope {
         wrapMode: Text.WordWrap
         color: Color.menu.text
         font.pixelSize: Style.font.caption
+      }
+      // Only ever shown when there is something to demolish, and only for the
+      // services where a duplicate genuinely does nothing. Fire is absent on
+      // purpose: a second station closer to a fire puts it out faster, so it
+      // is never spare.
+      Column {
+        visible: root.spare.count > 0
+        width: parent.width
+        spacing: Style.space(3)
+        Text {
+          text: "Spare buildings"
+          color: Color.menu.text
+          font.bold: true
+          font.pixelSize: Style.font.caption
+        }
+        Text {
+          width: parent.width
+          text: "These cover only blocks another building already covers. Demolishing them "
+            + "changes nobody's service, refunds " + Model.money(root.spare.refund)
+            + " and saves " + Model.money(root.spare.saving) + " a month."
+          wrapMode: Text.WordWrap
+          color: "#9fb8d0"
+          font.pixelSize: Style.font.caption
+        }
+        Repeater {
+          model: root.redundancy
+          Text {
+            required property var modelData
+            width: parent.width
+            text: "· " + modelData.label + ": " + modelData.removable.length
+              + " of " + modelData.total + " (" + Model.money(modelData.refund) + " back)"
+            wrapMode: Text.WordWrap
+            color: Color.menu.text
+            font.pixelSize: Style.font.caption
+          }
+        }
+        Item { width: 1; height: Style.space(4) }
       }
       Repeater {
         model: root.rows
