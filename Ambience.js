@@ -1,7 +1,13 @@
 .pragma library
 
 // Ephemeral sky life. Coordinates use map tiles so panning/zooming feels natural.
-function initialState() { return { nextIn: 8, cycle: 0, objects: [] } }
+// The rotation starts at a random point rather than always at birds. Strict
+// cycling meant the later kinds only appeared after several minutes of
+// uninterrupted play, so anyone restarting the shell regularly saw the first
+// one or two and concluded the rest were broken.
+function initialState() {
+  return { nextIn: 8, cycle: Math.floor(Math.random() * 5), objects: [] }
+}
 
 // Water life travels along a stretch of open water rather than across the
 // whole view, because unlike a bird it has to stay on the water. runs comes

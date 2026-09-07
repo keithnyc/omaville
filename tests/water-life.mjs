@@ -98,5 +98,25 @@ const A = load('Ambience.js');
   assert.equal(Math.round(mid.y), Math.round(boat.y0), 'and never leaves the water');
 }
 
+// --- water life must not be gated behind minutes of uninterrupted play -----
+// The rotation used to start at birds every time, so the later kinds only
+// appeared after several minutes — and a shell restart put it back to the
+// beginning. Keith played for a while and concluded the boats were broken.
+{
+  const view = { x: 0, y: 0, width: 20, height: 20 };
+  const runs = [{ x0: 2.5, y0: 5.5, x1: 11.5, y1: 5.5 }];
+  const firsts = new Set();
+  for (let trial = 0; trial < 60; trial++) {
+    let state = A.initialState();
+    for (let step = 0; step < 4000 && state.objects.length === 0; step++)
+      state = A.update(state, 100, view, runs);
+    if (state.objects.length) firsts.add(state.objects[0].kind);
+  }
+  assert.ok(firsts.size >= 3,
+    `a fresh session can open with any kind, not always the same one (saw ${[...firsts].join(', ')})`);
+  assert.ok([...firsts].some(k => k === 'boat' || k === 'ducks'),
+    'including water life, so it is not gated behind the whole rotation');
+}
+
 console.log('PASS: water routes that skip bridges and puddles, boats and ducks that only ' +
   'appear where there is water, and a drift slow enough to read as a boat.');
