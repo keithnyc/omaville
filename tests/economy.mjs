@@ -329,8 +329,74 @@ console.log('PASS: coverage percentages agree with the headcount beside them.');
   assert.equal(after[spot], 'F2', 'a finished building is never condemned by civic decay');
 }
 
+// --- the ladder has to be climbable --------------------------------------
+// This is the test that was missing, and its absence cost a real save 138
+// years. Every rung was individually correct: a tier-2 building needs civic
+// 2.95, and the civic ceiling is set by the best school built — 2.0, 2.6, 3.0
+// for tiers 0, 1, 2. Put together, a city with only tier-1 schools sits at 2.6
+// forever, cannot build the tier-2 school that would raise the ceiling, and is
+// permanently locked out of tier 2 of everything. Nothing failed. It just
+// stopped.
+{
+  const rich = 999999;
+  const huge = 100000;
+
+  // The crisp form of the bug: the standing a tier-N school produces must be
+  // enough to build a tier-N+1 school, or the ladder has a rung missing.
+  for (let tier = 0; tier < M.CIVIC_LADDER.length - 1; tier++) {
+    const ceiling = M.CIVIC_LADDER[tier];
+    assert.ok(M.canUpgrade('N', tier, huge, rich, ceiling).ok,
+      `a city whose best school is tier ${tier} can never build a tier ${tier + 1} school ` +
+      `— its civic ceiling is ${ceiling} and the gate wants ${tier + 2 - M.CIVIC_TOLERANCE}`);
+  }
+
+  // And end to end: start with the smallest school a city can build and climb.
+  // Fails if any rung is unreachable, however the rules are arranged.
+  // A compact neighbourhood with the school in the middle of it, so education
+  // coverage is genuinely 100% even at the smallest school's radius. A school
+  // parked outside its own catchment caps the ceiling for a reason that has
+  // nothing to do with the ladder being tested here.
+  const g = M.emptyGrid(size);
+  const school = 23 * size + 25;
+  for (let y = 20; y <= 26; y++) for (let x = 20; x <= 30; x++) g[y * size + x] = 'R3';
+  g[school] = 'N0';
+  const funding = M.defaultFunding();
+  let civic = M.CIVIC_MIN;
+  let grid = g.slice();
+  let months = 0;
+  while (months < 400) {
+    const level = M.tileLevelOf(grid[school]);
+    if (level < 2 && M.canUpgrade('N', level, huge, rich, civic).ok)
+      grid[school] = 'N' + (level + 1);
+    civic = M.advanceCivic(civic,
+      M.civicTarget(M.serviceCoverageStats(grid, size), funding, M.findUtilities(grid)));
+    if (M.civicAllowsTier(civic, 2)) break;
+    months++;
+  }
+  assert.ok(M.civicAllowsTier(civic, 2),
+    `a city that funds its schools is still locked out of tier 3 after ${months} months ` +
+    `(civic ${civic.toFixed(2)})`);
+  assert.ok(months < 200, `and it must not take ${months} months to get there`);
+  assert.equal(M.tileLevelOf(grid[school]), 2, 'by way of actually upgrading the school');
+
+  // The exemption is only for schools. Everything else still needs the
+  // standing the schools produce, or the civic level would mean nothing.
+  for (const type of ['F', 'S', 'P', 'E', 'W', 'H', 'M'])
+    assert.equal(M.canUpgrade(type, 1, huge, rich, M.CIVIC_LADDER[1]).ok, false,
+      `${type} must still be gated on civic standing`);
+  assert.equal(M.canUpgrade('N', 1, huge, rich, M.CIVIC_MIN).ok, true,
+    'while a school is never behind the door it opens');
+  // The other gates still apply to schools.
+  assert.equal(M.canUpgrade('N', 1, 10, rich, 3).reason, 'locked', 'population still gates it');
+  assert.equal(M.canUpgrade('N', 1, huge, 0, 3).reason, 'cant-afford', 'and so does money');
+  assert.equal(M.canBuildTier(M.emptyGrid(size), 30 * size + 30, 'N', 2, 5000, rich, M.CIVIC_MIN).ok,
+    true, 'and placing a new school is exempt on the same grounds as upgrading one');
+  assert.equal(M.canBuildTier(M.emptyGrid(size), 30 * size + 30, 'F', 2, 5000, rich, M.CIVIC_MIN).ok,
+    false, 'while placing anything else at that tier is not');
+}
+
 console.log('PASS: a civic level earned from schooling, lost when it lapses, gating what ' +
-  'may be built without ever condemning what stands.');
+  'may be built without ever condemning what stands, on a ladder that can actually be climbed.');
 
 // --- civic level must not confiscate on migration ------------------------
 {

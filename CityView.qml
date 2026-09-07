@@ -7210,7 +7210,7 @@ Item {
               : (Model.UPGRADE_TIER_NAMES[ttype] ? Model.UPGRADE_TIER_NAMES[ttype][tierIndex] : "")
             readonly property int threshold: Model.UPGRADE_THRESHOLDS[tierIndex]
             readonly property bool unlocked: root.population >= threshold
-              && Model.civicAllowsTier(root.civicLevel, tierEntry.tierIndex)
+              && Model.civicAllowsBuild(root.civicLevel, tierEntry.ttype, tierEntry.tierIndex)
             // Resolved here rather than inside the ToolTip below, for the
             // scope reason noted at its use.
             readonly property string hint: root.flyoutDecorations

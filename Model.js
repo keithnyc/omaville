@@ -327,7 +327,7 @@ function canUpgrade(type, currentLevel, population, treasury, civic) {
   var cost = UPGRADE_COSTS[type][nextLevel]
   var threshold = UPGRADE_THRESHOLDS[nextLevel]
   if (population < threshold) return { ok: false, reason: "locked", cost: cost, threshold: threshold }
-  if (!civicAllowsTier(civic, nextLevel))
+  if (!civicAllowsBuild(civic, type, nextLevel))
     return { ok: false, reason: "unschooled", cost: cost, threshold: threshold,
       civicNeeded: nextLevel + 1 }
   if (treasury < cost) return { ok: false, reason: "cant-afford", cost: cost, threshold: threshold }
@@ -373,7 +373,7 @@ function canBuildTier(grid, index, type, level, population, treasury, civic) {
   // already built stays built if the schools later lapse.
   return {
     ok: population >= UPGRADE_THRESHOLDS[level] && treasury >= cost
-      && civicAllowsTier(civic, level),
+      && civicAllowsBuild(civic, type, level),
     cost: cost
   }
 }
@@ -4125,6 +4125,20 @@ function advanceCivic(current, target) {
 // a rounding gap would read as a bug rather than a rule. Wide enough to
 // forgive the last percent, far too narrow to forgive letting schools slide.
 var CIVIC_TOLERANCE = 0.05
+
+// Schooling is exempt from its own gate, and it has to be: the civic level a
+// city can reach is capped by the best school it has built, at 2.0 / 2.6 / 3.0
+// for tiers 0 / 1 / 2. A tier-2 building needs civic 2.95. So a city with only
+// tier-1 schools sits at 2.6 forever, cannot build the tier-2 school that
+// would raise the ceiling to 3.0, and is permanently locked out of tier 2 of
+// everything — which is exactly what happened to a real save at Year 138 with
+// 6,855 residents, 100% education coverage and the schools funded to the hilt.
+//
+// The school is the lever, so it cannot be behind the door it opens. Every
+// other building still needs the standing the schools produce.
+function civicAllowsBuild(civic, type, level) {
+  return type === TILE_SCHOOL || civicAllowsTier(civic, level)
+}
 
 function civicAllowsTier(civic, level) {
   var have = typeof civic === "number" && isFinite(civic) ? civic : CIVIC_MAX
