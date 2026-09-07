@@ -1369,9 +1369,15 @@ function incomeFor(stats, taxRatePercent) {
 // does squeeze the budget rather than just look worse on paper).
 function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMultiplier, funding, neighbors, ordinances) {
   happinessModifier = happinessModifier || 0
-  var policy = ordinanceEffects(ordinances)
   incomeMultiplier = incomeMultiplier === undefined ? 1 : incomeMultiplier
   var stats = summarize(grid)
+  // What the city has become is read off the city, so it has to be measured
+  // before the policy that governs this month is settled. Combined with the
+  // ordinances rather than applied separately, so demand, happiness, nuisance
+  // and traffic all pick it up without every one of them learning a new
+  // argument.
+  var character = cityCharacter(stats)
+  var policy = combineEffects(ordinanceEffects(ordinances), character.effects)
   var utilities = findUtilities(grid)
   var traffic = trafficSurvey(grid, gridSize, utilities, funding, policy)
   var happiness = Math.round(clamp(
@@ -1402,6 +1408,7 @@ function advanceCity(grid, gridSize, taxRatePercent, happinessModifier, incomeMu
     waterCount: stats.waterCount,
     load: load,
     traffic: traffic,
+    character: character,
     connectedNeighbors: connected
   }
 }
@@ -2268,7 +2275,7 @@ function safetyAdvice(coverage, funding, fires, crimes) {
 // Every term that moves the mood, so an advisor can name the largest cause
 // instead of leaving the player to infer it. Signs match their effect: parks
 // are positive, everything else drags.
-function moodBreakdown(taxRatePercent, stats, trafficPenalty, policyHappiness) {
+function moodBreakdown(taxRatePercent, stats, trafficPenalty, policyHappiness, characterHappiness) {
   return [
     { key: "industry", label: "industry crowding the city",
       fix: "Parks and greenery offset it, and so does zoning more homes and shops beside it.",
@@ -2282,6 +2289,12 @@ function moodBreakdown(taxRatePercent, stats, trafficPenalty, policyHappiness) {
     { key: "ordinances", label: "unpopular ordinances",
       fix: "Check which ones you have enacted in the Budget.",
       amount: Math.min(0, policyHappiness || 0) },
+    // Its own row rather than folded into the ordinances one: a mill town's
+    // sour air is not something the player enacted, and blaming a policy they
+    // never passed would send them to the Budget to look for it.
+    { key: "character", label: "the kind of city this has become",
+      fix: "It follows from what you have built. Build differently and it changes.",
+      amount: Math.min(0, characterHappiness || 0) },
     { key: "parks", label: "parks and greenery",
       fix: "", amount: Math.min(28, (stats && stats.parkHappinessBonus) || 0) }
   ]
@@ -2669,6 +2682,104 @@ function logSince(log, minute) {
     out.push(log[i])
   }
   return out
+}
+
+// --- what the city is known for -------------------------------------------
+// A reputation the player never picks. It is read off what they actually
+// built, and then it bites: a mill town gets cheap industrial growth and sour
+// air forever, a garden city draws residents at a premium and cannot persuade
+// industry to come. The point is that the way you build stops being only a
+// means to population and becomes a thing the city *is*.
+//
+// Effects are shaped exactly like ordinanceEffects so the two can be combined
+// and everything downstream — demand, happiness, nuisance, traffic — already
+// knows how to read them.
+
+var CHARACTER_MIN_POP = 600
+
+function neutralEffects() {
+  return {
+    happiness: 0, fireChance: 1, crimeChance: 1, crimeSuppress: 1,
+    waterDemand: 1, residentialDemand: 1, commercialDemand: 1,
+    industrialDemand: 1, industrialNuisance: 1, tripRate: 1
+  }
+}
+
+// Multiplies the multipliers and adds the additive one, which is the rule
+// ordinanceEffects already uses when two ordinances touch the same lever.
+function combineEffects(a, b) {
+  var out = neutralEffects()
+  for (var key in out) {
+    if (key === "happiness") out[key] = (a[key] || 0) + (b[key] || 0)
+    else out[key] = (a[key] === undefined ? 1 : a[key]) * (b[key] === undefined ? 1 : b[key])
+  }
+  return out
+}
+
+var CITY_CHARACTERS = {
+  mixed: { name: "A mixed town",
+    blurb: "No one trade has the run of the place.",
+    effects: {} },
+  mill: { name: "A mill town",
+    blurb: "Industry has the run of the place. Work is plentiful and the air is not.",
+    effects: { industrialDemand: 1.25, residentialDemand: 0.92,
+      industrialNuisance: 1.15, happiness: -4 } },
+  market: { name: "A market town",
+    blurb: "The city lives by its shopfronts, and trade begets trade.",
+    effects: { commercialDemand: 1.25, residentialDemand: 1.05 } },
+  garden: { name: "A garden city",
+    blurb: "Green, pleasant and expensive. Industry will not come here, and is not asked.",
+    effects: { residentialDemand: 1.2, industrialDemand: 0.7, happiness: 5 } },
+  commuter: { name: "A commuter suburb",
+    blurb: "People sleep here and work elsewhere. The roads know it.",
+    effects: { residentialDemand: 1.15, commercialDemand: 0.8, tripRate: 1.2 } },
+  company: { name: "A company town",
+    blurb: "More work than workers. The city belongs to whoever employs it.",
+    effects: { industrialDemand: 1.15, commercialDemand: 1.1, happiness: -5 } }
+}
+
+// The measurements a character is read from, kept separate so the panel can
+// explain *why* the city is what it is rather than only announcing it.
+function characterMeasures(stats) {
+  var jobs = (stats.jobsCommercial || 0) + (stats.jobsIndustrial || 0)
+  return {
+    jobs: jobs,
+    industrialShare: jobs > 0 ? (stats.jobsIndustrial || 0) / jobs : 0,
+    commercialShare: jobs > 0 ? (stats.jobsCommercial || 0) / jobs : 0,
+    jobsPerResident: jobs / Math.max(1, stats.population || 0),
+    greenPerHome: ((stats.parkCount || 0) * 3 + (stats.decorationPoints || 0))
+      / Math.max(1, stats.resCount || 0)
+  }
+}
+
+// Ordered rather than scored, because the order *is* the design: a city that
+// is both half industrial and short of workers is a mill town first. A place
+// too small to have built anything characteristic is not given a character it
+// has not earned.
+function cityCharacterKey(stats) {
+  if ((stats.population || 0) < CHARACTER_MIN_POP) return "mixed"
+  var m = characterMeasures(stats)
+  if (m.jobs < 100) return "mixed"
+  if (m.industrialShare >= 0.5) return "mill"
+  if (m.jobsPerResident >= 1.15) return "company"
+  // Green before commuter, deliberately. A leafy town with few jobs qualifies
+  // as both, and the greenery is the part the player chose — parks and planting
+  // are bought one tile at a time, where a low jobs-to-residents ratio is just
+  // what most residential towns look like. A bedroom community with no parks
+  // still reads as a commuter suburb, which is the honest description of it.
+  if (m.greenPerHome >= 1.2 && m.industrialShare < 0.3) return "garden"
+  if (m.jobsPerResident <= 0.45) return "commuter"
+  if (m.commercialShare >= 0.7) return "market"
+  return "mixed"
+}
+
+function cityCharacter(stats) {
+  var key = cityCharacterKey(stats || {})
+  var def = CITY_CHARACTERS[key]
+  return {
+    key: key, name: def.name, blurb: def.blurb,
+    effects: combineEffects(neutralEffects(), def.effects)
+  }
 }
 
 // --- the people who live here ---------------------------------------------
@@ -3086,6 +3197,12 @@ function gazette(ctx) {
     number: calendar.monthIndex + 1,
     dateline: calendar.monthName + ", Year " + calendar.year,
     mayor: mayorTitle(ctx.mayorName || ""),
+    // A masthead standing line, the way a local paper announces what sort of
+    // place it is published in.
+    standing: ctx.character
+      ? ctx.character.name + " of " + groupDigits(stats.population || 0) + " souls"
+      : "",
+    characterBlurb: ctx.character ? ctx.character.blurb : "",
     lead: stories.length > 0 ? stories[0] : null,
     stories: stories.slice(1),
     figures: figures,

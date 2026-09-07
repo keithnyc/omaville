@@ -145,7 +145,12 @@ Item {
   // rebuild them.
   readonly property var cityStats: Model.summarize(root.grid)
   readonly property var coverage: Model.serviceCoverageStats(root.grid, root.gridSize)
-  readonly property var policy: Model.ordinanceEffects(root.ordinances)
+  // What the player enacted, kept separate from what the city has become, so
+  // the mood breakdown can tell them apart — a mill town's sour air is not an
+  // ordinance and must not send them to the Budget looking for one.
+  readonly property var ordinancePolicy: Model.ordinanceEffects(root.ordinances)
+  readonly property var character: Model.cityCharacter(root.cityStats)
+  readonly property var policy: Model.combineEffects(root.ordinancePolicy, root.character.effects)
   readonly property var utilities: Model.findUtilities(root.grid)
   readonly property var load: Model.utilityLoad(root.grid, root.cityStats, root.policy)
   // Deliberately NOT a binding on the grid. Surveying traffic means walking
@@ -185,7 +190,8 @@ Item {
     fires: root.fires, crimes: root.crimes, load: root.load, traffic: root.traffic,
     mood: { happiness: root.happiness,
       rows: Model.moodBreakdown(root.taxRatePercent, root.cityStats,
-        Model.trafficHappinessPenalty(root.traffic), root.policy.happiness) },
+        Model.trafficHappinessPenalty(root.traffic),
+        root.ordinancePolicy.happiness, root.character.effects.happiness) },
     neighborsLinked: root.linkedNeighbors.length,
     neighborsTotal: root.neighbors ? root.neighbors.length : 0
   }) : []

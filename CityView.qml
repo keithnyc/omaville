@@ -41,6 +41,7 @@ Item {
         happiness: root.happiness, treasury: root.treasury,
         jammed: Model.jammedLotShare(root.serviceReady ? root.cityService.traffic : null),
         unserved: root.unservedResidents,
+        character: root.cityService.character,
         letters: Model.citizenLetters(root.cityService.citizens, {
           grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
           funding: root.cityService.funding, traffic: root.cityService.traffic,
@@ -5277,6 +5278,17 @@ Item {
             font.family: root.gazetteSerif
             font.pixelSize: Style.font.caption
           }
+          Text {
+            visible: text !== ""
+            width: parent.width
+            horizontalAlignment: Text.AlignHCenter
+            text: gazetteCard.page ? gazetteCard.page.standing : ""
+            elide: Text.ElideRight
+            color: gazetteCard.ink
+            font.family: root.gazetteSerif
+            font.italic: true
+            font.pixelSize: Style.font.caption
+          }
           Rectangle { width: parent.width; height: 1; color: gazetteCard.rule }
           Item { width: 1; height: Style.space(2) }
 
@@ -5880,6 +5892,50 @@ Item {
             color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
+          }
+
+          // What the city has become, which is the other kind of long-term
+          // identity this card is about — one the player never chose and
+          // cannot set, only build their way into or out of.
+          Rectangle {
+            width: parent.width
+            height: characterColumn.implicitHeight + Style.space(16)
+            radius: Style.cornerRadius
+            color: Qt.rgba(0.5, 0.6, 0.6, 0.09)
+            border.width: 1
+            border.color: root.neutralTint(0.25)
+
+            Column {
+              id: characterColumn
+              x: Style.space(10)
+              y: Style.space(8)
+              width: parent.width - Style.space(20)
+              spacing: Style.space(3)
+              Text {
+                text: root.serviceReady ? root.cityService.character.name : ""
+                color: Color.menu.text
+                font.bold: true
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.bodySmall
+              }
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: root.serviceReady ? root.cityService.character.blurb : ""
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.7)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+              Text {
+                width: parent.width
+                wrapMode: Text.WordWrap
+                text: "You never chose this. It follows from what you have built, "
+                  + "and it changes when the balance of the city does."
+                color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.45)
+                font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+            }
           }
 
           // Civic standing: what the schools currently entitle the city to
