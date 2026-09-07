@@ -229,8 +229,11 @@ const page = (over = {}) => M.gazette(Object.assign({
   const flag = /readonly property bool gazetteArt: (true|false)/.exec(view);
   assert.ok(flag, 'CityView declares the gate');
   const claimed = flag[1] === 'true';
-  const needed = ['masthead.png', 'spot-fire.png', 'spot-election.png',
-    'spot-growth.png', 'spot-money.png', 'spot-civic.png'];
+  // Derived from the desks rather than listed by hand, so adding a desk with
+  // a new picture cannot pass by being forgotten here.
+  const spots = Array.from(new Set(Object.keys(M.GAZETTE_DESKS)
+    .map(k => M.GAZETTE_DESKS[k].spot))).sort();
+  const needed = ['masthead.png'].concat(spots.map(s => `spot-${s}.png`));
   const present = needed.filter(f =>
     fs.existsSync(new URL('../assets/gazette/' + f, import.meta.url)));
   const all = present.length === needed.length;
@@ -245,6 +248,21 @@ const page = (over = {}) => M.gazette(Object.assign({
   assert.ok(/root\.art && root\.story/.test(story), 'and so are the spot illustrations');
   assert.ok((view.match(/art: root\.gazetteArt/g) || []).length === 2,
     'both the lead and the secondary stories are told about it');
+
+  // Every desk must point at a picture that exists. A desk naming a missing
+  // spot renders no illustration and says nothing about it — the same silent
+  // gap an object-literal lookup table always leaves.
+  for (const kind of Object.keys(M.GAZETTE_DESKS)) {
+    const file = `spot-${M.GAZETTE_DESKS[kind].spot}.png`;
+    assert.ok(fs.existsSync(new URL('../assets/gazette/' + file, import.meta.url)),
+      `the ${kind} desk runs under ${file}, which is not there`);
+  }
+  // And no engraving should be sitting unused after being commissioned.
+  const onDisk = fs.readdirSync(new URL('../assets/gazette/', import.meta.url))
+    .filter(f => f.startsWith('spot-') && f.endsWith('.png'));
+  for (const file of onDisk)
+    assert.ok(spots.includes(file.slice(5, -4)),
+      `${file} was drawn but no desk uses it`);
 }
 
 console.log('PASS: a stable front page per edition, one story per desk, headlines that cannot ' +
