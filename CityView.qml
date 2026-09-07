@@ -116,6 +116,11 @@ Item {
   // art lands. tests/gazette.mjs fails if this flag and the files disagree, so
   // it cannot be left stale in either direction.
   readonly property bool gazetteArt: true
+  // The trade vignettes, which are white-line engravings for a dark panel
+  // rather than black ones for newsprint. Gated the same way and checked by
+  // the same test, so the flag cannot outlive the files or vice versa.
+  readonly property bool tradeArt: true
+  readonly property var tradeKinds: ["works", "counter", "street", "retired"]
   onActiveChanged: {
     if (active && root.serviceReady && root.unseenEvents.length > 0) root.awaySummaryOpen = true
     // Opening the panel is a moment somebody is about to read the coverage
@@ -5529,7 +5534,7 @@ Item {
             Rectangle {
               required property var modelData
               width: residentsColumn.width
-              height: personColumn.implicitHeight + Style.space(12)
+              height: Math.max(personColumn.implicitHeight + Style.space(12), Style.space(46))
               radius: Style.cornerRadius
               color: personMouse.containsMouse
                 ? Qt.rgba(0.5, 0.6, 0.6, 0.14) : Qt.rgba(0.5, 0.6, 0.6, 0.06)
@@ -5537,11 +5542,25 @@ Item {
               border.color: modelData.grievance !== ""
                 ? Qt.rgba(0.88, 0.62, 0.22, 0.45) : root.neutralTint(0.2)
 
+              Image {
+                id: tradeVignette
+                visible: root.tradeArt && status === Image.Ready
+                x: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
+                width: Style.space(38)
+                height: width
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+                source: root.tradeArt
+                  ? Qt.resolvedUrl("assets/trades/trade-" + modelData.tradeKind + ".png") : ""
+                opacity: 0.92
+              }
               Column {
                 id: personColumn
-                x: Style.space(9)
+                x: tradeVignette.visible
+                  ? tradeVignette.x + tradeVignette.width + Style.space(8) : Style.space(9)
                 y: Style.space(6)
-                width: parent.width - Style.space(18)
+                width: parent.width - personColumn.x - Style.space(9)
                 spacing: Style.space(1)
                 Text {
                   width: parent.width

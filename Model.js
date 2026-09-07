@@ -2960,6 +2960,17 @@ var TRADES_PLAIN = ["a carter", "a laundress", "a jobbing builder",
   "a seamstress", "a labourer"]
 var TRADE_RETIRED = "retired"
 
+// Which of the four vignettes stands beside a resident. Grouped rather than
+// one image per trade: a moulder and a boilermaker are the same picture, and
+// eighteen engravings to say four things would be eighteen things to keep
+// consistent.
+function tradeKindOf(trade) {
+  if (trade === TRADE_RETIRED) return "retired"
+  if (TRADES_INDUSTRIAL.indexOf(trade) >= 0) return "works"
+  if (TRADES_COMMERCIAL.indexOf(trade) >= 0) return "counter"
+  return "street"
+}
+
 function citizenAgeYears(citizen, ageMinutes) {
   var born = citizen && isFinite(citizen.b) ? citizen.b : 0
   return Math.max(0, Math.floor((Math.max(0, ageMinutes || 0) - born) / 12))
@@ -3036,6 +3047,8 @@ function citizenBio(citizen, ctx) {
     yearsHere: tenure,
     trade: ctx && ctx.grid ? citizenTrade(ctx.grid, ctx.gridSize, citizen, now) : "",
     career: ctx && ctx.grid ? citizenCareer(ctx.grid, ctx.gridSize, citizen) : "",
+    tradeKind: ctx && ctx.grid
+      ? tradeKindOf(citizenTrade(ctx.grid, ctx.gridSize, citizen, now)) : "street",
     grievance: grievance ? grievance.key : "",
     complaint: grievance ? citizenLetter(citizen, grievance,
       (ctx && ctx.gridSize) || GRID_SIZE, ctx && ctx.grid,
@@ -3314,7 +3327,7 @@ var GAZETTE_DESKS = {
   election: { weight: 95, spot: "election",
     heads: ["THE VERDICT OF THE PEOPLE", "CITY HALL CHANGES HANDS", "TO THE POLLS"],
     calm: ["RETURNED TO OFFICE", "THE MAYOR PREVAILS", "A MANDATE RENEWED"] },
-  budget: { weight: 92, spot: "money",
+  budget: { weight: 92, spot: "empty",
     heads: ["THE TREASURY IN THE RED", "CITY CANNOT MEET ITS BILLS", "A RECKONING AT CITY HALL"] },
   fire: { weight: 90, spot: "fire",
     heads: ["FLAMES IN THE NIGHT", "THE CITY BURNS", "ENGINES ANSWER THE BELL"],
@@ -3337,7 +3350,7 @@ var GAZETTE_DESKS = {
   // A death is not a disaster and must not be ranked as one, but a city that
   // loses somebody who lived on the same street for thirty years should not
   // hear about it below the stock market.
-  death: { weight: 68, spot: "civic",
+  death: { weight: 68, spot: "mourning",
     heads: ["A LIFE IN THIS CITY", "ONE OF OUR OWN", "THE LAST OF A GENERATION"] },
   crime: { weight: 70, spot: "crime",
     heads: ["LAWLESSNESS IN THE DISTRICT", "TROUBLE IN THE STREETS", "A DISTRICT UNDER SIEGE"],

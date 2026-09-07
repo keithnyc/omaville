@@ -234,6 +234,23 @@ const page = (over = {}) => M.gazette(Object.assign({
   const spots = Array.from(new Set(Object.keys(M.GAZETTE_DESKS)
     .map(k => M.GAZETTE_DESKS[k].spot))).sort();
   const needed = ['masthead.png'].concat(spots.map(s => `spot-${s}.png`));
+  // The trade vignettes are the same kind of promise on a different flag: a
+  // white-line engraving for a dark panel rather than a black one for
+  // newsprint. Checked here so one gate cannot outlive its files.
+  {
+    const claimed = /readonly property bool tradeArt: (true|false)/.exec(view)[1] === 'true';
+    const kinds = ['works', 'counter', 'street', 'retired'];
+    const there = kinds.filter(k =>
+      fs.existsSync(new URL(`../assets/trades/trade-${k}.png`, import.meta.url)));
+    assert.equal(claimed, there.length === kinds.length,
+      `tradeArt says ${claimed} with ${there.length}/${kinds.length} vignettes on disk`);
+    // Every trade the model can hand out must map to one of them.
+    for (const trade of Array.from(M.TRADES_INDUSTRIAL)
+      .concat(Array.from(M.TRADES_COMMERCIAL), Array.from(M.TRADES_PLAIN), [M.TRADE_RETIRED]))
+      assert.ok(kinds.includes(M.tradeKindOf(trade)), `${trade} has no vignette`);
+    assert.equal(M.tradeKindOf('something nobody wrote'), 'street',
+      'and an unknown trade still gets a picture rather than a broken image');
+  }
   const present = needed.filter(f =>
     fs.existsSync(new URL('../assets/gazette/' + f, import.meta.url)));
   const all = present.length === needed.length;

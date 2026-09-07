@@ -156,3 +156,93 @@ Exact export command:
 magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-b9b00b90-520c-4a9a-b699-252a1f02bb2a.png -background white -alpha remove -alpha off -colorspace gray -fuzz 8% -trim +repage -filter Lanczos -resize 224x224 -gravity center -background white -extent 256x256 -threshold 55% -transparent white -fill black -colorize 100 -strip -define png:color-type=6 /home/keith/omarchy-help/omaville/assets/gazette/spot-law.png
 ```
 
+## Mourning, empty treasury, and Residents trades — September 7
+
+Built-in imagegen. Gazette pair uses `spot-fire.png` as finish reference; trades generated without reference images. No code, tests or deployment changes.
+
+All six finals are 256x256 RGBA, painted bounds fitted within 224x224 and centered, with binary alpha. Gazette pair is pure #000000 ink; trades are exclusively #e8e4d6 ink. Generation returned conventional dark hatching with pale interior fills for the trade scenes despite the light-ink request, so local ink separation removes the pale fills and recolors the dark engraved marks to #e8e4d6. This produces the requested negative engraving, not an opaque pale cutout or black background. Same 55% threshold export as earlier spots. Inspected Gazette pair at 46px on cream and trades at 40px on #1e1e2e. No text in the images.
+
+### assets/gazette/spot-mourning.png
+
+Exact generation prompt:
+
+Use case: historical-scene. Production Victorian nineteenth-century newspaper WOOD ENGRAVING. Slightly rough press-printed hatching, cross-hatching and stipple, not vector-clean, no grey washes, gradients, pixel art or flat silhouette fills. Square isolated compact composition centered with generous even padding, bold simplified shapes readable at 40-46 pixels. No text, lettering, numerals, signature, border, frame or background. Pure BLACK ink on genuine TRANSPARENT ALPHA; all negative spaces transparent, including interior spaces that would be paper. Reference image is engraved finish only. Subject: A mourning wreath of dark leaves with long trailing crape ribbon hung prominently on a modest panelled front door. Wreath and ribbon large enough to recognize at thumbnail size. Sombre domestic house in mourning, not a cemetery or monument. No gravestone, cross, inscription or flowers obscuring the wreath.
+
+Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-15aed41b-c654-4ee4-bcee-bd450fbd3bd5.png`.
+
+Exact export command:
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-15aed41b-c654-4ee4-bcee-bd450fbd3bd5.png -background white -alpha remove -alpha off -colorspace gray -fuzz 8% -trim +repage -filter Lanczos -resize 224x224 -gravity center -background white -extent 256x256 -threshold 55% -transparent white -fill black -colorize 100 -strip -define png:color-type=6 /home/keith/omarchy-help/omaville/assets/gazette/spot-mourning.png
+```
+
+### assets/gazette/spot-empty.png
+
+Exact generation prompt:
+
+Use case: historical-scene. Production Victorian nineteenth-century newspaper WOOD ENGRAVING. Slightly rough press-printed hatching, cross-hatching and stipple, not vector-clean, no grey washes, gradients, pixel art or flat silhouette fills. Square isolated compact composition centered with generous even padding, bold simplified shapes readable at 40-46 pixels. No text, lettering, numerals, signature, border, frame or background. Pure BLACK ink on genuine TRANSPARENT ALPHA; all negative spaces transparent, including interior spaces that would be paper. Reference image is engraved finish only. Subject: An iron strongbox tipped on its side, lid wide open revealing a visibly EMPTY interior, only three small coins spilled and settled beside it. Strong diagonal tipped box silhouette and conspicuous open lid. Reads as money gone, no piles or stacks of coins, no treasure, no inscriptions.
+
+Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-5424ec83-ddd0-4a03-8176-3301836debd2.png`.
+
+Exact export command:
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-5424ec83-ddd0-4a03-8176-3301836debd2.png -background white -alpha remove -alpha off -colorspace gray -fuzz 8% -trim +repage -filter Lanczos -resize 224x224 -gravity center -background white -extent 256x256 -threshold 55% -transparent white -fill black -colorize 100 -strip -define png:color-type=6 /home/keith/omarchy-help/omaville/assets/gazette/spot-empty.png
+```
+
+### assets/trades/trade-works.png
+
+Exact generation prompt:
+
+Use case: historical-scene. Production Victorian nineteenth-century newspaper WOOD ENGRAVING. Slightly rough press-printed hatching, cross-hatching and stipple, not vector-clean, no grey washes, gradients, pixel art or flat silhouette fills. Square isolated compact composition centered with generous even padding, bold simplified shapes readable at 40-46 pixels. No text, lettering, numerals, signature, border, frame or background. WHITE-LINE engraving for a dark UI panel: only near-white warm ivory #e8e4d6 hatching and contours on genuine TRANSPARENT ALPHA. Inverted newspaper engraving, what would be black ink is now light ivory and empty paper is transparent. No black ink, no opaque black background, no white paper fill, no checkerboard. One worker seen at work from a chest-height viewpoint, compact waist-up or seated vignette. Face indistinct and turned away, no identifiable facial features or strongly gendered portrait cues, emphasize the work not identity. Subject: A fitter or moulder in plain work clothes with sleeves rolled, one hand on the work at a compact belt-driven workshop machine. One broad flywheel, workbench and a few clear machine forms, heat and iron suggested by engraved texture. No crowded workshop backdrop.
+
+Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-1ec4771f-c2eb-44cc-8dde-e8543c30ab07.png`.
+
+Exact export command:
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-1ec4771f-c2eb-44cc-8dde-e8543c30ab07.png -background white -alpha remove -alpha off -colorspace gray -fuzz 8% -trim +repage -filter Lanczos -resize 224x224 -gravity center -background white -extent 256x256 -threshold 55% -transparent white -fill '#e8e4d6' -colorize 100 -strip -define png:color-type=6 /home/keith/omarchy-help/omaville/assets/trades/trade-works.png
+```
+
+### assets/trades/trade-counter.png
+
+Exact generation prompt:
+
+Use case: historical-scene. Production Victorian nineteenth-century newspaper WOOD ENGRAVING. Slightly rough press-printed hatching, cross-hatching and stipple, not vector-clean, no grey washes, gradients, pixel art or flat silhouette fills. Square isolated compact composition centered with generous even padding, bold simplified shapes readable at 40-46 pixels. No text, lettering, numerals, signature, border, frame or background. WHITE-LINE engraving for a dark UI panel: only near-white warm ivory #e8e4d6 hatching and contours on genuine TRANSPARENT ALPHA. Inverted newspaper engraving, what would be black ink is now light ivory and empty paper is transparent. No black ink, no opaque black background, no white paper fill, no checkerboard. One worker seen at work from a chest-height viewpoint, compact waist-up or seated vignette. Face indistinct and turned away, no identifiable facial features or strongly gendered portrait cues, emphasize the work not identity. Subject: A neat clerk at a tall sloped desk, open ledger and pen in hand. Figure turned three-quarters away, attention on the work. Ledger pages blank except page-edge hatching, absolutely no handwriting or pseudo-text. Compact indoors working vignette, no room background.
+
+Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-c983da2a-1ace-42b7-85e0-1eda8d7db03b.png`.
+
+Exact export command:
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-c983da2a-1ace-42b7-85e0-1eda8d7db03b.png -background white -alpha remove -alpha off -colorspace gray -fuzz 8% -trim +repage -filter Lanczos -resize 224x224 -gravity center -background white -extent 256x256 -threshold 55% -transparent white -fill '#e8e4d6' -colorize 100 -strip -define png:color-type=6 /home/keith/omarchy-help/omaville/assets/trades/trade-counter.png
+```
+
+### assets/trades/trade-street.png
+
+Exact generation prompt:
+
+Use case: historical-scene. Production Victorian nineteenth-century newspaper WOOD ENGRAVING. Slightly rough press-printed hatching, cross-hatching and stipple, not vector-clean, no grey washes, gradients, pixel art or flat silhouette fills. Square isolated compact composition centered with generous even padding, bold simplified shapes readable at 40-46 pixels. No text, lettering, numerals, signature, border, frame or background. WHITE-LINE engraving for a dark UI panel: only near-white warm ivory #e8e4d6 hatching and contours on genuine TRANSPARENT ALPHA. Inverted newspaper engraving, what would be black ink is now light ivory and empty paper is transparent. No black ink, no opaque black background, no white paper fill, no checkerboard. One worker seen at work from a chest-height viewpoint, compact waist-up or seated vignette. Face indistinct and turned away, no identifiable facial features or strongly gendered portrait cues, emphasize the work not identity. Subject: A carter beside a loaded handcart, hands resting on its handles, plain weathered outdoor work clothes. One prominent cart wheel and a few bundled loads. Head turned away, outdoor labor and sturdy hands, no surrounding landscape.
+
+Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-89c0c941-a5f9-4c3f-8bba-e66e4a65ba3b.png`.
+
+Exact export command:
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-89c0c941-a5f9-4c3f-8bba-e66e4a65ba3b.png -background white -alpha remove -alpha off -colorspace gray -fuzz 8% -trim +repage -filter Lanczos -resize 224x224 -gravity center -background white -extent 256x256 -threshold 55% -transparent white -fill '#e8e4d6' -colorize 100 -strip -define png:color-type=6 /home/keith/omarchy-help/omaville/assets/trades/trade-street.png
+```
+
+### assets/trades/trade-retired.png
+
+Exact generation prompt:
+
+Use case: historical-scene. Production Victorian nineteenth-century newspaper WOOD ENGRAVING. Slightly rough press-printed hatching, cross-hatching and stipple, not vector-clean, no grey washes, gradients, pixel art or flat silhouette fills. Square isolated compact composition centered with generous even padding, bold simplified shapes readable at 40-46 pixels. No text, lettering, numerals, signature, border, frame or background. WHITE-LINE engraving for a dark UI panel: only near-white warm ivory #e8e4d6 hatching and contours on genuine TRANSPARENT ALPHA. Inverted newspaper engraving, what would be black ink is now light ivory and empty paper is transparent. No black ink, no opaque black background, no white paper fill, no checkerboard. One worker seen at work from a chest-height viewpoint, compact waist-up or seated vignette. Face indistinct and turned away, no identifiable facial features or strongly gendered portrait cues, emphasize the work not identity. Subject: An older figure seated comfortably beside a small suggestion of a window, holding a cup, a walking stick resting beside the chair. Dignified and at rest, not frail or comic. Face turned toward the window and indistinct. Simple compact seated silhouette, no room backdrop.
+
+Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-9cba4e7d-3481-4b4d-922d-08d29b852caf.png`.
+
+Exact export command:
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-9cba4e7d-3481-4b4d-922d-08d29b852caf.png -background white -alpha remove -alpha off -colorspace gray -fuzz 8% -trim +repage -filter Lanczos -resize 224x224 -gravity center -background white -extent 256x256 -threshold 55% -transparent white -fill '#e8e4d6' -colorize 100 -strip -define png:color-type=6 /home/keith/omarchy-help/omaville/assets/trades/trade-retired.png
+```
+
