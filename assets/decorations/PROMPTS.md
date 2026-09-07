@@ -30,3 +30,25 @@ CityView.decorationMetrics.B now matches T: scale1.08, baseline0.97.
 The actual drawTile branch is exercised beside the tree by
 `node tests/infrastructure-art.mjs --preview`, at large and 48px sizes.
 Tests additionally pin equal scale/baseline and drawing at four zoom levels.
+
+## Flowerbed — compact square footprint, September 7
+
+Final: `assets/decorations/flowers.png`, 256x256 RGBA with genuine alpha.
+Built-in imagegen; tree.png was style/camera reference and the previous flowers.png was the footprint-edit reference. Camera and palette retained; four straight sides replace the oval. Painted width capped at 174px (68% of canvas), horizontally centered and 8px below vertical center, with generous padding. Compared side by side with tree.png. No renderer, metrics, tests or deployment changes.
+
+Generation prompt:
+
+Use case: stylized-concept. Production Omaville city-builder decoration sprite. Input image 1 (tree) is STYLE AND CAMERA ONLY; image 2 is the existing flowerbed whose camera, flower palette and finish must stay unchanged. Regenerate its footprint and shape only. A compact SQUARE raised flowerbed, noticeably SMALL within its frame — a tidy low planter box, not a wide oval border. Four straight sides and squared corners, top footprint square rather than circular or oval. Low warm cream stone edging on all four sides, filled with dense small pink, yellow and lavender flowers over low green leaves. Match the existing flowerbed's elevated near-overhead orthographic camera and the tree's warm crisp detailed 32-bit pixel art and tiny contact shadow. Keep vertical edging very low. Isolated object on genuine transparent RGBA alpha with generous roughly even padding: painted object occupies about 68 percent of square canvas width, centered horizontally and very slightly below center. No ground slab, grass, path, outer frame border, checkerboard, text, people or other objects. Readable at 32px.
+
+Transparency finishing prompt (applied to the generated draft):
+
+Use case: background-extraction. Production sprite finishing. Remove the entire white and gray CHECKERBOARD background from this image. Output a PNG with a REAL TRANSPARENT ALPHA CHANNEL: all background pixels alpha=0, not a rendered transparency pattern. Preserve the depicted object's shape, camera, colors, pixel-art finish and details exactly, including pale flowers or metal highlights. No backdrop, no checkerboard, no ground slab. Keep only the isolated object and tiny contact shadow. Center the complete object on a square transparent canvas with about 6 percent clear padding around its painted bounds. Do not redesign the subject.
+
+Final local format normalization, preserving aspect ratio:
+
+```bash
+magick INPUT.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 174x174 -gravity center -background none -extent 256x240 -gravity south -extent 256x256 -strip -define png:color-type=6 assets/decorations/flowers.png
+```
+
+Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-4cabd619-a1ee-4c4d-84a6-a63d7073c271.png`.
+Transparency-finished source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-f3fe5cac-0f88-4e0f-94d9-6c3741f793ee.png`.

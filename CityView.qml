@@ -803,7 +803,7 @@ Item {
   readonly property var industrialSpriteUrls: [
     [Qt.resolvedUrl("assets/industrial/i1a.png").toString(), Qt.resolvedUrl("assets/industrial/i1b.png").toString()],
     [Qt.resolvedUrl("assets/industrial/i2a.png").toString(), Qt.resolvedUrl("assets/industrial/i2b.png").toString()],
-    [Qt.resolvedUrl("assets/industrial/i3a.png").toString(), Qt.resolvedUrl("assets/industrial/i3b.png").toString()]
+    [Qt.resolvedUrl("assets/industrial/i3a.png").toString(), Qt.resolvedUrl("assets/industrial/i3b.png").toString(), Qt.resolvedUrl("assets/industrial/i3c.png").toString(), Qt.resolvedUrl("assets/industrial/i3d.png").toString()]
   ]
   // Infrastructure tiers are zero-based (unlike the 1–3 zone growth levels).
   property bool useInfrastructureSprites: true
@@ -1822,7 +1822,9 @@ Item {
     "r3c.png": [208, 49, 831, 1155],
     "r3d.png": [99, 59, 1055, 1105],
     "c3c.png": [217, 13, 800, 1186],
-    "c3d.png": [70, 21, 1119, 1173]
+    "c3d.png": [70, 21, 1119, 1173],
+    "i3c.png": [0, 21, 1215, 1179],
+    "i3d.png": [17, 14, 1222, 1212]
   })
 
   function drawMatureVariant(ctx, source, gx, gy, cellSize) {
@@ -1896,6 +1898,8 @@ Item {
 
     root.drawSpriteLot(ctx, gx, gy, cellSize, "I", index)
     root.drawLotDressing(ctx, gx, gy, cellSize, "I", index)
+
+    if (root.drawMatureVariant(ctx, source, gx, gy, cellSize)) return true
 
     var widthScale = [0.78, 0.86, 0.90][level - 1]
     var drawW = cellSize * widthScale
