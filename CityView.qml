@@ -6270,7 +6270,15 @@ Item {
       visible: root.awaySummaryOpen && root.unseenEvents.length > 0
       anchors.centerIn: parent
       width: Math.min(parent.width - Style.space(32), Style.space(360))
-      height: awayColumn.implicitHeight + Style.space(28)
+      // Clamped and scrolled, unlike every other card here, because this is
+      // the only one whose height is set by how much happened. A day at the
+      // desk fills the log to its cap of twenty-four, each entry wraps to four
+      // or five lines in a card this narrow, and the result was three thousand
+      // pixels tall: the panel vanished behind it and "Got it" sat far below
+      // the screen with no way to reach it.
+      height: Math.min(parent.height - Style.space(32),
+        awayHeader.implicitHeight + awayList.contentHeight + awayActions.implicitHeight
+          + Style.space(48))
       radius: Style.cornerRadius
       color: Color.menu.background
       border.width: 1
@@ -6285,12 +6293,31 @@ Item {
         spacing: Style.space(8)
 
         Text {
-          text: "While you were away"
+          id: awayHeader
+          text: root.unseenEvents.length > 1
+            ? "While you were away · " + root.unseenEvents.length + " entries"
+            : "While you were away"
           color: Color.menu.text
           font.bold: true
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.body
         }
+
+        // The list scrolls; the buttons below it do not. Whatever happened
+        // while the player was away, the way out stays where they left it.
+        Flickable {
+          id: awayList
+          width: parent.width
+          height: Math.max(0, awayColumn.height - awayHeader.height
+            - awayActions.height - awayColumn.spacing * 2)
+          contentHeight: awayEntries.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+
+          Column {
+            id: awayEntries
+            width: parent.width
+            spacing: Style.space(8)
 
         Repeater {
           model: root.unseenEvents
@@ -6298,7 +6325,9 @@ Item {
           Row {
             id: awayRow
             required property var modelData
-            width: awayColumn.width
+            // The list is inside a Flickable now, so a row is as wide as the
+            // scrolling column rather than the card.
+            width: awayEntries.width
             spacing: Style.space(6)
 
             Rectangle {
@@ -6325,8 +6354,11 @@ Item {
             }
           }
         }
+          }
+        }
 
         Row {
+          id: awayActions
           spacing: Style.space(8)
           Button { text: "Got it"; onClicked: root.acknowledgeAway() }
           Button {
