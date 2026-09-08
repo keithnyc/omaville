@@ -178,7 +178,10 @@ assert.ok(texture / 1e6 < budgetMB,
   const table = view.slice(view.indexOf('matureSpriteFrames: ({'));
   const rows = Array.from(table.slice(0, table.indexOf('})'))
     .matchAll(/"([\w.]+)":\s*\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]/g));
-  assert.equal(rows.length, 6, 'six mature variants are cropped while drawing');
+  // However many are listed — only the sprites exported with padding need one,
+  // and which those are is a fact about the art, not a number to hardcode.
+  assert.ok(rows.length >= 6, `${rows.length} mature variants are cropped while drawing`);
+  assert.equal(new Set(rows.map(r => r[1])).size, rows.length, 'each file listed once');
   const dirs = { r: 'residential', c: 'commercial', i: 'industrial' };
   for (const [, file, x, y, w, h] of rows) {
     const asset = `assets/${dirs[file[0]]}/${file}`;

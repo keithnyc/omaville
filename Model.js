@@ -3345,7 +3345,7 @@ var GAZETTE_DESKS = {
   neighbor: { weight: 74, spot: "road",
     heads: ["THE ROAD IS OPEN", "A NEW WAY OUT", "NEIGHBOURS AT LAST"] },
   // People leaving is news, and they leave by road.
-  departure: { weight: 76, spot: "road",
+  departure: { weight: 76, spot: "departure",
     heads: ["ANOTHER FAMILY GOES", "THE CITY LOSES A RESIDENT", "PACKED AND GONE"] },
   // A death is not a disaster and must not be ranked as one, but a city that
   // loses somebody who lived on the same street for thirty years should not

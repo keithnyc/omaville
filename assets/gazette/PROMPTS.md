@@ -1,3 +1,20 @@
+## Additional tier-3 variants and departure — September 7
+
+Built-in imagegen. All finals 256x256 RGBA with genuine alpha. Buildings reference `assets/residential/r3c.png` and `assets/industrial/i3c.png` for camera and finish only. Painted bounds fitted within 240x240, aspect preserved, bottom-centered with 8px bottom margin. Buildings inspected at 48px on green. Departure uses pure black ink with binary alpha, 224px bounds and even margins. No QML, Model.js, tests, tables or deployment changes.
+
+### spot-departure.png
+
+Exact generation prompt:
+
+Use case: historical-scene. Victorian newspaper wood engraving, pure black ink on genuine transparent alpha, rough printed hatching and stipple, no grey wash, no frame, no text or lettering anywhere. Square compact isolated spot illustration legible at 46px, centered with even margins. A family with backs turned beside a loaded handcart, luggage roped on, walking away from viewer at the edge of town. Clearly leaving home for good, subdued departure rather than arriving along a grand new road. Few clear figures and one cart silhouette, minimal town-edge suggestion, no broad landscape background. No white paper fill or checkerboard.
+Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-c3559d90-923b-4a47-b16e-5e05f18a2376.png`.
+
+Export command (from omaville directory):
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-c3559d90-923b-4a47-b16e-5e05f18a2376.png -background white -alpha remove -alpha off -colorspace gray -fuzz 8% -trim +repage -filter Lanczos -resize 224x224 -gravity center -background white -extent 256x256 -threshold 55% -transparent white -fill black -colorize 100 -strip -define png:color-type=6 assets/gazette/spot-departure.png
+```
+
 # Gazette engraving prompts — September 7
 
 Six assets generated with built-in imagegen. No reference images. No code, tests, layout or deployment changes.
@@ -245,4 +262,3 @@ Exact export command:
 ```bash
 magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-9cba4e7d-3481-4b4d-922d-08d29b852caf.png -background white -alpha remove -alpha off -colorspace gray -fuzz 8% -trim +repage -filter Lanczos -resize 224x224 -gravity center -background white -extent 256x256 -threshold 55% -transparent white -fill '#e8e4d6' -colorize 100 -strip -define png:color-type=6 /home/keith/omarchy-help/omaville/assets/trades/trade-retired.png
 ```
-

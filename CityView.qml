@@ -1019,7 +1019,7 @@ Item {
   // order is: drop the files, run tools/measure-frames.mjs, paste the rows
   // into matureSpriteFrames, flip this. tests/sprite-budget.mjs will not let
   // any of those three steps be skipped.
-  readonly property bool useExtraVariants: false
+  readonly property bool useExtraVariants: true
   function tier3(base, extra) {
     return root.useExtraVariants ? base.concat(extra) : base
   }
@@ -2152,6 +2152,11 @@ Item {
   // Crop only while drawing; uniform fit preserves each building's natural
   // proportions and lot gaps.
   //
+  // Only the sprites that were exported with padding are listed. r3/r3b,
+  // c3a/c3b and i3a/i3b are drawn by the generic path below, which uses a
+  // fixed aspect per level that happens to match them — giving them frames
+  // here would silently change how they have always been drawn.
+  //
   // These are source-pixel rectangles, so they belong to a particular file at
   // a particular size. Downscaling the six sprites they describe from 1254px
   // to 256px put every one of them out of bounds and the canvas started
@@ -2163,7 +2168,19 @@ Item {
     "c3c.png": [45, 3, 162, 241],
     "c3d.png": [15, 5, 227, 238],
     "i3c.png": [10, 38, 237, 179],
-    "i3d.png": [4, 3, 248, 233]
+    "i3d.png": [4, 3, 248, 233],
+    "r3e.png": [24, 8, 207, 240],
+    "r3f.png": [9, 8, 238, 240],
+    "r3g.png": [69, 8, 117, 240],
+    "r3h.png": [8, 73, 240, 175],
+    "c3e.png": [17, 8, 221, 240],
+    "c3f.png": [8, 55, 240, 193],
+    "c3g.png": [48, 8, 160, 240],
+    "c3h.png": [8, 91, 240, 157],
+    "i3e.png": [34, 8, 187, 240],
+    "i3f.png": [8, 68, 240, 180],
+    "i3g.png": [26, 8, 204, 240],
+    "i3h.png": [8, 35, 240, 213]
   })
 
   function drawMatureVariant(ctx, source, gx, gy, cellSize) {
