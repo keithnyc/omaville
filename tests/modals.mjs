@@ -50,5 +50,23 @@ for (const name of declared)
     'the modal ones swallow the click without dismissing');
 }
 
+// --- one modal at a time --------------------------------------------------
+// A dilemma fires on its own schedule rather than on a button, so it is the
+// one card that can arrive while another is already open. Declared last, it
+// drew straight through the away summary instead of beside it.
+{
+  const at = view.indexOf('Mayor\'s dilemma card');
+  assert.ok(at > 0, 'the dilemma overlay is where it is expected');
+  const overlay = view.slice(at, at + 2000);
+  assert.ok(/visible: root\.currentEvent !== null && !root\.modalOpen/.test(overlay),
+    'a dilemma waits for whatever is already open rather than drawing over it');
+  // Its dim is a Rectangle, which blocks nothing, so it needs its own blocker
+  // for the same reason the main scrim did.
+  assert.ok(/hoverEnabled: true/.test(overlay),
+    'and it stops the map hovering underneath, as the Gazette now does');
+  assert.ok(!/onClicked/.test(overlay.slice(0, overlay.indexOf('id: eventCard'))),
+    'without dismissing on an outside click — the mayor picks one of the two');
+}
+
 console.log(`PASS: ${declared.length} cards in one list, read by the overlay, the scrim and ` +
   `the map hover, with nothing keeping a second copy.`);

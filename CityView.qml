@@ -7673,11 +7673,25 @@ Item {
   // stop, the way Reigns never lets you shrug and walk away from the throne.
   Item {
     anchors.fill: parent
-    visible: root.currentEvent !== null
+    // One modal at a time. A dilemma fires on its own schedule, so it used to
+    // arrive on top of whatever was already open — and being declared last, it
+    // drew straight through the away summary rather than beside it. It waits
+    // now; closing the card in front of it brings it up, and pendingEvents
+    // keeps it until then.
+    visible: root.currentEvent !== null && !root.modalOpen
 
     Rectangle {
       anchors.fill: parent
       color: Qt.rgba(0, 0, 0, 0.5)
+    }
+    // The dim above is a Rectangle, and a Rectangle blocks nothing: without
+    // this the map went on hovering underneath the dilemma exactly as it did
+    // underneath the Gazette. No dismissal, deliberately — the mayor picks one
+    // of the two choices — so it swallows the click rather than acting on it.
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      acceptedButtons: Qt.AllButtons
     }
 
     Rectangle {
