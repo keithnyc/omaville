@@ -5681,6 +5681,68 @@ Item {
             font.pixelSize: Style.font.caption
           }
         }
+
+        // Desktop popups only. Deliberately not "notifications" — everything
+        // else about them carries on, and a setting that read as switching the
+        // city's news off would be describing something it does not do.
+        Column {
+          width: parent.width
+          spacing: Style.space(6)
+
+          Text {
+            text: "Desktop popups"
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.8)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+              model: [{ label: "On", value: true }, { label: "Off", value: false }]
+
+              Rectangle {
+                id: popupOption
+                required property var modelData
+                readonly property bool active: root.serviceReady
+                  && root.cityService.popupNotifications === modelData.value
+                width: (settingsColumn.width - Style.space(6)) / 2
+                height: Style.space(28)
+                radius: Style.space(4)
+                color: active ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35) : "transparent"
+                border.width: 1
+                border.color: active ? Color.accent : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.3)
+
+                Text {
+                  anchors.centerIn: parent
+                  text: popupOption.modelData.label
+                  color: popupOption.active ? Color.accent : Color.menu.text
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: if (root.cityService)
+                    root.cityService.setPopupNotifications(popupOption.modelData.value)
+                }
+              }
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: "Turns off the pop-ups your desktop shows. The city still logs "
+              + "everything, the unseen markers still appear, and the Gazette still "
+              + "reports it — you just find out when you look."
+            wrapMode: Text.WordWrap
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+        }
       }
     }
 

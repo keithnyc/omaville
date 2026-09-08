@@ -144,10 +144,22 @@ Item {
     ? omarchyPath + "/bin/omarchy-notification-send"
     : "omarchy-notification-send"
 
+  // Desktop popups only. Silencing these leaves everything else about a
+  // notification untouched: it is still written to the city log, still counted
+  // in the unseen dots, still shown in the "while you were away" summary and
+  // still eligible for the Gazette. This is the one choke point every one of
+  // the notify() calls goes through, so a new call site cannot bypass it.
+  property bool popupNotifications: true
   function notify(title, body) {
+    if (!root.popupNotifications) return
     Quickshell.execDetached([
       notificationExecutable, "--app-name", "omaville", "-u", "normal", title, body
     ])
+  }
+  function setPopupNotifications(on) {
+    if (root.popupNotifications === on) return
+    root.popupNotifications = on
+    flushState()
   }
 
   // --- derived city state -------------------------------------------------
@@ -976,6 +988,7 @@ Item {
       cityLog: root.cityLog,
       lastSeenMinute: root.lastSeenMinute,
       lastGazetteMinute: root.lastGazetteMinute,
+      popupNotifications: root.popupNotifications,
       citizens: root.citizens,
       streetNames: root.streetNames
     }, null, 2) + "\n")
@@ -1059,6 +1072,8 @@ Item {
       cityLog = Model.migrateLogKinds(Array.isArray(saved.cityLog) ? saved.cityLog : [])
       lastSeenMinute = Math.max(0, num(saved.lastSeenMinute, 0))
       lastGazetteMinute = Math.max(0, num(saved.lastGazetteMinute, 0))
+      // Absent in older saves, and the sensible default there is on.
+      popupNotifications = saved.popupNotifications !== false
       // Residents saved before anybody had a birthday would otherwise all read
       // as born in Year 1 and die on the next tick.
       citizens = Model.seedCitizenLives(
