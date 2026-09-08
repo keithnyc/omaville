@@ -81,6 +81,38 @@ assert.ok(homes.R > base.R && homes.C === base.C && homes.I === base.I,
 const works = M.computeDemand(stats, 0, M.ordinanceEffects(['subsidy']));
 assert.ok(works.I > base.I && works.R === base.R, 'the subsidy lifts industry and nothing else');
 
+// --- industry saturates, which is the whole reason it can be over-built ---
+// The old formula could not fall below 0.6 and was pinned at its ceiling in
+// any city with industry at all, so the demand meter told a player to keep
+// zoning works for ever and the optimal play was to carpet the map.
+{
+  const of = share => ({ population: 10000, jobsIndustrial: Math.round(10000 * share),
+    jobsCommercial: 2000, resCount: 200, decorationPoints: 0 });
+  const appetite = share => M.computeDemand(of(share), 0).I;
+
+  assert.ok(appetite(0.05) > appetite(0.45), 'a city short of works wants more than a full one');
+  assert.ok(appetite(0.45) > appetite(0.7), 'and it keeps falling rather than levelling off');
+  assert.ok(appetite(0.7) < 0.1, 'a city that is nothing but factories is asked to stop');
+  assert.ok(appetite(M.IND_JOB_TARGET) > appetite(M.IND_JOB_TARGET * 1.5),
+    'the target is the turn of the curve');
+  // Monotonic the whole way, so the meter never rewards over-building.
+  let last = Infinity;
+  for (let share = 0; share <= 1; share += 0.05) {
+    const now = appetite(share);
+    assert.ok(now <= last + 1e-9, `demand rose again at ${share.toFixed(2)}`);
+    last = now;
+  }
+  // Never quite zero: ordinances and city character multiply this, and a hard
+  // zero would swallow both.
+  assert.ok(appetite(5) > 0, 'even an absurd city leaves a lever to pull');
+  assert.ok(M.computeDemand(of(5), 0, M.ordinanceEffects(['subsidy'])).I > appetite(5),
+    'the subsidy still does something in the city most likely to want it');
+
+  // A city with more jobs than workers does not want another it cannot staff.
+  assert.ok(M.computeDemand({ population: 800, jobsIndustrial: 2000, jobsCommercial: 500,
+    resCount: 20 }, 0).I < appetite(0.7), 'no workers, no appetite');
+}
+
 // Disaster policies move the odds in the direction advertised.
 const town = M.emptyGrid(size);
 for (let i = 0; i < 30; i++) town[500 + i] = 'R3';

@@ -224,19 +224,14 @@ Item {
   readonly property int happiness: cityService ? cityService.happiness : 0
   // Model.computeDemand's raw growth-chance multipliers. Each zone's formula
   // has its own achievable [min, max] (mirrored here from computeDemand's
-  // own constants) — R/C span 0.5-1.25, but I is a deliberately softer,
-  // capped curve that only ever reaches 0.6-0.9. A shared "1.0 = balanced"
-  // rescale would leave Industrial permanently reading as oversupplied no
-  // matter what's actually built, since its formula can never reach 1.0.
-  // Rescaling each zone against its *own* range instead — floor to -100%,
-  // ceiling to +100% — keeps all three bars meaningful even though they're
-  // not on a literal shared scale (see Model.computeDemand's own comment).
+  // own constants), and the three are not on the same literal scale, so each
+  // bar is rescaled against its own achievable span — floor to -100%, ceiling
+  // to +100%. The spans come from Model rather than being copied here: this
+  // file used to carry its own I: { min: 0.6, max: 0.9 }, mirroring the old
+  // formula's constants by hand, which is exactly the arrangement that had the
+  // coverage card measuring a different radius from the map.
   readonly property var demand: cityService ? cityService.demand : ({ R: 1, C: 1, I: 1 })
-  readonly property var demandRange: ({
-    R: { min: 0.5, max: 1.25 },
-    C: { min: 0.5, max: 1.25 },
-    I: { min: 0.6, max: 0.9 }
-  })
+  readonly property var demandRange: Model.DEMAND_RANGE
   function demandPercent(key, value) {
     var range = root.demandRange[key]
     var span = range.max - range.min

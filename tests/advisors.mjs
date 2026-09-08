@@ -265,6 +265,36 @@ assert.equal(M.overlayCoverageState(lonely, size, spot + 9, pdef, M.findUtilitie
     M.POWER_RADIUS, 'power has no department budget to widen it');
 }
 
+// --- the demand meter rescales against the real span ----------------------
+// Each bar is rescaled against its own achievable range, and CityView used to
+// keep its own copy of those numbers — I: { min: 0.6, max: 0.9 }, mirroring
+// the old formula's constants by hand. Changing the formula would have left
+// the meter reading a range the model can no longer produce.
+{
+  assert.ok(M.DEMAND_RANGE, 'the model owns the spans');
+  const view = fs.readFileSync(new URL('../CityView.qml', import.meta.url), 'utf8');
+  assert.ok(/demandRange: Model\.DEMAND_RANGE/.test(view), 'and the meter reads them');
+  // Matched on the code, not the prose: the comment beside it explains what
+  // the stale copy used to be, and an earlier version of this assertion
+  // rejected the explanation.
+  assert.ok(!/demandRange: \(\{/.test(view), 'rather than declaring its own literal');
+
+  // The spans have to actually bound what computeDemand produces.
+  for (let pop = 200; pop <= 40000; pop *= 3)
+    for (const indShare of [0, 0.2, 0.5, 1, 2])
+      for (const comShare of [0, 0.3, 1]) {
+        const d = M.computeDemand({ population: pop, resCount: pop / 40,
+          jobsIndustrial: pop * indShare, jobsCommercial: pop * comShare,
+          decorationPoints: 0 }, 0);
+        for (const key of ['R', 'C', 'I']) {
+          const span = M.DEMAND_RANGE[key];
+          assert.ok(d[key] >= span.min - 1e-9 && d[key] <= span.max + 1e-9,
+            `${key} demand ${d[key].toFixed(3)} falls outside its declared ` +
+            `${span.min}-${span.max}, so the meter cannot draw it honestly`);
+        }
+      }
+}
+
 // Funding widens what the overlay draws, exactly as it widens real coverage.
 const fdef = M.overlayDef('fire');
 assert.ok(M.overlayRadius(fdef, { F: M.FUNDING_MAX }) > M.overlayRadius(fdef, { F: 1 }));

@@ -965,6 +965,41 @@ function computeHappiness(taxRatePercent, stats, trafficPenalty) {
 // `neighbors` is the count of connected neighbouring cities: migration from
 // outside lifts residential demand and their trade lifts commercial, which is
 // the whole point of running a highway to the map edge.
+// How much of the city industry already employs, and how much of that the city
+// actually wanted. Past IND_JOB_TARGET the appetite falls away, and at twice it
+// there is none left.
+//
+// The old formula was 0.6 + 0.3 * clamp(population / industrialJobs, 0, 1),
+// which reads as saturation and is the opposite: the ratio only drops below 1
+// once there are more industrial jobs than residents, so every city large
+// enough to have any industry sat pinned at the ceiling. It had a floor of 0.6
+// as well, so even a city that was nothing but factories was still being told
+// to build works. A player following the demand meter had no choice but to
+// carpet the map, and the meter was never going to stop them.
+var IND_JOB_TARGET = 0.35
+var IND_APPETITE_MAX = 1.2
+// Not quite zero. Appetite is multiplied by ordinances and by the city's
+// character, and a hard zero swallows both — an industrial subsidy would do
+// precisely nothing in the city whose mayor was most likely to reach for one.
+// Low enough to still read as "stop", high enough that a lever is still a
+// lever.
+var IND_APPETITE_FLOOR = 0.04
+
+function industrialAppetite(stats) {
+  var share = (stats.jobsIndustrial || 0) / Math.max(1, stats.population || 0)
+  return clamp(2 - share / IND_JOB_TARGET, IND_APPETITE_FLOOR, IND_APPETITE_MAX)
+}
+
+// The achievable span of each zone's demand, before ordinances and character.
+// Exported because the meter has to rescale each bar against its own range and
+// was carrying its own copy of these numbers — the same shape of bug as the
+// coverage card measuring a different radius from the map.
+var DEMAND_RANGE = {
+  R: { min: 0.5, max: 1.25 },
+  C: { min: 0.5, max: 1.25 },
+  I: { min: 0, max: IND_APPETITE_MAX }
+}
+
 function computeDemand(stats, neighbors, effects) {
   var jobsTotal = stats.jobsCommercial + stats.jobsIndustrial
   var laborAvailability = clamp(stats.population / (jobsTotal + 10), 0, 1.3)
@@ -975,7 +1010,9 @@ function computeDemand(stats, neighbors, effects) {
       + computeAttractiveness(stats) / 100) * bonus.migration * policy.residentialDemand,
     C: (0.5 + 0.5 * clamp((stats.population / (stats.jobsCommercial + 10)) * laborAvailability, 0, 1.5))
       * bonus.commerce * policy.commercialDemand,
-    I: (0.6 + 0.3 * clamp((stats.population / (stats.jobsIndustrial + 50)) * laborAvailability, 0, 1.0))
+    // Damped by labour availability as well, so a city with more jobs than
+    // workers does not want yet another works it cannot staff.
+    I: industrialAppetite(stats) * Math.min(1, laborAvailability)
       * policy.industrialDemand
   }
 }
