@@ -2488,14 +2488,23 @@ function topAdvice(list) {
 // The advisors say what is wrong; these say where. Both read the same
 // helpers the tick does, so an overlay can never highlight a tile the
 // simulation disagrees about.
+// `serves` is which zones a service actually does anything for, and it is not
+// the same for all of them. A school and a clinic only ever affect residential
+// growth — tickGrid applies both inside the branch that runs for houses alone —
+// so painting a factory red on the Health overlay accuses the player of
+// neglecting something a factory has never wanted. Everything else genuinely
+// applies to all three: power and water gate every zone's growth, fire and
+// crime take anything that can burn or be robbed, and every zone makes trips.
+var ZONES_ALL = "RCI"
+var ZONES_HOMES = "R"
 var OVERLAYS = [
-  { key: "power", label: "Power", service: "power", radius: POWER_RADIUS },
-  { key: "water", label: "Water", service: "water", radius: WATER_RADIUS },
-  { key: "fire", label: "Fire", service: "fire", radius: FIRE_RADIUS, funding: "F" },
-  { key: "police", label: "Police", service: "police", radius: POLICE_RADIUS, funding: "S" },
-  { key: "schools", label: "Schools", service: "schools", radius: SCHOOL_RADIUS, funding: "N" },
-  { key: "medical", label: "Health", service: "medical", radius: MEDICAL_RADIUS, funding: "H" },
-  { key: "transit", label: "Transit", service: "transit", radius: TRANSIT_RADIUS, funding: "M" },
+  { key: "power", label: "Power", service: "power", radius: POWER_RADIUS, serves: ZONES_ALL },
+  { key: "water", label: "Water", service: "water", radius: WATER_RADIUS, serves: ZONES_ALL },
+  { key: "fire", label: "Fire", service: "fire", radius: FIRE_RADIUS, funding: "F", serves: ZONES_ALL },
+  { key: "police", label: "Police", service: "police", radius: POLICE_RADIUS, funding: "S", serves: ZONES_ALL },
+  { key: "schools", label: "Schools", service: "schools", radius: SCHOOL_RADIUS, funding: "N", serves: ZONES_HOMES },
+  { key: "medical", label: "Health", service: "medical", radius: MEDICAL_RADIUS, funding: "H", serves: ZONES_HOMES },
+  { key: "transit", label: "Transit", service: "transit", radius: TRANSIT_RADIUS, funding: "M", serves: ZONES_ALL },
   { key: "value", label: "Land value" },
   { key: "growth", label: "Growth" },
   { key: "traffic", label: "Traffic" }
@@ -2522,8 +2531,11 @@ function overlayRadius(def, funding) {
 function overlayCoverageState(grid, gridSize, index, def, utilities, funding) {
   var covered = isCovered(gridSize, utilities[def.service] || [], index, overlayRadius(def, funding))
   var tile = parseTile(grid[index])
-  var built = (tile.type === TILE_RES || tile.type === TILE_COM || tile.type === TILE_IND)
-    && tile.level > 0
+  // Only zones this service actually does something for count as built. A
+  // works outside a clinic's reach is not a gap in the city's healthcare; it
+  // is a works.
+  var serves = def.serves || ZONES_ALL
+  var built = serves.indexOf(tile.type) >= 0 && tile.level > 0
   if (!covered) return built ? "gap" : ""
   return built ? "covered" : "idle"
 }

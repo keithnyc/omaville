@@ -369,6 +369,7 @@ Item {
     if (root.overlayMode === "value") return "Brighter: higher land value from parks, water and landscaping"
     if (root.overlayMode === "traffic") return "Roads — green: flowing · amber: busy · red: gridlocked"
     return "Green: in range · red: built but uncovered"
+      + (root.overlayDef.serves === "R" ? " · homes only, this one does nothing for shops or works" : "")
       + (root.spareCount > 0
         ? " · amber ✕: spare, covers nothing another does not" : "")
   }

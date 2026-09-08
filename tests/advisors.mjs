@@ -195,6 +195,37 @@ assert.equal(M.overlayCoverageState(lonely, size, spot, pdef, M.findUtilities(lo
   'built and uncovered is the actionable case');
 assert.equal(M.overlayCoverageState(lonely, size, spot + 9, pdef, M.findUtilities(lonely), null), '');
 
+// --- an overlay only accuses zones the service actually serves ------------
+// A school and a clinic affect residential growth and nothing else — tickGrid
+// applies both inside the branch that runs for houses alone. Painting a
+// factory red on the Health overlay accuses the player of neglecting something
+// a factory has never wanted, and sends them to build a clinic that will
+// change nothing.
+{
+  const g = M.emptyGrid(size);
+  const homes = spot, shops = spot + 1, works = spot + 2;
+  g[homes] = 'R3'; g[shops] = 'C3'; g[works] = 'I3';
+  const u = M.findUtilities(g), funding = M.defaultFunding();
+  const state = (key, at) => M.overlayCoverageState(g, size, at, M.overlayDef(key), u, funding);
+
+  for (const key of ['schools', 'medical']) {
+    assert.equal(state(key, homes), 'gap', `${key} still flags an uncovered house`);
+    assert.equal(state(key, shops), '', `${key} must not flag a shopfront`);
+    assert.equal(state(key, works), '', `${key} must not flag a works`);
+  }
+  for (const key of ['power', 'water', 'fire', 'police', 'transit'])
+    for (const [at, what] of [[homes, 'homes'], [shops, 'shops'], [works, 'works']])
+      assert.equal(state(key, at), 'gap', `${key} genuinely applies to ${what}`);
+
+  // Every overlay that names a service has to say who it serves, or it falls
+  // back to all three and quietly accuses the wrong zones again.
+  for (const def of M.OVERLAYS) {
+    if (!def.service) continue;
+    assert.ok(def.serves, `the ${def.key} overlay must declare who it serves`);
+    assert.ok(/^[RCI]+$/.test(def.serves), `${def.key} serves an odd set: ${def.serves}`);
+  }
+}
+
 // Funding widens what the overlay draws, exactly as it widens real coverage.
 const fdef = M.overlayDef('fire');
 assert.ok(M.overlayRadius(fdef, { F: M.FUNDING_MAX }) > M.overlayRadius(fdef, { F: 1 }));
