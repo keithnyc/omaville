@@ -4004,7 +4004,14 @@ Item {
       if (tile.level % 2 === 1) {
         Waterfront.drawWater(ctx, gx, gy, cellSize, data, root.gridSize, index)
         root.drawFootbridge(ctx, gx, gy, cellSize, root.pathConnectionsAt(index))
-      } else root.drawFootpath(ctx, gx, gy, cellSize, root.pathConnectionsAt(index), index)
+      } else {
+        // The ground first. A footpath is a strip laid *on* the grass, unlike
+        // a road, which replaces it with asphalt edge to edge — without this
+        // the rest of the tile is whatever the canvas was cleared to, which
+        // read as a wide black border down both sides of every path.
+        root.drawEmpty(ctx, gx, gy, cellSize)
+        root.drawFootpath(ctx, gx, gy, cellSize, root.pathConnectionsAt(index), index)
+      }
       break
     case Model.TILE_ROAD:
       var roadConn = root.connectionsAt(index)

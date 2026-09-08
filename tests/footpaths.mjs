@@ -181,5 +181,23 @@ const at = (x, y) => y * size + x;
   }
 }
 
+// --- a path is laid on the ground, not instead of it ----------------------
+// Every other surface fills its whole tile: a road paints asphalt edge to
+// edge, water paints water. A footpath paints a narrow strip and leaves the
+// rest, so it has to draw the ground first — without that the remainder of the
+// tile is whatever the canvas was cleared to, which showed up as a wide black
+// border down both sides of every path.
+{
+  const view = fs.readFileSync(new URL('../CityView.qml', import.meta.url), 'utf8');
+  const branch = view.slice(view.indexOf('case Model.TILE_PATH:'));
+  const body = branch.slice(0, branch.indexOf('case Model.TILE_ROAD:'));
+  assert.ok(/drawEmpty/.test(body), 'the path branch paints the ground');
+  assert.ok(body.indexOf('drawEmpty') < body.indexOf('drawFootpath'),
+    'and paints it before the path, or the strip is covered up again');
+  // The bridge half is fine because water is opaque and drawn first.
+  assert.ok(body.indexOf('Waterfront.drawWater') < body.indexOf('drawFootbridge'),
+    'and a footbridge sits on water for the same reason');
+}
+
 console.log('PASS: a surface that serves a lot without carrying a car, refused to industry, ' +
   'charged for, bridgeable, addressed, and paid for in the congestion it takes off the roads.');
