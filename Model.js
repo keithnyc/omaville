@@ -34,6 +34,23 @@ var MEDICAL_UPKEEP = 1.5
 // building — a bus network for 5000 people costs more than one for 500.
 var TILE_TRANSIT = "M"
 var TRANSIT_RADIUS = 10
+// A footpath. Serves a lot exactly as a road does, and carries no vehicles at
+// all — which is the point: a district reached only on foot puts nothing on
+// the network. Players were already building car-free blocks of flats around a
+// water feature and then wondering how anybody got about in there, because the
+// only surface the game had was one that cars drive on.
+//
+// It cannot simply be a cheaper road or nobody would ever build a road again.
+// The cost is what a path cannot carry: industry needs a real road for its
+// lorries, and commerce on a path alone grows slowly, so a pedestrian district
+// is somewhere people live rather than somewhere the city works.
+var TILE_PATH = "D"
+var PATH_COST = 3
+var PATH_BRIDGE_COST = 12
+var PATH_UPKEEP = 0.02
+// How much slower a shopfront grows when a delivery has to be carried in.
+var PATH_COMMERCE_GROWTH = 0.55
+
 var TILE_TREE = "T"
 var TILE_FLOWERS = "B"
 var TILE_HEDGE = "G"
@@ -41,11 +58,11 @@ var TILE_BENCH = "K"
 var TILE_STATUE = "V"
 var TILE_FOUNTAIN = "O"
 
-var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "N": 100, "H": 110, "M": 130, "L": 4, "Q": 30 }
+var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "N": 100, "H": 110, "M": 130, "L": 4, "Q": 30, "D": PATH_COST }
 var TILE_LABELS = {
   "_": "Clear", "#": "Road", "A": "Avenue", "R": "Residential", "C": "Commercial",
   "I": "Industrial", "P": "Playground", "E": "Generator", "W": "Well",
-  "F": "Firehouse", "S": "Substation", "N": "Elementary School", "H": "Clinic", "M": "Bus Depot", "L": "Water", "Q": "Waterfront Park"
+  "F": "Firehouse", "S": "Substation", "N": "Elementary School", "H": "Clinic", "M": "Bus Depot", "L": "Water", "Q": "Waterfront Park", "D": "Footpath"
 }
 
 // Decorations are the one tile family that keeps growing, so they get a single
@@ -126,7 +143,7 @@ function waterfrontBonus(grid, gridSize, index) {
     var raw = grid[ny * gridSize + nx]
     var type = tileTypeOf(raw)
     var wet = type === TILE_LAKE
-      || (type === TILE_ROAD && tileLevelOf(raw) % 2 === 1)
+      || ((type === TILE_ROAD || type === TILE_PATH) && tileLevelOf(raw) % 2 === 1)
     if (wet) return o.d <= 1 ? 12 : o.d <= 2 ? 8 : 4
   }
   return 0
@@ -144,7 +161,11 @@ function placementCost(grid, index, type) {
     if (current.type === TILE_ROAD) return AVENUE_UPGRADE_COST
     return (current.type === TILE_LAKE ? BRIDGE_COST : COSTS[TILE_ROAD]) + AVENUE_UPGRADE_COST
   }
-  return type === TILE_ROAD && current.type === TILE_LAKE ? BRIDGE_COST : COSTS[type]
+  if (current.type === TILE_LAKE) {
+    if (type === TILE_ROAD) return BRIDGE_COST
+    if (type === TILE_PATH) return PATH_BRIDGE_COST
+  }
+  return COSTS[type]
 }
 
 function computeAttractiveness(stats) {
@@ -346,6 +367,9 @@ function upgradeTile(grid, index) {
 // tearing down an upgraded plant returns what it really cost, not just
 // its original tier-1 price.
 function totalInvestment(type, level) {
+  // A footbridge cost more to lay than the path either side of it, so
+  // bulldozing one must refund what it actually cost.
+  if (type === TILE_PATH) return level % 2 === 1 ? PATH_BRIDGE_COST : PATH_COST
   if (type === TILE_ROAD && level > 0)
     return (level % 2 === 1 ? BRIDGE_COST : COSTS[TILE_ROAD])
       + (level >= 2 ? AVENUE_UPGRADE_COST : 0)
@@ -509,6 +533,40 @@ function roadAccessIndices(grid, gridSize, index) {
 
 function hasRoadAccess(grid, gridSize, index) {
   return roadAccessIndices(grid, gridSize, index).length > 0
+}
+
+// Footpaths are found the same way roads are, and deliberately kept apart from
+// them. roadAccessIndices does double duty — the roads that let a lot grow are
+// the roads that carry its traffic — so folding paths into it would put cars
+// on a footpath. Anything asking "can this lot be reached" wants hasAccess;
+// anything asking "where does its traffic go" still wants roads only.
+function footAccessIndices(grid, gridSize, index) {
+  var paths = []
+  var neighbors = neighborIndices(gridSize, index)
+  for (var i = 0; i < neighbors.length; i++) {
+    var next = neighbors[i]
+    var type = (grid[next] || "")[0]
+    if (type === TILE_PATH) paths.push(next)
+    else if (type && "_RCIPQTB".indexOf(type) >= 0) {
+      var outer = neighborIndices(gridSize, next)
+      for (var j = 0; j < outer.length; j++) {
+        var candidate = outer[j]
+        if (candidate !== index && (grid[candidate] || "")[0] === TILE_PATH
+            && paths.indexOf(candidate) < 0) paths.push(candidate)
+      }
+    }
+  }
+  return paths
+}
+
+function hasFootAccess(grid, gridSize, index) {
+  return footAccessIndices(grid, gridSize, index).length > 0
+}
+
+// Reachable at all, by road or on foot.
+function hasAccess(grid, gridSize, index) {
+  return hasRoadAccess(grid, gridSize, index)
+    || hasFootAccess(grid, gridSize, index)
 }
 
 // True circular range (compared squared to skip the sqrt) — matches the
@@ -730,7 +788,7 @@ function summarize(grid) {
   var gridSize = Math.round(Math.sqrt(grid.length))
   var stats = {
     population: 0, jobsCommercial: 0, jobsIndustrial: 0,
-    roadCount: 0, avenueCount: 0, parkCount: 0, resCount: 0, comCount: 0, indCount: 0,
+    roadCount: 0, avenueCount: 0, pathCount: 0, parkCount: 0, resCount: 0, comCount: 0, indCount: 0,
     powerCount: 0, waterCount: 0, fireCount: 0, policeCount: 0, builtDensity: 0,
     // Level-weighted, not flat counts — a Garden or a Power Station costs
     // (and gives) more than a tier-1 Playground or Generator.
@@ -755,6 +813,9 @@ function summarize(grid) {
     case TILE_ROAD:
       stats.roadCount++
       if (level >= 2) stats.avenueCount++
+      break
+    case TILE_PATH:
+      stats.pathCount++
       break
     case TILE_TREE:
     case TILE_FLOWERS:
@@ -992,7 +1053,7 @@ var CONGESTION_JAM = 1.0
 var TRAFFIC_MAX_HAPPINESS_PENALTY = 14
 
 function isBridgeTile(tile) {
-  return tile.type === TILE_ROAD && tile.level % 2 === 1
+  return (tile.type === TILE_ROAD || tile.type === TILE_PATH) && tile.level % 2 === 1
 }
 
 function isAvenueTile(tile) {
@@ -1082,7 +1143,15 @@ function trafficSurvey(grid, gridSize, utilities, funding, effects) {
     // carries its traffic, so a lot can never be served by a road it cannot
     // reach, and widening the wrong street can never help it.
     var serving = roadAccessIndices(grid, gridSize, i)
-    if (serving.length === 0) { unservedTrips += trips; continue }
+    if (serving.length === 0) {
+      // Reached only on foot: these journeys are made on foot too, so they are
+      // not unserved — they simply are not driven. This is the whole reason to
+      // build a footpath, and the reason a path cannot be a cheaper road,
+      // since nothing that needs a lorry can live on one.
+      if (hasFootAccess(grid, gridSize, i)) { savedTrips += trips; continue }
+      unservedTrips += trips
+      continue
+    }
     lotRoads[i] = serving
     var share = trips / serving.length
     for (var r = 0; r < serving.length; r++)
@@ -1182,7 +1251,11 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
     // Coverage says a plant reaches this tile; load says whether the network
     // can actually serve it this month. An overloaded grid browns out tile by
     // tile rather than failing citywide, so growth slows before it stops.
-    var connected = hasRoadAccess(grid, gridSize, i)
+    // Same rule and same order as growthBlocker, so the overlay cannot claim a
+    // tile is blocked on something the tick is not blocking it on.
+    var reachable = hasRoadAccess(grid, gridSize, i)
+    var onFoot = !reachable && hasFootAccess(grid, gridSize, i)
+    var connected = (reachable || (onFoot && tile.type !== TILE_IND))
       && isCovered(gridSize, utilities.power, i, POWER_RADIUS)
       && (powerSatisfaction >= 1 || Math.random() < powerSatisfaction)
       && isCovered(gridSize, utilities.water, i, WATER_RADIUS)
@@ -1204,6 +1277,8 @@ function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, 
       // Congestion throttles every zone equally: goods, customers and
       // workers all arrive by the same jammed street.
       growthChance *= trafficGrowthScale(lotCongestion(traffic, i))
+      // A shopfront reached only on foot takes its deliveries by hand.
+      if (onFoot && tile.type === TILE_COM) growthChance *= PATH_COMMERCE_GROWTH
       if (Math.random() < growthChance) {
         next[i] = makeTile(tile.type, tile.level + 1)
         continue
@@ -1302,7 +1377,8 @@ function upkeepBreakdown(stats, funding, ordinances) {
   var rows = [
     { key: "roads", label: "Roads",
       amount: (stats.roadCount - (stats.avenueCount || 0)) * ROAD_UPKEEP
-        + (stats.avenueCount || 0) * AVENUE_UPKEEP },
+        + (stats.avenueCount || 0) * AVENUE_UPKEEP
+        + (stats.pathCount || 0) * PATH_UPKEEP },
     { key: "power", label: "Power plants", amount: stats.powerUpkeep },
     { key: "water", label: "Water", amount: stats.waterUpkeep },
     { key: "parks", label: "Parks", amount: stats.parkCount * PARK_UPKEEP },
@@ -1327,6 +1403,7 @@ function upkeepBreakdown(stats, funding, ordinances) {
 function monthlyCostOf(type, level) {
   var tier = INFRA_UPKEEP_SCALE[level || 0]
   if (type === TILE_ROAD) return ROAD_UPKEEP
+  if (type === TILE_PATH) return PATH_UPKEEP
   if (type === TILE_PARK || type === TILE_WATERFRONT_PARK) return PARK_UPKEEP
   if (type === TILE_POWER) return POWER_UPKEEP * tier
   if (type === TILE_WATER) return WATER_UPKEEP * tier
@@ -1435,7 +1512,7 @@ function canPlace(grid, index, type, treasury) {
   if (cost === undefined) return false
   if (treasury < cost) return false
   var current = parseTile(grid[index])
-  if (type === TILE_ROAD && current.type === TILE_LAKE) return true
+  if ((type === TILE_ROAD || type === TILE_PATH) && current.type === TILE_LAKE) return true
   // An avenue can be laid on open land or water like a road, or widen an
   // existing street or bridge in place. Widening an avenue is a no-op, so it
   // is refused rather than silently charging for nothing.
@@ -1455,7 +1532,9 @@ function placeTile(grid, index, type) {
     next[index] = makeTile(TILE_ROAD, overWater ? 3 : 2)
     return next
   }
-  next[index] = makeTile(type, type === TILE_ROAD && current.type === TILE_LAKE ? 1 : 0)
+  var spansWater = current.type === TILE_LAKE
+    && (type === TILE_ROAD || type === TILE_PATH)
+  next[index] = makeTile(type, spansWater ? 1 : 0)
   return next
 }
 
@@ -2450,14 +2529,19 @@ function overlayCoverageState(grid, gridSize, index, def, utilities, funding) {
 // nothing is stopping it.
 var GROWTH_BLOCKER_LABELS = {
   max: "Fully grown", road: "No road", power: "No power",
-  water: "No water", traffic: "Gridlocked", unhappy: "City too unhappy"
+  water: "No water", traffic: "Gridlocked", unhappy: "City too unhappy",
+  lorries: "Needs a road, not a path"
 }
 
 function growthBlocker(grid, gridSize, index, utilities, happiness, traffic) {
   var tile = parseTile(grid[index])
   if (tile.type !== TILE_RES && tile.type !== TILE_COM && tile.type !== TILE_IND) return ""
   if (tile.level >= 3) return "max"
-  if (!hasRoadAccess(grid, gridSize, index)) return "road"
+  // A footpath serves a lot as well as a road does, except for industry: a
+  // works needs somewhere for its lorries, and that is the price of a
+  // pedestrian district being pleasant.
+  if (!hasAccess(grid, gridSize, index)) return "road"
+  if (tile.type === TILE_IND && !hasRoadAccess(grid, gridSize, index)) return "lorries"
   if (!isCovered(gridSize, utilities.power, index, POWER_RADIUS)) return "power"
   if (!isCovered(gridSize, utilities.water, index, WATER_RADIUS)) return "water"
   if (traffic && trafficGrowthScale(lotCongestion(traffic, index)) <= 0) return "traffic"
@@ -2809,6 +2893,8 @@ var STREET_HEAD = ["Mill", "Bell", "Quarry", "Harbour", "Chapel", "Foundry",
   "Orchard", "Station", "Kiln", "Weaver", "Anchor", "Bramble", "Cooper",
   "Tannery", "Marsh", "Beacon", "Cinder", "Wharf", "Sexton", "Gasworks"]
 var STREET_TAIL = ["Road", "Street", "Lane", "Row", "Hill", "Way", "Terrace", "Walk"]
+// What a street is called when no car has ever been down it.
+var PATH_TAIL = ["Walk", "Path", "Steps", "Alley", "Passage", "Green", "Mews", "Close"]
 
 // Deterministic and cheap. Only needs to be well spread, not cryptographic.
 function cityHash(a, b) {
@@ -2828,44 +2914,49 @@ function cityHash(a, b) {
 // A street's identity, and the key a player's own name is stored against.
 // Axis and line rather than extent, so a renaming survives the road being
 // extended for exactly the same reason the generated name does.
-function streetKey(axis, fixed) {
-  return axis + ":" + fixed
+// A path and a road along the same line are two different streets and must not
+// share a name — the key is axis and line, so without a surface in it a
+// footpath on row 17 would be called whatever the road on row 17 is called,
+// which reads as a bug however defensible it is in a real city.
+function streetKey(axis, fixed, foot) {
+  return axis + ":" + fixed + (foot ? ":foot" : "")
 }
 
 var STREET_NAME_MAX = 28
-function streetNameFor(axis, fixed, names) {
-  var own = names && names[streetKey(axis, fixed)]
+function streetNameFor(axis, fixed, names, foot) {
+  var own = names && names[streetKey(axis, fixed, foot)]
   if (typeof own === "string" && own !== "") return own
-  var h = cityHash(axis === "ns" ? 7919 : 104729, fixed + 1)
+  var h = cityHash(axis === "ns" ? 7919 : 104729, (foot ? -1 : 1) * (fixed + 1))
+  var tails = foot ? PATH_TAIL : STREET_TAIL
   return STREET_HEAD[h % STREET_HEAD.length] + " "
-    + STREET_TAIL[Math.floor(h / STREET_HEAD.length) % STREET_TAIL.length]
+    + tails[Math.floor(h / STREET_HEAD.length) % tails.length]
 }
 
 // Setting a street's name, or clearing it back to the generated one. Returns a
 // new map rather than editing the old, so a caller assigning it to a QML
 // property gets a change notification.
-function renameStreet(names, axis, fixed, label) {
+function renameStreet(names, axis, fixed, label, foot) {
   var next = {}
   for (var key in (names || {})) next[key] = names[key]
   var clean = sanitizeName(label).slice(0, STREET_NAME_MAX).trim()
-  if (clean === "") delete next[streetKey(axis, fixed)]
-  else next[streetKey(axis, fixed)] = clean
+  if (clean === "") delete next[streetKey(axis, fixed, foot)]
+  else next[streetKey(axis, fixed, foot)] = clean
   return next
 }
 
 // How far the road continues either way along one axis from a road tile.
-function roadRunLength(grid, gridSize, index, axis) {
+function roadRunLength(grid, gridSize, index, axis, surface) {
   var x = index % gridSize, y = (index / gridSize) | 0
   var step = axis === "ns" ? gridSize : 1
   var limit = axis === "ns" ? gridSize - y : gridSize - x
   var back = axis === "ns" ? y : x
   var length = 1, from = index, to = index
   for (var f = 1; f < limit; f++) {
-    if (tileTypeOf(grid[index + f * step]) !== TILE_ROAD) break
+    if (tileTypeOf(grid[index + f * step]) !== surface) break
     to = index + f * step; length++
   }
   for (var b = 1; b <= back; b++) {
-    if (tileTypeOf(grid[index - b * step]) !== TILE_ROAD) break
+    if (tileTypeOf(grid[index - b * step]) !== surface) break
     from = index - b * step; length++
   }
   return { length: length, from: from, to: to }
@@ -2875,24 +2966,33 @@ function roadRunLength(grid, gridSize, index, axis) {
 // runs further through it — the long one is the street, the short one is the
 // turning off it — with east-west winning a tie so the answer is never
 // arbitrary.
+// Works for either surface. A run of road and a run of footpath never merge:
+// they are different streets with different names, and a path that ends where
+// a road begins is a corner, not a continuation.
 function roadStreet(grid, gridSize, index, names) {
-  if (tileTypeOf(grid[index]) !== TILE_ROAD) return null
-  var ew = roadRunLength(grid, gridSize, index, "ew")
-  var ns = roadRunLength(grid, gridSize, index, "ns")
+  var surface = tileTypeOf(grid[index])
+  if (surface !== TILE_ROAD && surface !== TILE_PATH) return null
+  var foot = surface === TILE_PATH
+  var ew = roadRunLength(grid, gridSize, index, "ew", surface)
+  var ns = roadRunLength(grid, gridSize, index, "ns", surface)
   var axis = ns.length > ew.length ? "ns" : "ew"
   var run = axis === "ns" ? ns : ew
   var fixed = axis === "ns" ? index % gridSize : (index / gridSize) | 0
-  return { axis: axis, fixed: fixed, from: run.from, to: run.to,
-    length: run.length, name: streetNameFor(axis, fixed, names),
-    named: !!(names && names[streetKey(axis, fixed)]) }
+  return { axis: axis, fixed: fixed, from: run.from, to: run.to, foot: foot,
+    length: run.length, name: streetNameFor(axis, fixed, names, foot),
+    named: !!(names && names[streetKey(axis, fixed, foot)]) }
 }
 
 // The address of any tile: the street of the road it is actually served by, so
 // a complaint about Beacon Street is a complaint about a road that exists and
 // can be found. A lot with no road at all is on the outskirts, which is both
 // true and a hint about why its resident is unhappy.
+// A resident on a pedestrian block has an address like anybody else. Without
+// the footpaths here, every one of them would be "of the outskirts" — which is
+// a poor thing to print about somebody living in the nicest square in the city.
 function streetOf(grid, gridSize, index, names) {
   var roads = roadAccessIndices(grid, gridSize, index)
+    .concat(footAccessIndices(grid, gridSize, index))
   var best = null
   for (var i = 0; i < roads.length; i++) {
     var street = roadStreet(grid, gridSize, roads[i], names)
@@ -2907,10 +3007,11 @@ var STREET_MIN_LENGTH = 4
 function streetRuns(grid, gridSize, names) {
   var seen = {}, out = []
   for (var i = 0; i < grid.length; i++) {
-    if (tileTypeOf(grid[i]) !== TILE_ROAD) continue
+    var surface = tileTypeOf(grid[i])
+    if (surface !== TILE_ROAD && surface !== TILE_PATH) continue
     var street = roadStreet(grid, gridSize, i, names)
     if (!street || street.length < STREET_MIN_LENGTH) continue
-    var key = street.axis + ":" + street.from + ":" + street.to
+    var key = street.axis + ":" + street.from + ":" + street.to + (street.foot ? ":f" : "")
     if (seen[key]) continue
     seen[key] = true
     out.push(street)

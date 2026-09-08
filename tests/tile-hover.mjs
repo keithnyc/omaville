@@ -6,7 +6,10 @@ vm.runInContext(fs.readFileSync(new URL('../Model.js',import.meta.url),'utf8').r
 const qml=fs.readFileSync(new URL('../CityView.qml',import.meta.url),'utf8');
 // residentAt is how the inspector answers "who lives here". Stubbed to nobody
 // for the sweep below, and exercised on its own further down.
-const root={attractiveness:4,coverageRadii:{E:M.POWER_RADIUS,W:M.WATER_RADIUS,F:M.FIRE_RADIUS,S:M.POLICE_RADIUS},demandPercent:()=>50,residentAt:()=>null};
+// grid/gridSize are read when the card reports how a lot is reached; a bare
+// grid means "no footpath anywhere", which is what the sweep below wants.
+const root={attractiveness:4,coverageRadii:{E:M.POWER_RADIUS,W:M.WATER_RADIUS,F:M.FIRE_RADIUS,S:M.POLICE_RADIUS},demandPercent:()=>50,residentAt:()=>null,
+  grid:M.emptyGrid(M.GRID_SIZE), gridSize:M.GRID_SIZE, serviceReady:false};
 const ctx=vm.createContext({root,Model:M});
 for(const n of ['inspectTitle','inspectLines']) root[n]=vm.runInContext('('+qml.match(new RegExp('  function '+n+'\\([\\s\\S]*?\\n  \\}'))[0]+')',ctx);
 for(const type of Object.keys(M.COSTS)) for(let level=0;level<(M.UPGRADE_COSTS[type]?3:1);level++) {
@@ -68,3 +71,42 @@ console.log('PASS: inspect info identifies its own tile.');
   root.residentAt = () => null;
 }
 console.log('PASS: the inspector reports who lives at a tile, or nobody.');
+
+// --- and how a lot is reached ---------------------------------------------
+// "Road access: No" was a lie once a footpath could serve a lot, and it is the
+// kind of lie that sends a player to build a road they do not need.
+{
+  const g = M.emptyGrid(M.GRID_SIZE);
+  const at = (x, y) => y * M.GRID_SIZE + x;
+  for (let y = 10; y < 20; y++) g[at(20, y)] = 'D0';
+  g[at(21, 15)] = 'R2';
+  root.grid = g;
+  const walked = M.inspectTile(g, M.GRID_SIZE, at(21, 15), M.findUtilities(g),
+    { R: 1, C: 1, I: 1 }, 500, 500);
+  assert.ok(root.inspectLines(walked).join('\n').includes('footpath only'),
+    'a lot on a path is reported as reached on foot, not as unreachable');
+
+  const road = g.slice();
+  for (let y = 10; y < 20; y++) road[at(20, y)] = '#0';
+  root.grid = road;
+  assert.ok(root.inspectLines(M.inspectTile(road, M.GRID_SIZE, at(21, 15),
+    M.findUtilities(road), { R: 1, C: 1, I: 1 }, 500, 500)).join('\n').includes('road'));
+
+  // The lot stays; only its surface goes. An empty tile is not a zone and
+  // never reaches the branch under test.
+  const stranded = M.emptyGrid(M.GRID_SIZE);
+  stranded[at(21, 15)] = 'R2';
+  root.grid = stranded;
+  assert.ok(root.inspectLines(M.inspectTile(stranded, M.GRID_SIZE, at(21, 15),
+    M.findUtilities(stranded), { R: 1, C: 1, I: 1 }, 500, 500)).join('\n')
+    .includes('nothing yet'), 'and a lot with neither says so plainly');
+
+  // The path tile itself explains what it is and what it will not carry.
+  const onPath = M.inspectTile(g, M.GRID_SIZE, at(20, 15), M.findUtilities(g),
+    { R: 1, C: 1, I: 1 }, 500, 500);
+  const text = root.inspectLines(onPath).join('\n');
+  assert.ok(/carries no cars/.test(text) && /Industry cannot/.test(text), text);
+  const bridge = M.inspectTile(['D1'], 1, 0, M.findUtilities(['D1']), { R: 1, C: 1, I: 1 }, 0, 0);
+  assert.ok(root.inspectLines(bridge).join('\n').includes('Footbridge'));
+}
+console.log('PASS: the inspector says how a lot is reached, and what a footpath will not carry.');

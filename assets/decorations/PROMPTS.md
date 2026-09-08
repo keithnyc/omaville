@@ -100,3 +100,55 @@ The initial bench draft had an opaque checkerboard. Exact transparency finishing
 Use case: background-extraction. Remove the entire white and grey CHECKERBOARD background from this production sprite. Deliver actual transparent RGBA alpha, every background pixel alpha=0, not a depicted transparency pattern. Preserve the warm timber bench, dark iron legs, small lamp and scattered individual pale gravel stones exactly in their current design, camera, colors and crisp pixel-art finish. Transparent holes between bench slats and under armrests. Keep only tiny contact shadows at feet, no broad grey shadow or ground patch, no backdrop, no text. Complete isolated sprite centered with even padding on square transparent canvas.
 
 Final transparent source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-eee897bf-794e-4129-9b7c-8b362f38c386.png`.
+
+## Promenade structures — September 7
+
+Built-in imagegen using `assets/decorations/fountain.png` as camera, finish and scale reference. Finals: `assets/decorations/bandstand.png`, `assets/decorations/arbour.png`, `assets/paths/footbridge.png`. All 256x256 RGBA, genuine alpha. Decorations fit 200x200 painted bounds with even padding and an 8px downward center bias, matching the fountain export. Checked at 32px on green. Bridge is deliberately NOT padded horizontally: full-width generated deck trimmed, resized to 256x144 then vertically centered on 256x256. Deck itself is about one third of tile height, rails bring total bounds to 144px. Inspected three copies side by side over blue; continuous left-right crossing, transparent above/below. No code, tables, tests or deployment changes.
+
+### bandstand.png
+
+Exact generation prompt:
+
+Use case: stylized-concept. Production Omaville sprite, warm crisp detailed 32-bit pixel art, elevated near-overhead orthographic camera matching reference fountain. Reference is CAMERA, FINISH AND SCALE ONLY. Genuine transparent RGBA alpha, no backdrop or checkerboard, no text, people, ground slab, grass, path or outer border, tiny contact shadow only. Clear forms readable at 32px. An octagonal Victorian cast-iron bandstand, ornamental columns, scalloped roof with finial, low balustrade and three steps up, painted dark green and cream. Deliberate public garden centerpiece. Complete isolated structure including its own raised stage but no surrounding ground. Square canvas with generous even padding, horizontally centered and slightly below center, comfortably inside tile.
+
+Source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-a8b31d7e-fff3-4d9c-9689-08912bb63573.png`.
+
+Export command (from omaville):
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-a8b31d7e-fff3-4d9c-9689-08912bb63573.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 200x200 -gravity center -background none -extent 256x240 -gravity south -extent 256x256 -strip -define png:color-type=6 assets/decorations/bandstand.png
+```
+
+### arbour.png
+
+Exact generation prompt:
+
+Use case: stylized-concept. Production Omaville sprite, warm crisp detailed 32-bit pixel art, elevated near-overhead orthographic camera matching reference fountain. Reference is CAMERA, FINISH AND SCALE ONLY. Genuine transparent RGBA alpha, no backdrop or checkerboard, no text, people, ground slab, grass, path or outer border, tiny contact shadow only. Clear forms readable at 32px. A timber pergola arbour: a short run of posts with open cross-beams, climbing wisteria and roses over the top, a bench clearly visible beneath. Low and wide, soft green foliage and lavender flowers doing half the work. Complete isolated structure with transparent floor and gaps. Square canvas with generous even padding, horizontally centered and slightly below center, comfortably inside tile.
+
+Source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-3201030f-f439-4529-8182-b737e7b1f43a.png`.
+
+Export command (from omaville):
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-3201030f-f439-4529-8182-b737e7b1f43a.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 200x200 -gravity center -background none -extent 256x240 -gravity south -extent 256x256 -strip -define png:color-type=6 assets/decorations/arbour.png
+```
+
+### footbridge.png
+
+Exact generation prompt:
+
+Use case: stylized-concept. Production Omaville sprite, warm crisp detailed 32-bit pixel art, elevated near-overhead orthographic camera matching reference fountain. Reference is CAMERA, FINISH AND SCALE ONLY. Genuine transparent RGBA alpha, no backdrop or checkerboard, no text, people, ground slab, grass, path or outer border, tiny contact shadow only. Clear forms readable at 32px. Tileable horizontal TIMBER FOOTBRIDGE segment on square canvas. CRITICAL GEOMETRY: flat straight plank deck runs horizontally from EXACT LEFT IMAGE EDGE to EXACT RIGHT IMAGE EDGE at same height. NOT diagonal, NOT perspective-vanishing, NOT arched, NO end caps or end posts. Deck and continuous light handrails above and below continue past both image edges, like a cropped middle section of a longer bridge. This must join seamlessly with an identical copy on either side. Near-overhead view looking down onto planks, slight front thickness matching elevated reference camera, but horizontal axis aligned to image x. Deck occupies middle 40 percent of canvas height; slim handrails along the two long sides. Entire space above and below bridge transparent. Warm timber planks across narrow deck, simple repeating rail posts. No bank, water, shore, ground, road markings or vehicles. Square 256x256 target.
+
+Source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-30753ac8-6397-4458-a7ca-13830742c1c2.png`.
+
+Exact transparency finishing prompt:
+
+Use case: background-extraction. Remove ONLY the entire white and gray checkerboard backdrop from this horizontal footbridge sprite, including gaps under handrails. Genuine transparent RGBA alpha. Preserve pixel art, timber colors and exact straight horizontal geometry. Deck and rails MUST continue to BOTH left and right image edges without any transparent side padding, same y levels at both edges. Keep square canvas, no reframing, no perspective changes, no arch, no end posts. Transparent above and below bridge. No water, ground, text or backdrop.
+
+Transparent source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-763e78eb-dac2-4881-b31b-e75841e95ef3.png`.
+
+Export command (from omaville):
+
+```bash
+magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-763e78eb-dac2-4881-b31b-e75841e95ef3.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize '256x144!' -gravity center -background none -extent 256x256 -strip -define png:color-type=6 assets/paths/footbridge.png
+```

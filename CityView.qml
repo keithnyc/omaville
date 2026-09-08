@@ -394,6 +394,10 @@ Item {
     if (type === Model.TILE_WATERFRONT_PARK) return "Waterfront Park · $30\nPlace on empty land beside water for a garden and pier. Adds park happiness."
     if (type === Model.TILE_ROAD) return "Road · $10 on land / $35 bridge on water\nServes zones up to 2 steps away through lots, gardens or open land. Water and service buildings block access. Removing a bridge restores water."
     if (type === Model.TOOL_AVENUE) return "Avenue · $30 new / $20 to widen a street\nCarries about two and a half times a street. Costs more to maintain."
+    if (type === Model.TILE_PATH) return "Footpath · $" + Model.PATH_COST + " on land / $"
+      + Model.PATH_BRIDGE_COST + " over water\nServes lots exactly as a road does, and carries "
+      + "no cars at all — a block reached only on foot puts nothing on the network. "
+      + "Industry needs a real road; shops on a path alone grow slowly."
     if (type === Model.TILE_TRANSIT) return "Transit · $130\nTakes car trips off the roads nearby. Costs a monthly per-resident budget like the other departments."
     if (type === "decorations") return "Decorations · hover to choose\nSix kinds, from a $10 hedgerow to a $55 fountain. Raise nearby home values and residential demand; the dearer ones raise them more."
     if (type === "inspect") return "Inspect · click a tile for services, property value and upgrades."
@@ -453,7 +457,13 @@ Item {
     // A road says which street it is, so the name in a letter can be found by
     // clicking the road itself.
     var whoLines = []
-    if (info.type === Model.TILE_ROAD && root.serviceReady) {
+    if (info.type === Model.TILE_PATH) {
+      lines.push(info.level % 2 === 1
+        ? "Footbridge · bulldoze restores the water"
+        : "Footpath · reaches lots like a road, carries no cars")
+      lines.push("Industry cannot be served by one; shops on a path alone grow slowly")
+    }
+    if ((info.type === Model.TILE_ROAD || info.type === Model.TILE_PATH) && root.serviceReady) {
       var onStreet = Model.roadStreet(root.grid, root.gridSize, info.index,
         root.cityService.streetNames)
       if (onStreet) whoLines.push(onStreet.name + (onStreet.named ? " — your name for it" : ""))
@@ -468,7 +478,9 @@ Item {
     var isZone = info.type === Model.TILE_RES || info.type === Model.TILE_COM || info.type === Model.TILE_IND
     if (isZone) {
       lines = [
-        "Road access: " + (info.roadAdjacent ? "Yes" : "No"),
+        "Reached by: " + (info.roadAdjacent ? "road"
+          : Model.hasFootAccess(root.grid, root.gridSize, info.index) ? "footpath only"
+          : "nothing yet"),
         "Power: " + (info.powerCovered ? "Yes" : "No"),
         "Water: " + (info.waterCovered ? "Yes" : "No"),
         "Fire cover: " + (info.fireCovered ? "Yes" : "No"),
@@ -968,6 +980,7 @@ Item {
   readonly property var toolList: [
     { type: Model.TILE_ROAD, label: "Road" },
     { type: Model.TOOL_AVENUE, label: "Avenue" },
+    { type: Model.TILE_PATH, label: "Footpath" },
     { type: Model.TILE_LAKE, label: "Water" },
     { type: Model.TILE_WATERFRONT_PARK, label: "Waterfront Park" },
     { type: Model.TILE_RES, label: "Residential" },
@@ -1716,6 +1729,32 @@ Item {
     }
     return out
   }
+  // The same cache for footpaths. Kept separate from the road one on purpose:
+  // a path meeting a road is a corner where the surface changes, not a
+  // junction, and joining them would have the path draw itself into the
+  // carriageway.
+  readonly property var pathConnCache: {
+    var data = root.grid
+    var size = root.gridSize
+    var path = Model.TILE_PATH
+    var out = new Array(data.length)
+    for (var i = 0; i < data.length; i++) {
+      var x = i % size, y = (i / size) | 0
+      out[i] = {
+        left: x > 0 && data[i - 1] && data[i - 1][0] === path,
+        right: x < size - 1 && data[i + 1] && data[i + 1][0] === path,
+        up: y > 0 && data[i - size] && data[i - size][0] === path,
+        down: y < size - 1 && data[i + size] && data[i + size][0] === path
+      }
+    }
+    return out
+  }
+  function pathConnectionsAt(index) {
+    var cache = root.pathConnCache
+    return (index >= 0 && index < cache.length) ? cache[index]
+      : { left: false, right: false, up: false, down: false }
+  }
+
   // Safe for any index, including one from a grid that has since shrunk.
   function connectionsAt(index) {
     var cache = root.roadConnCache
@@ -1732,6 +1771,76 @@ Item {
 
   // Avenue paint uses the same topology as streets, but replaces (rather than
   // overlays) the old centre dashes. Work in tile coordinates for seamless joins.
+  // A footpath: pale gravel or flag, narrower than a carriageway, with a soft
+  // edge rather than a kerb. Drawn procedurally like the roads, so a path can
+  // meet another at any angle without a sprite per corner.
+  function drawFootpath(ctx, x, y, s, conn, index) {
+    ctx.save(); ctx.translate(x, y); ctx.scale(s, s)
+    var width = 0.34
+    var near = 0.5 - width / 2, far = 0.5 + width / 2
+    var ends = (conn.left ? 1 : 0) + (conn.right ? 1 : 0)
+      + (conn.up ? 1 : 0) + (conn.down ? 1 : 0)
+
+    // A lone flag reads as a stepping stone rather than a mistake.
+    ctx.fillStyle = "#b9ad8e"
+    if (ends === 0) ctx.fillRect(near, near, width, width)
+    if (conn.left || conn.right) {
+      ctx.fillRect(conn.left ? -0.01 : near, near,
+        (conn.left ? near + 0.01 : 0) + width + (conn.right ? near + 0.01 : 0), width)
+    }
+    if (conn.up || conn.down) {
+      ctx.fillRect(near, conn.up ? -0.01 : near, width,
+        (conn.up ? near + 0.01 : 0) + width + (conn.down ? near + 0.01 : 0))
+    }
+    // Paving joints, stable per tile so they do not crawl while panning.
+    ctx.strokeStyle = "rgba(120, 110, 88, 0.55)"
+    ctx.lineWidth = 0.012
+    var phase = (root.roadTextureHash(index) % 5) / 5
+    if (conn.left || conn.right || ends === 0) {
+      for (var jx = 0; jx < 3; jx++) {
+        var px = (jx + phase) / 3
+        if (px < 0.02 || px > 0.98) continue
+        ctx.beginPath(); ctx.moveTo(px, near + 0.02); ctx.lineTo(px, far - 0.02); ctx.stroke()
+      }
+    }
+    if (conn.up || conn.down) {
+      for (var jy = 0; jy < 3; jy++) {
+        var py = (jy + phase) / 3
+        if (py < 0.02 || py > 0.98) continue
+        ctx.beginPath(); ctx.moveTo(near + 0.02, py); ctx.lineTo(far - 0.02, py); ctx.stroke()
+      }
+    }
+    ctx.restore()
+  }
+
+  // A plank footbridge where a path crosses water.
+  function drawFootbridge(ctx, x, y, s, conn) {
+    ctx.save(); ctx.translate(x, y); ctx.scale(s, s)
+    var vertical = conn.up || conn.down
+    var horizontal = conn.left || conn.right
+    if (!vertical && !horizontal) horizontal = true
+    // The same width as the path either side, or the deck steps in where the
+    // two meet.
+    var width = 0.34
+    var near = 0.5 - width / 2
+    ctx.fillStyle = "rgba(12, 30, 36, 0.35)"
+    if (vertical) ctx.fillRect(near + 0.03, 0, width, 1)
+    if (horizontal) ctx.fillRect(0, near + 0.03, 1, width)
+    ctx.fillStyle = "#9c7a52"
+    if (vertical) ctx.fillRect(near, 0, width, 1)
+    if (horizontal) ctx.fillRect(0, near, 1, width)
+    ctx.fillStyle = "#c9a874"
+    for (var plank = 0; plank < 7; plank++) {
+      var p = 0.02 + plank * 0.14
+      if (vertical) ctx.fillRect(near + 0.015, p, width - 0.03, 0.095)
+      if (horizontal) ctx.fillRect(p, near + 0.015, 0.095, width - 0.03)
+    }
+    ctx.fillStyle = "#d8c49a"
+    if (vertical) { ctx.fillRect(near - 0.02, 0, 0.022, 1); ctx.fillRect(near + width, 0, 0.022, 1) }
+    if (horizontal) { ctx.fillRect(0, near - 0.02, 1, 0.022); ctx.fillRect(0, near + width, 1, 0.022) }
+    ctx.restore()
+  }
+
   function drawAvenueMarkings(ctx, gx, gy, cellSize, conn) {
     ctx.save()
     ctx.translate(gx + cellSize * 0.5, gy + cellSize * 0.5)
@@ -3859,6 +3968,12 @@ Item {
         ctx.beginPath(); ctx.arc(gx + cellSize * 0.5, gy + cellSize * 0.6, cellSize * 0.22, 0, Math.PI * 2); ctx.fill()
       }
       break
+    case Model.TILE_PATH:
+      if (tile.level % 2 === 1) {
+        Waterfront.drawWater(ctx, gx, gy, cellSize, data, root.gridSize, index)
+        root.drawFootbridge(ctx, gx, gy, cellSize, root.pathConnectionsAt(index))
+      } else root.drawFootpath(ctx, gx, gy, cellSize, root.pathConnectionsAt(index), index)
+      break
     case Model.TILE_ROAD:
       var roadConn = root.connectionsAt(index)
       if (tile.level % 2 === 1) {
@@ -4463,6 +4578,9 @@ Item {
                     case Model.TOOL_AVENUE:
                       root.drawRoad(ctx, 0, 0, width, { up: true, down: true, left: false, right: false }, 0, true)
                       root.drawAvenueMarkings(ctx, 0, 0, width, { up: true, down: true, left: false, right: false })
+                      break
+                    case Model.TILE_PATH:
+                      root.drawFootpath(ctx, 0, 0, width, { up: true, down: true, left: false, right: false }, 0)
                       break
                     case Model.TILE_LAKE: Waterfront.drawWater(ctx, 0, 0, width, ['L0'], 1, 0); break
                     case Model.TILE_WATERFRONT_PARK: root.drawPark(ctx, 0, 0, width, 2); break
