@@ -1744,14 +1744,23 @@ Item {
     var data = root.grid
     var size = root.gridSize
     var path = Model.TILE_PATH
+    var road = Model.TILE_ROAD
+    // A path runs into a road as well as into another path. Purely a drawing
+    // decision — access is worked out separately — but without it the last
+    // tile before a kerb draws a blunt end a third of a tile short of the
+    // carriageway, and a path that plainly reaches the road looks like it
+    // stops in the grass.
+    function joins(tile) {
+      return !!tile && (tile[0] === path || tile[0] === road)
+    }
     var out = new Array(data.length)
     for (var i = 0; i < data.length; i++) {
       var x = i % size, y = (i / size) | 0
       out[i] = {
-        left: x > 0 && data[i - 1] && data[i - 1][0] === path,
-        right: x < size - 1 && data[i + 1] && data[i + 1][0] === path,
-        up: y > 0 && data[i - size] && data[i - size][0] === path,
-        down: y < size - 1 && data[i + size] && data[i + size][0] === path
+        left: x > 0 && joins(data[i - 1]),
+        right: x < size - 1 && joins(data[i + 1]),
+        up: y > 0 && joins(data[i - size]),
+        down: y < size - 1 && joins(data[i + size])
       }
     }
     return out

@@ -199,5 +199,24 @@ const at = (x, y) => y * size + x;
     'and a footbridge sits on water for the same reason');
 }
 
+// --- a path meets the road it runs to -------------------------------------
+// Drawing-only: access is worked out separately, and a path is never joined to
+// a road for any purpose but appearance. Without it the last tile before a
+// kerb draws a blunt end a third of a tile short of the carriageway, so a path
+// that plainly reaches the road looks like it stops in the grass.
+{
+  const view = fs.readFileSync(new URL('../CityView.qml', import.meta.url), 'utf8');
+  const cache = view.slice(view.indexOf('readonly property var pathConnCache'));
+  const body = cache.slice(0, cache.indexOf('function pathConnectionsAt'));
+  assert.ok(/tile\[0\] === path \|\| tile\[0\] === road/.test(body),
+    'a path tile draws itself as joining a road as well as another path');
+  // And this must stay cosmetic: the access rules may not consult it.
+  const model = fs.readFileSync(new URL('../Model.js', import.meta.url), 'utf8');
+  const foot = model.slice(model.indexOf('function footAccessIndices'));
+  assert.ok(!/TILE_ROAD/.test(foot.slice(0, foot.indexOf('function hasFootAccess'))),
+    'foot access is about paths only — a road granting foot access would make ' +
+    'every lot in the city pedestrian-served and silence its traffic');
+}
+
 console.log('PASS: a surface that serves a lot without carrying a car, refused to industry, ' +
   'charged for, bridgeable, addressed, and paid for in the congestion it takes off the roads.');
