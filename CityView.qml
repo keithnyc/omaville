@@ -414,9 +414,17 @@ Item {
   // the card never shows a stale snapshot — if the tile changes under it
   // (grows, gets bulldozed), the tooltip just describes whatever's there now.
   property int inspectedIndex: -1
+  // Every card that covers the map. One list, read by the overlay that draws
+  // them, by the scrim that blocks the map behind them, and by the map hover
+  // below — which used to keep its own copy naming five of the twelve, so
+  // opening the Gazette left tile tooltips popping out from behind it.
+  readonly property bool modalOpen: root.gameMenuOpen || root.confirmNewGameOpen
+    || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen
+    || root.historyOpen || root.goalOpen || root.marketOpen || root.residentsOpen
+    || root.gazetteOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
   readonly property int tileHoverIndex: root.active && root.serviceReady && gridMouse.containsMouse
     && !gridMouse.pressed && !gridMouse.painting && !gridMouse.panning
-    && !root.gameMenuOpen && !root.settingsOpen && !root.confirmNewGameOpen && !root.currentEvent && root.flyoutType === ""
+    && !root.modalOpen && !root.currentEvent && root.flyoutType === ""
     ? gridMouse.tileIndexAt(gridMouse.mouseX, gridMouse.mouseY) : -1
   property bool tileHoverReady: false
   onTileHoverIndexChanged: {
@@ -5478,12 +5486,30 @@ Item {
   // useless the moment the map pushed it out of view.
   Item {
     anchors.fill: parent
-    visible: root.gameMenuOpen || root.confirmNewGameOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || root.residentsOpen || root.gazetteOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
+    visible: root.modalOpen
 
+    // One scrim for the whole overlay, and it must be hoverEnabled.
+    //
+    // It was not, and a MouseArea that is not hoverEnabled does not consume
+    // hover — it only consumes clicks. So with the Gazette open, moving the
+    // mouse across it went on reaching the map's gridMouse underneath and the
+    // map kept popping tile tooltips out from behind the card.
+    //
+    // Visible with the overlay rather than for a list of cards, so the two
+    // that must be answered rather than dismissed — the new-city confirmation
+    // and the away summary — block the map too. They just do not close on an
+    // outside click, which is the whole reason they were left off that list.
     MouseArea {
       anchors.fill: parent
-      visible: root.gameMenuOpen || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen || root.historyOpen || root.goalOpen || root.marketOpen || root.residentsOpen || root.gazetteOpen
-      onClicked: { root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false; root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false; root.goalOpen = false; root.marketOpen = false; root.residentsOpen = false; root.gazetteOpen = false }
+      hoverEnabled: true
+      acceptedButtons: Qt.AllButtons
+      onClicked: {
+        if (root.confirmNewGameOpen || root.awaySummaryOpen) return
+        root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false
+        root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false
+        root.goalOpen = false; root.marketOpen = false; root.residentsOpen = false
+        root.gazetteOpen = false
+      }
     }
 
     Rectangle {
