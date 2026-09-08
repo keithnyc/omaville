@@ -60,11 +60,28 @@ for (const file of Array.from(referenced).sort()) {
 assert.deepEqual(offenders, [],
   `oversized sprites decode to far more memory than they draw:\n  ${offenders.join('\n  ')}`);
 
-// The whole set, held at once, with room to grow. Tripping this means the art
-// is worth a look rather than that the number needs raising.
-const budgetMB = 24;
-assert.ok(texture / 1e6 < budgetMB,
-  `the sprite set decodes to ${(texture / 1e6).toFixed(1)}MB, over the ${budgetMB}MB budget`);
+// The whole set, as a ratchet rather than a ceiling.
+//
+// An absolute cap was the wrong shape. The real failure it is guarding against
+// is one oversized export — six files once cost 38MB between them, more than
+// the entire rest of the set, for no visible difference at 32 to 64 pixels.
+// That is caught by the per-sprite cap above. A fixed total, by contrast, gets
+// raised every time it trips, and a limit you raise on sight is not a limit.
+//
+// So this only objects to a *jump*: a quarter's growth in one change. Ordinary
+// batches of art pass and are reported; a single 1254px file does not.
+const baseline = JSON.parse(
+  fs.readFileSync(new URL('sprite-budget.json', import.meta.url), 'utf8')).decodedBytes;
+const JUMP = 1.25;
+assert.ok(texture <= baseline * JUMP,
+  `the sprite set decodes to ${(texture / 1e6).toFixed(1)}MB against a recorded ` +
+  `${(baseline / 1e6).toFixed(1)}MB — a ${((texture / baseline - 1) * 100).toFixed(0)}% jump ` +
+  `in one change. Check the new art is sized for how it is drawn; if it is, raise ` +
+  `decodedBytes in tests/sprite-budget.json in the same commit.`);
+// Drifting far below leaves the ratchet loose, which is worth saying but is
+// nobody's emergency.
+const slack = texture < baseline * 0.8
+  ? `  (recorded ${(baseline / 1e6).toFixed(1)}MB — worth lowering)` : '';
 
 // Full-resolution originals are kept — they are the only copy of the artwork
 // at that size — but they are held out of the loader's way in sources/ and
@@ -196,4 +213,5 @@ assert.ok(texture / 1e6 < budgetMB,
 }
 
 console.log(`PASS: ${referenced.size} sprites, none oversized, ` +
-  `${(texture / 1e6).toFixed(1)}MB of texture for the whole set.`);
+  `${(texture / 1e6).toFixed(1)}MB decoded` +
+  `${slack || ` of ${(baseline * JUMP / 1e6).toFixed(1)}MB before a jump is flagged`}.`);

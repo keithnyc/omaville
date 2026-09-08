@@ -1,0 +1,5 @@
+{
+  "_comment": "The decoded size of the whole sprite set, in bytes, as last agreed. Not a limit — a mark to measure the next change against. A single change may not grow it by more than a quarter, which catches one bad export without turning ordinary growth into an argument. Raise it deliberately, in the same commit as the art that needs it.",
+  "_recordedAt": "82 sprites, after Astra's twelve tier-3 variants",
+  "decodedBytes": 22118400
+}
