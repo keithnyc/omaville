@@ -4243,6 +4243,19 @@ Item {
         }
 
         Button {
+          id: pauseButton
+          anchors.verticalCenter: parent.verticalCenter
+          // Nerd Font pause / play.
+          iconText: root.serviceReady && root.cityService.paused ? "\uf04b" : "\uf04c"
+          tooltipText: root.serviceReady && root.cityService.paused
+            ? "Paused — the city is not advancing. Click to resume."
+            : "Pause the city. It stops advancing until you resume; nothing is lost."
+          foreground: root.serviceReady && root.cityService.paused
+            ? "#e8a84c" : (root.bar ? root.bar.foreground : Color.foreground)
+          onClicked: if (root.serviceReady) root.cityService.setPaused(!root.cityService.paused)
+        }
+
+        Button {
           id: gazetteButton
           anchors.verticalCenter: parent.verticalCenter
           // Nerd Font newspaper. A dot rides on it when there is an edition
@@ -4257,7 +4270,7 @@ Item {
         }
 
         Text {
-          width: parent.width - gameMenuButton.width - gazetteButton.width - taxRow.implicitWidth - detachButton.width - parent.spacing * 4
+          width: parent.width - gameMenuButton.width - pauseButton.width - gazetteButton.width - taxRow.implicitWidth - detachButton.width - parent.spacing * 5
           text: root.serviceReady ? root.cityService.cityName : "Omaville"
           elide: Text.ElideRight
           color: root.bar ? root.bar.foreground : Color.foreground
@@ -4309,8 +4322,11 @@ Item {
         parent: statsRow
         anchors.right: statsRow.right
         anchors.verticalCenter: statsRow.verticalCenter
-        text: root.calendar.monthName + " · Year " + root.calendar.year
-        color: root.bar ? root.bar.foreground : Color.foreground
+        text: root.serviceReady && root.cityService.paused
+          ? "Paused · " + root.calendar.monthName + " " + root.calendar.year
+          : root.calendar.monthName + " · Year " + root.calendar.year
+        color: root.serviceReady && root.cityService.paused
+          ? "#e8a84c" : (root.bar ? root.bar.foreground : Color.foreground)
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
         font.pixelSize: Style.font.body
         font.bold: true

@@ -149,6 +149,21 @@ Item {
   // in the unseen dots, still shown in the "while you were away" summary and
   // still eligible for the Gazette. This is the one choke point every one of
   // the notify() calls goes through, so a new call site cannot bypass it.
+  // Stopping the clock on purpose. The idle monitor below already halts the
+  // city after five minutes away from the keyboard, which covers a machine
+  // left on overnight; this covers the other case, sitting at the desk all
+  // evening and not wanting the city to advance while you are.
+  //
+  // A state of this city's clock rather than a preference about the app, so
+  // unlike popupNotifications a new city starts running — a brand new town
+  // that does not grow reads as broken rather than as paused.
+  property bool paused: false
+  function setPaused(on) {
+    if (root.paused === on) return
+    root.paused = on
+    flushState()
+  }
+
   property bool popupNotifications: true
   function notify(title, body) {
     if (!root.popupNotifications) return
@@ -484,6 +499,7 @@ Item {
     root.lastSeenMinute = 0
     root.lastGazetteMinute = 0
     root.citizens = []
+    root.paused = false
     root.streetNames = ({})
     root.brownoutActive = false
     root.ageMinutes = 0
@@ -596,7 +612,7 @@ Item {
   // restore once the mechanics feel right at a readable speed.
   Timer {
     interval: 15 * 1000
-    running: root.initialized && !idleMonitor.isIdle
+    running: root.initialized && !root.paused && !idleMonitor.isIdle
     repeat: true
     onTriggered: {
       // A crime wave drags the whole city's mood, not just its own blocks —
@@ -989,6 +1005,7 @@ Item {
       lastSeenMinute: root.lastSeenMinute,
       lastGazetteMinute: root.lastGazetteMinute,
       popupNotifications: root.popupNotifications,
+      paused: root.paused,
       citizens: root.citizens,
       streetNames: root.streetNames
     }, null, 2) + "\n")
@@ -1074,6 +1091,7 @@ Item {
       lastGazetteMinute = Math.max(0, num(saved.lastGazetteMinute, 0))
       // Absent in older saves, and the sensible default there is on.
       popupNotifications = saved.popupNotifications !== false
+      paused = saved.paused === true
       // Residents saved before anybody had a birthday would otherwise all read
       // as born in Year 1 and die on the next tick.
       citizens = Model.seedCitizenLives(

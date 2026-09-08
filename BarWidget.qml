@@ -20,6 +20,10 @@ BarWidget {
   // What the city is currently doing wrong, if anything — the service ranks
   // these so the widget and the panel never disagree about what is urgent.
   readonly property string alertKind: serviceReady ? cityService.alertKind : ""
+  // Shown in the bar because the bar is what is visible with the panel shut,
+  // and a city that has stopped on purpose must not look like a city that has
+  // stopped working.
+  readonly property bool paused: serviceReady && cityService.paused === true
   readonly property bool alerting: alertKind !== ""
   // Events logged since the player last opened the panel. The widget is the
   // only place these are visible without opening anything, which is the whole
@@ -40,7 +44,8 @@ BarWidget {
     var s = root.cityService
     var cal = Model.calendarFor(s.ageMinutes)
     var lines = [
-      s.cityName + " · " + cal.monthName + ", Year " + cal.year,
+      s.cityName + " · " + cal.monthName + ", Year " + cal.year
+        + (root.paused ? "  (paused)" : ""),
       "Pop " + root.population + " · " + root.money(root.treasury) + " · " + s.happiness + "% happy"
     ]
     if (s.outOfOffice) {
@@ -187,6 +192,20 @@ BarWidget {
       id: content
       anchors.centerIn: parent
       spacing: Style.space(3)
+
+      // Paused sits beside the skyline rather than replacing it, unlike an
+      // alert: the size of the city is still the truth, it has simply stopped
+      // changing. Dimmed and still, so it reads as stopped rather than as
+      // something wanting attention.
+      Text {
+        visible: root.paused && !root.alerting
+        text: "\uf04c"
+        color: button.activeColor
+        opacity: 0.55
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.bar.iconFont
+        anchors.verticalCenter: parent.verticalCenter
+      }
 
       // The alert glyph replaces the skyline rather than sitting beside it:
       // bar space is scarce, and when the city is on fire its size is not
