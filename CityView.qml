@@ -386,7 +386,9 @@ Item {
     G: Qt.resolvedUrl("assets/decorations/hedge.png").toString(),
     K: Qt.resolvedUrl("assets/decorations/bench.png").toString(),
     V: Qt.resolvedUrl("assets/decorations/statue.png").toString(),
-    O: Qt.resolvedUrl("assets/decorations/fountain.png").toString()
+    O: Qt.resolvedUrl("assets/decorations/fountain.png").toString(),
+    U: Qt.resolvedUrl("assets/decorations/arbour.png").toString(),
+    J: Qt.resolvedUrl("assets/decorations/bandstand.png").toString()
   })
 
   function toolHint(type) {
@@ -1085,13 +1087,18 @@ Item {
     G: { scale: 1.18, baseline: 1.31 },
     K: { scale: 1.10, baseline: 1.13 },
     V: { scale: 1.09, baseline: 0.99 },
-    O: { scale: 1.13, baseline: 1.00 }
+    O: { scale: 1.13, baseline: 1.00 },
+    U: { scale: 1.05, baseline: 1.04 },
+    // The bandstand is drawn narrow in its frame, so it needs the most scaling
+    // of any of them to sit as the centrepiece of a square.
+    J: { scale: 1.56, baseline: 1.02 }
   })
 
   // Stand-in until a sprite finishes loading, so a freshly placed decoration is
   // never an invisible tile.
   readonly property var decorationBlobColors: ({
-    T: "#6c9a4d", B: "#c58794", G: "#5c8f45", K: "#a8703c", V: "#8fae9b", O: "#7fc7d8"
+    T: "#6c9a4d", B: "#c58794", G: "#5c8f45", K: "#a8703c", V: "#8fae9b", O: "#7fc7d8",
+    U: "#7f6bb0", J: "#2f7a63"
   })
 
   // Data overlay painted over the finished map. Lives on its own thin Canvas
@@ -1813,8 +1820,31 @@ Item {
     ctx.restore()
   }
 
-  // A plank footbridge where a path crosses water.
+  readonly property string footbridgeSprite:
+    Qt.resolvedUrl("assets/paths/footbridge.png").toString()
+
+  // A plank footbridge where a path crosses water. The sprite runs edge to
+  // edge left-right so a row of them is one continuous crossing; a north-south
+  // crossing is the same image turned a quarter turn, which is why there is
+  // only one file. Falls back to the drawn version if it has not loaded yet.
   function drawFootbridge(ctx, x, y, s, conn) {
+    if (cityCanvas.isImageLoaded(root.footbridgeSprite)) {
+      var vertical = (conn.up || conn.down) && !(conn.left || conn.right)
+      ctx.save()
+      if (vertical) {
+        ctx.translate(x + s / 2, y + s / 2)
+        ctx.rotate(Math.PI / 2)
+        ctx.drawImage(root.footbridgeSprite, -s / 2, -s / 2, s, s)
+      } else {
+        ctx.drawImage(root.footbridgeSprite, x, y, s, s)
+      }
+      ctx.restore()
+      return
+    }
+    root.drawFootbridgeFallback(ctx, x, y, s, conn)
+  }
+
+  function drawFootbridgeFallback(ctx, x, y, s, conn) {
     ctx.save(); ctx.translate(x, y); ctx.scale(s, s)
     var vertical = conn.up || conn.down
     var horizontal = conn.left || conn.right
@@ -3956,6 +3986,8 @@ Item {
     case Model.TILE_BENCH:
     case Model.TILE_STATUE:
     case Model.TILE_FOUNTAIN:
+    case Model.TILE_ARBOUR:
+    case Model.TILE_BANDSTAND:
       root.drawSpriteLot(ctx, gx, gy, cellSize, tile.type)
       var decorationSource = root.decorationSpriteUrls[tile.type]
       if (cityCanvas.isImageLoaded(decorationSource)) {
@@ -4765,6 +4797,7 @@ Item {
             for (var ii = 0; ii < root.industrialSpriteUrls.length; ii++)
               for (var ij = 0; ij < root.industrialSpriteUrls[ii].length; ij++)
                 loadImage(root.industrialSpriteUrls[ii][ij])
+            loadImage(root.footbridgeSprite)
             for (var type in root.infrastructureSpriteUrls)
               for (var ti = 0; ti < root.infrastructureSpriteUrls[type].length; ti++)
                 loadImage(root.infrastructureSpriteUrls[type][ti])
@@ -7716,7 +7749,9 @@ Item {
                   case Model.TILE_HEDGE:
                   case Model.TILE_BENCH:
                   case Model.TILE_STATUE:
-                  case Model.TILE_FOUNTAIN: root.drawPark(ctx, 0, 0, width, 0); break
+                  case Model.TILE_FOUNTAIN:
+                  case Model.TILE_ARBOUR:
+                  case Model.TILE_BANDSTAND: root.drawPark(ctx, 0, 0, width, 0); break
                   }
                 }
               }

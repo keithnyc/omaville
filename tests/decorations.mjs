@@ -40,7 +40,7 @@ assert.equal(model.computeAttractiveness(model.summarize(grid)), 15);
 // than a test failure. These pin every derived table back to DECORATIONS.
 {
   const types = Array.from(model.DECORATION_TYPES);
-  assert.equal(types.length, 6, 'six decorations to choose from');
+  assert.ok(types.length >= 6, `${types.length} decorations to choose from`);
   assert.equal(new Set(types).size, types.length, 'no letter used twice');
   for (const t of types) {
     const d = model.DECORATIONS[t];
@@ -56,7 +56,23 @@ assert.equal(model.computeAttractiveness(model.summarize(grid)), 15);
   for (const t of types)
     assert(!['_', '#', 'A', 'R', 'C', 'I', 'P', 'E', 'W', 'F', 'S', 'N', 'H', 'M', 'L', 'Q']
       .includes(t), `${t} does not collide with an existing tile type`);
+  for (const t of types)
+    assert.notEqual(t, model.TILE_PATH, 'nor with the footpath');
   assert.equal(model.isDecoration('R'), false, 'and a zone is not a decoration');
+
+  // summarize used to list the decorations as switch cases, so adding two
+  // without extending it left them counting for nothing — no error, just a
+  // bandstand that made nowhere nicer. It looks them up now; this is the
+  // assertion that says so directly rather than through demand.
+  for (const t of types) {
+    const g = empty();
+    g[40] = t + '0';
+    const stats = model.summarize(g);
+    assert.equal(stats.decorationCount, 1, `${t} is counted`);
+    assert.equal(stats.decorationPoints, model.DECORATIONS[t].points, `${t} contributes appeal`);
+    assert.ok(Math.abs(stats.decorationUpkeep - model.DECORATIONS[t].upkeep) < 1e-9,
+      `${t} is billed for`);
+  }
 
   // Price has to track effect, or the cheap one is simply the right answer.
   const byCost = types.slice().sort((a, b) => model.DECORATIONS[a].cost - model.DECORATIONS[b].cost);

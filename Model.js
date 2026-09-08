@@ -57,6 +57,8 @@ var TILE_HEDGE = "G"
 var TILE_BENCH = "K"
 var TILE_STATUE = "V"
 var TILE_FOUNTAIN = "O"
+var TILE_BANDSTAND = "J"
+var TILE_ARBOUR = "U"
 
 var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "N": 100, "H": 110, "M": 130, "L": 4, "Q": 30, "D": PATH_COST }
 var TILE_LABELS = {
@@ -80,8 +82,11 @@ DECORATIONS[TILE_HEDGE]    = { label: "Hedgerow",  cost: 10, weight: 4,  upkeep:
 DECORATIONS[TILE_BENCH]    = { label: "Bench",     cost: 16, weight: 7,  upkeep: 0.05, points: 3 }
 DECORATIONS[TILE_STATUE]   = { label: "Statue",    cost: 40, weight: 14, upkeep: 0.12, points: 6 }
 DECORATIONS[TILE_FOUNTAIN] = { label: "Fountain",  cost: 55, weight: 18, upkeep: 0.18, points: 8 }
+DECORATIONS[TILE_ARBOUR]    = { label: "Arbour",    cost: 26, weight: 10, upkeep: 0.08, points: 4 }
+DECORATIONS[TILE_BANDSTAND] = { label: "Bandstand", cost: 70, weight: 20, upkeep: 0.22, points: 9 }
 
-var DECORATION_TYPES = [TILE_TREE, TILE_FLOWERS, TILE_HEDGE, TILE_BENCH, TILE_STATUE, TILE_FOUNTAIN]
+var DECORATION_TYPES = [TILE_TREE, TILE_FLOWERS, TILE_HEDGE, TILE_BENCH, TILE_ARBOUR,
+  TILE_STATUE, TILE_FOUNTAIN, TILE_BANDSTAND]
 for (var d = 0; d < DECORATION_TYPES.length; d++) {
   var decoration = DECORATIONS[DECORATION_TYPES[d]]
   COSTS[DECORATION_TYPES[d]] = decoration.cost
@@ -809,6 +814,19 @@ function summarize(grid) {
     var raw = grid[i]
     var type = tileTypeOf(raw)
     var level = tileLevelOf(raw)
+    // Decorations are looked up rather than listed as cases. They were a case
+    // list, and adding two more decorations without extending it left them
+    // counting for nothing — no error, just a bandstand that did not make
+    // anywhere nicer. There is now nothing to forget.
+    var placed = DECORATIONS[type]
+    if (placed !== undefined) {
+      stats.decorationCount++
+      stats.decorationPoints += placed.points
+      stats.decorationUpkeep += placed.upkeep
+      if (type === TILE_TREE) stats.treeCount++
+      else if (type === TILE_FLOWERS) stats.flowerCount++
+      continue
+    }
     switch (type) {
     case TILE_ROAD:
       stats.roadCount++
@@ -816,19 +834,6 @@ function summarize(grid) {
       break
     case TILE_PATH:
       stats.pathCount++
-      break
-    case TILE_TREE:
-    case TILE_FLOWERS:
-    case TILE_HEDGE:
-    case TILE_BENCH:
-    case TILE_STATUE:
-    case TILE_FOUNTAIN:
-      var placed = DECORATIONS[type]
-      stats.decorationCount++
-      stats.decorationPoints += placed.points
-      stats.decorationUpkeep += placed.upkeep
-      if (type === TILE_TREE) stats.treeCount++
-      else if (type === TILE_FLOWERS) stats.flowerCount++
       break
     case TILE_PARK:
       stats.parkCount++
