@@ -156,7 +156,7 @@ Item {
   // wants the advisors (the widget's tooltip, for one) does not have to
   // rebuild them.
   readonly property var cityStats: Model.summarize(root.grid)
-  readonly property var coverage: Model.serviceCoverageStats(root.grid, root.gridSize)
+  readonly property var coverage: Model.serviceCoverageStats(root.grid, root.gridSize, root.funding)
   // What the player enacted, kept separate from what the city has become, so
   // the mood breakdown can tell them apart — a mill town's sour air is not an
   // ordinance and must not send them to the Budget looking for one.
@@ -1102,7 +1102,7 @@ Item {
       // Never below what the city has already built: a save from before this
       // existed must not wake up unable to build what it is standing in.
       civicLevel = Math.max(
-        Model.civicTarget(Model.serviceCoverageStats(grid, gridSize),
+        Model.civicTarget(Model.serviceCoverageStats(grid, gridSize, funding),
           funding, Model.findUtilities(grid)),
         Model.highestBuiltTier(grid) + 1)
     }

@@ -226,6 +226,45 @@ assert.equal(M.overlayCoverageState(lonely, size, spot + 9, pdef, M.findUtilitie
   }
 }
 
+// --- the card and the map must measure the same distance ------------------
+// They did not. serviceCoverageStats used the bare radius while the overlay
+// and the tick both scaled it by the department's funding, so a city with its
+// schools at 150% read "Education 99% covered, 225 residents unserved" above a
+// Schools overlay that was solid green. Two places computing the same reach
+// differently is the bug; this is the assertion that they are one number.
+{
+  for (const funding of [{ F: 1, S: 1, N: 1, H: 1, M: 1 },
+    { F: 1.5, S: 0.5, N: 1.5, H: 1.25, M: 0.75 },
+    { F: M.FUNDING_MIN, S: M.FUNDING_MAX, N: M.FUNDING_MAX, H: M.FUNDING_MIN, M: 1 }]) {
+    const rows = M.serviceCoverageStats(M.emptyGrid(size), size, funding);
+    for (const def of M.OVERLAYS) {
+      if (!def.service) continue;
+      const row = rows.find(r => r.key === def.service);
+      assert.ok(row, `the card reports on ${def.service}`);
+      assert.ok(Math.abs(row.radius - M.overlayRadius(def, funding)) < 1e-9,
+        `${def.service}: the card measures ${row.radius} and the map measures ` +
+        `${M.overlayRadius(def, funding)} — one of them is lying to the player`);
+    }
+  }
+
+  // Funding a department really does close a gap, rather than only appearing to.
+  const town = M.emptyGrid(size);
+  const school = 32 * size + 32;
+  town[school] = 'N1';
+  // A house at the edge of the unfunded radius but inside the funded one.
+  town[school + Math.round(M.SCHOOL_RADIUS * 1.1)] = 'R3';
+  const starved = M.serviceCoverageStats(town, size, { N: 1 })
+    .find(r => r.key === 'schools');
+  const funded = M.serviceCoverageStats(town, size, { N: M.FUNDING_MAX })
+    .find(r => r.key === 'schools');
+  assert.ok(funded.served > starved.served,
+    'paying a department more must reach houses the card previously called unserved');
+  // Power has no budget, so no amount of money moves it.
+  assert.equal(
+    M.serviceCoverageStats(town, size, { N: M.FUNDING_MAX }).find(r => r.key === 'power').radius,
+    M.POWER_RADIUS, 'power has no department budget to widen it');
+}
+
 // Funding widens what the overlay draws, exactly as it widens real coverage.
 const fdef = M.overlayDef('fire');
 assert.ok(M.overlayRadius(fdef, { F: M.FUNDING_MAX }) > M.overlayRadius(fdef, { F: 1 }));

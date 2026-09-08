@@ -215,7 +215,9 @@ Item {
   readonly property var utilities: root.cityService
     ? root.cityService.utilities : Model.findUtilities(root.grid)
   readonly property var serviceCoverage: root.cityService
-    ? root.cityService.coverage : Model.serviceCoverageStats(root.grid, root.gridSize)
+    ? root.cityService.coverage
+    : Model.serviceCoverageStats(root.grid, root.gridSize,
+        root.serviceReady ? root.cityService.funding : null)
   readonly property int population: cityService ? cityService.population : 0
   readonly property int jobs: cityService ? cityService.jobs : 0
   readonly property real treasury: cityService ? cityService.treasury : 0

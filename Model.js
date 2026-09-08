@@ -619,20 +619,28 @@ function educationStats(grid, gridSize) {
   return serviceCoverageStats(grid, gridSize)[4]
 }
 
-function serviceCoverageStats(grid, gridSize) {
+// Funding buys reach, and the tick has always spent it: a school funded at
+// 150% genuinely reaches 12 tiles rather than 10. This did not, so it reported
+// 225 residents unserved on a city whose Schools overlay was solid green —
+// the map and the tick agreeing with each other and the card alone dissenting.
+// Power and water have no department budget, so they are unscaled.
+function serviceCoverageStats(grid, gridSize, funding) {
   var utilities = findUtilities(grid)
+  function reach(base, department) {
+    return department ? base * fundingRadiusScale(fundingLevel(funding, department)) : base
+  }
   var rows = [
     { name: "Electricity", key: "power", radius: POWER_RADIUS },
     { name: "Water", key: "water", radius: WATER_RADIUS },
-    { name: "Fire protection", key: "fire", radius: FIRE_RADIUS },
-    { name: "Police", key: "police", radius: POLICE_RADIUS },
-    { name: "Education", key: "schools", radius: SCHOOL_RADIUS },
-    { name: "Healthcare", key: "medical", radius: MEDICAL_RADIUS },
+    { name: "Fire protection", key: "fire", radius: reach(FIRE_RADIUS, "F") },
+    { name: "Police", key: "police", radius: reach(POLICE_RADIUS, "S") },
+    { name: "Education", key: "schools", radius: reach(SCHOOL_RADIUS, "N") },
+    { name: "Healthcare", key: "medical", radius: reach(MEDICAL_RADIUS, "H") },
     // optional: reported like the others, but not a need. A city with no
     // transit is not failing anybody — it just has more cars. Anything that
     // treats unmet coverage as a shortage must skip these, or every city that
     // has not built an optional service looks like it is neglecting one.
-    { name: "Transit", key: "transit", radius: TRANSIT_RADIUS, optional: true }
+    { name: "Transit", key: "transit", radius: reach(TRANSIT_RADIUS, "M"), optional: true }
   ]
   for (var r = 0; r < rows.length; r++) { rows[r].residents = 0; rows[r].served = 0 }
   for (var i = 0; i < grid.length; i++) {
@@ -4432,6 +4440,10 @@ function civicTarget(coverage, funding, utilities) {
   var row = coverageRow(coverage || [], "schools")
   var reach = clamp((row.coverage || 0) / 100, 0, 1)
   var money = fundingLevel(funding, "N")
+  // Money appears twice on purpose, and mildly: it has already widened the
+  // radius the coverage was measured at (by 20% at half funding, which is
+  // deliberately gentle), and it stands here for how well the schools that do
+  // reach you are actually run.
   var effective = clamp(reach * money, 0, 1)
   var ceiling = CIVIC_LADDER[clamp(best, 0, CIVIC_LADDER.length - 1)]
   return clamp(CIVIC_MIN + (ceiling - CIVIC_MIN) * effective, CIVIC_MIN, CIVIC_MAX)
