@@ -45,7 +45,17 @@ function saveBytes(grid, pendingEvents, recentEventIds = []) {
     saveVersion: M.SAVE_VERSION, population: 99999, jobs: 99999, happiness: 100,
     demand: { R: 1.234567, C: 1.234567, I: 1.234567 },
     reachedMilestones: M.MILESTONES.slice(), budgetCrisisActive: true,
-    pendingEvents, recentEventIds, activeEffects: [], eventChance: 0.05, eventFrequency: 2
+    pendingEvents, recentEventIds, activeEffects: [], eventChance: 0.05, eventFrequency: 2,
+    // A full cast of residents, every one mid-request and greeted, plus a
+    // town's worth of memorials and the most offers that can wait.
+    citizens: Array.from({ length: M.CITIZEN_MAX }, (_, k) => ({
+      n: 'Reginald Marchbank', i: 4095 - k, s: 99999, p: -M.CITIZEN_PATIENCE, b: -99999, a: -99999,
+      t: 5, f: 100, h: 99999, y: 2026, q: { k: 'fix:industry', d: 99999 } })),
+    playDay: 99999, lastPlayDate: '2026-12-31', residentNews: 999,
+    memorials: Object.fromEntries(Array.from({ length: 60 }, (_, k) => [4000 - k,
+      { n: 'Reginald Marchbank', street: 'Gasworks Terrace', year: 9999 }])),
+    memorialOffers: Array.from({ length: M.MEMORIAL_MAX_OFFERS }, (_, k) => ({
+      n: 'Reginald Marchbank', i: k, street: 'Gasworks Terrace' }))
   }, null, 2) + '\n');
 }
 // Worst case the game can actually produce, on a fully-built grid: the

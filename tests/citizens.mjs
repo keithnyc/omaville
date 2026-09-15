@@ -230,11 +230,28 @@ const context = (grid, over = {}) => Object.assign({
 // --- a house that stops existing ------------------------------------------
 {
   const grid = town();
-  const people = M.advanceCitizens([], context(grid)).citizens;
+  // Fewer residents than houses, so there is somewhere to go.
+  const people = M.advanceCitizens([], context(grid, { population: 1500 })).citizens;
+  // Their own houses gone, with empty ones elsewhere: they move, keeping who
+  // they are, rather than leaving a city that still has room for them.
   const razed = grid.slice();
   for (const c of people) razed[c.i] = '_0';
-  const step = M.advanceCitizens(people, context(razed, { population: 0 }));
-  assert.equal(step.departures.length, people.length, 'a bulldozed street loses its residents');
+  const friend = people.map(c => Object.assign({}, c, { f: 50, t: 2 }));
+  const moved = M.advanceCitizens(friend, context(razed, { population: 0 }));
+  assert.equal(moved.departures.length, 0, 'nobody leaves while there are houses to go to');
+  assert.equal(moved.moves.length, people.length, 'everybody moves');
+  const homes = new Set(moved.citizens.map(c => c.i));
+  assert.equal(homes.size, people.length, 'into a house each');
+  for (const c of moved.citizens) {
+    assert.equal(M.tileTypeOf(razed[c.i]), 'R', `${c.n} moved into a house`);
+    assert.equal(c.f, 50, 'keeping their friendship');
+    assert.equal(c.t, 2, 'and themselves');
+  }
+
+  // No houses anywhere: then they go.
+  const flattened = M.emptyGrid(size);
+  const step = M.advanceCitizens(people, context(flattened, { population: 0 }));
+  assert.equal(step.departures.length, people.length, 'a flattened city loses its residents');
   assert.ok(step.departures.every(d => d.reason === 'gone'), 'with no complaint to make');
   assert.equal(step.citizens.length, 0);
 }

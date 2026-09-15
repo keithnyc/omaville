@@ -459,6 +459,7 @@ Item {
       return info.level === 3 ? "Avenue bridge" : info.level === 2 ? "Avenue"
         : info.level === 1 ? "Bridge" : "Road"
     if (info.tierName) return info.tierName + " · Tier " + (info.level + 1)
+    if (info.type === Model.TILE_STATUE && root.memorialAt(info.index)) return "Memorial"
     var label = Model.TILE_LABELS[info.type] || "Unknown"
     var isZone = info.type === Model.TILE_RES || info.type === Model.TILE_COM || info.type === Model.TILE_IND
     if (!isZone) return label
@@ -489,8 +490,9 @@ Item {
     var who = root.residentAt(info.index)
     if (who) {
       whoLines.push(who.name + ", " + who.age + " — " + (who.trade || "no trade recorded"))
-      whoLines.push("Of " + who.street + ", here since Year " + who.arrivedYear
-        + " (" + who.yearsHere + " years)")
+      whoLines.push("Of " + who.street + (who.yearsHere >= 1
+        ? ", here " + who.yearsHere + (who.yearsHere === 1 ? " year" : " years") : ", newly arrived")
+        + " · " + who.friendship.title)
       if (who.grievance) whoLines.push("Unhappy: see the Gazette's letters column")
     }
     var isZone = info.type === Model.TILE_RES || info.type === Model.TILE_COM || info.type === Model.TILE_IND
@@ -535,6 +537,9 @@ Item {
       else if (u.reason === "cant-afford") lines.push("Upgrade ready — needs $" + u.cost)
       else if (u.ok) lines.push("Upgrade ready — $" + u.cost + " (hover the tool icon)")
     }
+    var memorial = info.type === Model.TILE_STATUE ? root.memorialAt(info.index) : null
+    if (memorial)
+      whoLines.push("In memory of " + memorial.n + ", of " + memorial.street + " · raised Year " + memorial.year)
     if (Model.isDecoration(info.type))
       lines.push("Beautifies homes within 3 tiles (+" + Model.DECORATIONS[info.type].weight + " next door, less further out)",
         "Contributes to city appeal: +" + root.attractiveness + "% residential demand")
@@ -581,12 +586,21 @@ Item {
   // The residents. The whole reason for naming anybody: being able to ask who
   // lives here rather than only how many.
   property bool residentsOpen: false
+  // Looking at the residents is what clears their news from the bar.
+  onResidentsOpenChanged: if (residentsOpen && root.serviceReady) root.cityService.markResidentsSeen()
   readonly property var citizenContext: root.serviceReady ? ({
     grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
     funding: root.cityService.funding, traffic: root.cityService.traffic,
     crimes: root.crimes, fires: root.fires, ageMinutes: root.cityService.ageMinutes,
-    streetNames: root.cityService.streetNames
+    streetNames: root.cityService.streetNames, peopleClock: root.cityService.peopleClock,
+    playDay: root.cityService.playDay, today: root.cityService.today,
+    cityName: root.cityService.cityName
   }) : null
+  readonly property var memorialOffers: root.serviceReady ? root.cityService.memorialOffers : []
+  function memorialAt(index) {
+    if (!root.serviceReady) return null
+    return root.cityService.memorials[index] || null
+  }
   readonly property var residents: {
     if (!root.serviceReady) return []
     var out = []
@@ -5872,12 +5886,78 @@ Item {
             wrapMode: Text.WordWrap
             text: root.residents.length > 0
               ? "The people this office knows by name, longest-standing first. "
+                + "Grant what they ask for and say hello once a day to win them over. "
                 + "Click one to go to their street."
               : "Nobody is known here by name yet. A city of a few hundred is "
                 + "still small enough to be a list of buildings."
             color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
+          }
+
+          // A resident the office knew well has died. Raising a statue is free;
+          // declining is allowed, and nothing is lost by it but the statue.
+          Repeater {
+            model: root.memorialOffers
+            Rectangle {
+              id: memorialOffer
+              required property var modelData
+              required property int index
+              width: residentsColumn.width
+              height: memorialColumn.implicitHeight + Style.space(14)
+              radius: Style.cornerRadius
+              color: Qt.rgba(0.5, 0.6, 0.6, 0.08)
+              border.width: 1
+              border.color: root.neutralTint(0.35)
+              Column {
+                id: memorialColumn
+                x: Style.space(9); y: Style.space(7)
+                width: parent.width - Style.space(18)
+                spacing: Style.space(6)
+                Text {
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  text: memorialOffer.modelData.n + ", of " + memorialOffer.modelData.street
+                    + ", has died. The office knew them well. Raise a memorial near their old home?"
+                  color: Color.menu.text
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Row {
+                  spacing: Style.space(6)
+                  Repeater {
+                    model: [{ label: "Raise a memorial", accept: true }, { label: "Not now", accept: false }]
+                    Rectangle {
+                      id: memorialButton
+                      required property var modelData
+                      width: memorialLabel.implicitWidth + Style.space(16)
+                      height: Style.space(24)
+                      radius: Style.space(4)
+                      color: modelData.accept ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.3) : "transparent"
+                      border.width: 1
+                      border.color: modelData.accept ? Color.accent : root.neutralTint(0.35)
+                      Text {
+                        id: memorialLabel
+                        anchors.centerIn: parent
+                        text: memorialButton.modelData.label
+                        color: memorialButton.modelData.accept ? Color.accent : Color.menu.text
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                      }
+                      MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                          if (!root.serviceReady) return
+                          if (memorialButton.modelData.accept) root.cityService.acceptMemorial(memorialOffer.index)
+                          else root.cityService.declineMemorial(memorialOffer.index)
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
 
           Repeater {
@@ -5908,6 +5988,9 @@ Item {
               }
               Column {
                 id: personColumn
+                // Above the card's own MouseArea, so the buttons in it take
+                // their clicks; plain text still lets a click through to it.
+                z: 1
                 x: tradeVignette.visible
                   ? tradeVignette.x + tradeVignette.width + Style.space(8) : Style.space(9)
                 y: Style.space(6)
@@ -5922,12 +6005,36 @@ Item {
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.bodySmall
                 }
+                Row {
+                  spacing: Style.space(6)
+                  Text {
+                    text: "\u2665".repeat(modelData.friendship.hearts)
+                    visible: modelData.friendship.hearts > 0
+                    color: "#e58fa6"
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    text: "\u2665".repeat(5 - modelData.friendship.hearts)
+                    color: root.neutralTint(0.3)
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                  Text {
+                    text: modelData.friendship.title
+                      + (modelData.friendship.trait ? " · " + modelData.friendship.trait : "")
+                    color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.66)
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                }
                 Text {
                   width: parent.width
                   wrapMode: Text.WordWrap
                   text: Model.capitalise(modelData.trade) + ", of " + modelData.street
-                    + " · here since Year " + modelData.arrivedYear
-                    + (modelData.yearsHere >= 1 ? " (" + modelData.yearsHere + " years)" : "")
+                    + (modelData.yearsHere >= 1
+                      ? " · here " + modelData.yearsHere + (modelData.yearsHere === 1 ? " year" : " years")
+                      : " · newly arrived")
                   color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.66)
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.caption
@@ -5942,13 +6049,94 @@ Item {
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.caption
                 }
+                // What they have asked the office for. A request to fix their
+                // complaint is the complaint itself, already shown above.
+                Text {
+                  visible: modelData.friendship.request !== ""
+                    && modelData.friendship.request !== modelData.complaint
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  text: "Asks: \u201c" + modelData.friendship.request + "\u201d"
+                  color: "#9fcf8f"
+                  font.italic: true
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  visible: modelData.friendship.request !== ""
+                    && modelData.friendship.request === modelData.complaint
+                  width: parent.width
+                  text: "Has asked the office to put this right"
+                  color: "#9fcf8f"
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Text {
+                  visible: modelData.friendship.greetedToday
+                  width: parent.width
+                  wrapMode: Text.WordWrap
+                  text: "\u201c" + modelData.friendship.hello + "\u201d"
+                  color: Color.menu.text
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
+                Row {
+                  id: residentActions
+                  readonly property var person: modelData
+                  visible: !modelData.friendship.greetedToday
+                    || (modelData.friendship.birthdayToday && !modelData.friendship.birthdayNoticed)
+                  spacing: Style.space(6)
+                  topPadding: Style.space(3)
+                  Repeater {
+                    model: [
+                      { label: "Say hello", kind: "hello",
+                        show: !residentActions.person.friendship.greetedToday },
+                      { label: "\u2665 Wish them a happy birthday", kind: "birthday",
+                        show: residentActions.person.friendship.birthdayToday
+                          && !residentActions.person.friendship.birthdayNoticed }
+                    ]
+                    Rectangle {
+                      id: residentButton
+                      required property var modelData
+                      visible: modelData.show
+                      width: residentButtonLabel.implicitWidth + Style.space(14)
+                      height: Style.space(22)
+                      radius: Style.space(4)
+                      color: residentButtonMouse.containsMouse
+                        ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.3)
+                        : Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.14)
+                      border.width: 1
+                      border.color: modelData.kind === "birthday" ? "#e58fa6" : Color.accent
+                      Text {
+                        id: residentButtonLabel
+                        anchors.centerIn: parent
+                        text: residentButton.modelData.label
+                        color: residentButton.modelData.kind === "birthday" ? "#e58fa6" : Color.accent
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                      }
+                      MouseArea {
+                        id: residentButtonMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                          if (!root.serviceReady) return
+                          if (residentButton.modelData.kind === "hello")
+                            root.cityService.sayHello(residentActions.person.index)
+                          else root.cityService.noticeBirthday(residentActions.person.index)
+                        }
+                      }
+                    }
+                  }
+                }
                 // Only worth saying when it is nearly too late to act on.
                 Text {
                   visible: modelData.grievance !== ""
-                    && modelData.patience <= Math.ceil(Model.CITIZEN_PATIENCE / 2)
+                    && modelData.monthsLeft <= Math.ceil(Model.CITIZEN_PATIENCE / 2)
                   width: parent.width
-                  text: "Packing: " + modelData.patience
-                    + (modelData.patience === 1 ? " month left" : " months left")
+                  text: "Packing: " + modelData.monthsLeft
+                    + (modelData.monthsLeft === 1 ? " month left" : " months left")
                   color: "#e0806a"
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.caption

@@ -119,11 +119,27 @@ Item {
   // itself is derived from the log and the history rather than stored — a save
   // with a hard 64KB cap has no room for archived newspapers.
   property real lastGazetteMinute: 0
-  // A dozen named residents at real addresses. Small enough to cost nothing in
+  // Up to two dozen named residents at real addresses. Small enough to cost nothing in
   // the tick or the save, and the only thing in the game that can tell the
   // player *where* something is wrong rather than what percentage of the city
   // it affects.
   property var citizens: []
+  // The people clock: residents age one year per day the city is actually
+  // played (see Model.peopleClock), so a friend is still there next week.
+  // lastPlayDate is the local date that day was counted on.
+  property int playDay: 0
+  property string lastPlayDate: ""
+  readonly property real peopleClock: Model.peopleClock(root.playDay)
+  // Today's real date, for birthdays. Refreshed each tick and whenever the
+  // residents are looked at, so a paused city still knows what day it is.
+  property var today: Model.todayParts()
+  // Statues raised to residents the office knew well, keyed by tile, and the
+  // offers still waiting on the mayor.
+  property var memorials: ({})
+  property var memorialOffers: []
+  // Resident news since the Residents panel was last opened: a thank-you, a
+  // gift, a birthday, a memorial to decide on. Drives the bar marker.
+  property int residentNews: 0
   // Streets the mayor has named, keyed by axis and line so a name survives the
   // road being extended. Only the overrides are stored; every other street
   // still generates its own name and costs nothing.
@@ -309,6 +325,20 @@ Item {
     if (index < 0 || index >= root.grid.length) return
     var tile = Model.parseTile(root.grid[index])
     var refund = Model.totalInvestment(tile.type, tile.level)
+    // Knocking down somebody's house is not forgotten, though they will find
+    // somewhere else to live if the city has room (see advanceCitizens).
+    var evicted = false
+    var people = root.citizens.map(function (person) {
+      if (person.i !== index) return person
+      evicted = true
+      return Model.addFriendship(person, Model.FRIEND_BULLDOZED)
+    })
+    if (evicted) root.citizens = people
+    if (root.memorials[index]) {
+      var kept = Object.assign({}, root.memorials)
+      delete kept[index]
+      root.memorials = kept
+    }
     root.grid = Model.bulldozeTile(root.grid, index)
     if (refund > 0) root.treasury += refund
     flushState()
@@ -507,6 +537,9 @@ Item {
     root.lastSeenMinute = 0
     root.lastGazetteMinute = 0
     root.citizens = []
+    root.memorials = ({})
+    root.memorialOffers = []
+    root.residentNews = 0
     root.paused = false
     root.streetNames = ({})
     root.brownoutActive = false
@@ -669,14 +702,26 @@ Item {
       // The named residents, after the month's growth and disasters have
       // settled — somebody whose house burnt down this month has moved out,
       // not merely become unhappy about it.
-      var moved = Model.advanceCitizens(root.citizens, {
+      // A new day played turns the people clock over once, before anybody
+      // ages, so the whole day's lives are read against the same clock.
+      root.today = Model.todayParts()
+      var dateKey = Model.playDateKey()
+      var newDay = dateKey !== root.lastPlayDate
+      if (newDay) {
+        root.playDay += 1
+        root.lastPlayDate = dateKey
+      }
+      var peopleCtx = {
         grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
         funding: root.funding, traffic: root.traffic, crimes: root.crimes,
         fires: root.fires, population: result.population,
         ageMinutes: root.ageMinutes, neighbors: root.neighbors,
-        streetNames: root.streetNames
-      })
+        streetNames: root.streetNames, peopleClock: root.peopleClock,
+        playDay: root.playDay, newDay: newDay, today: root.today, cityName: root.cityName
+      }
+      var moved = Model.advanceCitizens(root.citizens, peopleCtx)
       root.citizens = moved.citizens
+      root.tendResidents(moved, peopleCtx, newDay)
       // Deaths are the one thing here worth a notice of its own. The paper
       // prints the obituary; the log carries the name so the "while you were
       // away" summary does too.
@@ -912,6 +957,118 @@ Item {
 
   // Called when the player opens the panel: everything logged after this
   // point is "new" until they look again.
+  // Everything the named residents did this tick beyond arriving, leaving and
+  // dying: moving house, requests granted, and — once a day — goodwill, new
+  // requests, gifts and birthdays.
+  function tendResidents(moved, ctx, newDay) {
+    for (var d = 0; d < moved.deaths.length; d++) {
+      var dead = moved.deaths[d]
+      if (dead.friendship.hearts < Model.MEMORIAL_HEARTS) continue
+      if (root.memorialOffers.length >= Model.MEMORIAL_MAX_OFFERS) break
+      root.memorialOffers = root.memorialOffers.concat([{ n: dead.name, i: dead.index, street: dead.street }])
+      root.residentNews += 1
+    }
+    for (var m = 0; m < moved.moves.length; m++) {
+      var mover = moved.moves[m]
+      root.logEvent("resident", mover.name + " has moved from " + mover.from + " to "
+        + mover.street + ", having lost their house.")
+    }
+    var granted = Model.checkRequests(root.citizens, ctx)
+    root.citizens = granted.citizens
+    for (var t = 0; t < granted.thanked.length; t++) {
+      var thanks = granted.thanked[t]
+      root.notify(thanks.name, thanks.text)
+      root.logEvent("resident", thanks.name + ": “" + thanks.text + "”")
+      root.residentNews += 1
+    }
+    if (!newDay) return
+    var day = Model.advancePeopleDay(root.citizens, ctx)
+    root.citizens = day.citizens
+    var next = null
+    for (var g = 0; g < day.gifts.length; g++) {
+      var gift = day.gifts[g]
+      if (gift.kind === "money") root.treasury += gift.amount
+      else {
+        next = next || root.grid.slice()
+        if (!Model.isOpenLand(Model.tileTypeOf(next[gift.index]))) continue
+        next[gift.index] = Model.makeTile(gift.type, 0)
+      }
+      root.logEvent("resident", gift.text)
+      root.residentNews += 1
+    }
+    if (next) root.grid = next
+    for (var r = 0; r < day.requests.length; r++) {
+      root.logEvent("resident", day.requests[r].name + " asks: “" + day.requests[r].text + "”")
+      root.residentNews += 1
+    }
+    for (var b = 0; b < root.citizens.length; b++) {
+      if (!Model.isBirthdayOn(root.citizens[b], root.today)) continue
+      root.logEvent("resident", "It is " + root.citizens[b].n + "'s birthday today.")
+      root.residentNews += 1
+    }
+  }
+
+  function residentCtx() {
+    return { grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
+      funding: root.funding, traffic: root.traffic, crimes: root.crimes, fires: root.fires,
+      streetNames: root.streetNames, playDay: root.playDay, today: root.today,
+      cityName: root.cityName, peopleClock: root.peopleClock, ageMinutes: root.ageMinutes }
+  }
+
+  function sayHello(index) {
+    if (!root.initialized) return false
+    var result = Model.sayHello(root.citizens, index, root.playDay)
+    if (!result) return false
+    root.citizens = result.citizens
+    flushState()
+    return true
+  }
+
+  function noticeBirthday(index) {
+    if (!root.initialized) return false
+    root.today = Model.todayParts()
+    var result = Model.noticeBirthday(root.citizens, index, root.today)
+    if (!result) return false
+    root.citizens = result.citizens
+    root.logEvent("resident", "The Mayor called on " + result.citizen.n + " for their birthday.")
+    flushState()
+    return true
+  }
+
+  // Raises the statue on the nearest open ground to where they lived, free.
+  // Returns false and keeps the offer when there is nowhere to put it.
+  function acceptMemorial(position) {
+    if (!root.initialized || root.outOfOffice) return false
+    var offer = root.memorialOffers[position]
+    if (!offer) return false
+    var site = Model.memorialSite(root.grid, root.gridSize, offer.i)
+    if (site < 0) return false
+    var next = root.grid.slice()
+    next[site] = Model.makeTile(Model.TILE_STATUE, 0)
+    root.grid = next
+    var raised = Object.assign({}, root.memorials)
+    raised[site] = { n: offer.n, street: offer.street, year: Model.calendarFor(root.ageMinutes).year }
+    root.memorials = raised
+    root.declineMemorial(position)
+    root.logEvent("resident", "A memorial to " + offer.n + ", of " + offer.street + ", has been raised.")
+    flushState()
+    return true
+  }
+
+  function declineMemorial(position) {
+    var offers = root.memorialOffers.slice()
+    offers.splice(position, 1)
+    root.memorialOffers = offers
+    flushState()
+  }
+
+  function markResidentsSeen() {
+    root.today = Model.todayParts()
+    if (root.residentNews === 0) return
+    root.residentNews = 0
+    flushState()
+  }
+
   function markSeen() {
     if (root.ageMinutes === root.lastSeenMinute) return
     root.lastSeenMinute = root.ageMinutes
@@ -1029,6 +1186,11 @@ Item {
       paused: root.paused,
       recentEventIds: root.recentEventIds,
       citizens: root.citizens,
+      playDay: root.playDay,
+      lastPlayDate: root.lastPlayDate,
+      memorials: root.memorials,
+      memorialOffers: root.memorialOffers,
+      residentNews: root.residentNews,
       streetNames: root.streetNames
     }, null, 2) + "\n")
   }
@@ -1117,8 +1279,15 @@ Item {
       paused = saved.paused === true
       // Residents saved before anybody had a birthday would otherwise all read
       // as born in Year 1 and die on the next tick.
+      // playDay and lastPlayDate first: moving an older save's residents onto
+      // the people clock needs to know where that clock stands.
+      playDay = Math.max(0, Math.round(num(saved.playDay, 0)))
+      lastPlayDate = typeof saved.lastPlayDate === "string" ? saved.lastPlayDate : ""
       citizens = Model.seedCitizenLives(
-        Array.isArray(saved.citizens) ? saved.citizens : [], ageMinutes)
+        Array.isArray(saved.citizens) ? saved.citizens : [], ageMinutes, Model.peopleClock(playDay))
+      memorials = (saved.memorials && typeof saved.memorials === "object") ? saved.memorials : ({})
+      memorialOffers = Array.isArray(saved.memorialOffers) ? saved.memorialOffers : []
+      residentNews = Math.max(0, Math.round(num(saved.residentNews, 0)))
       streetNames = (saved.streetNames && typeof saved.streetNames === "object")
         ? saved.streetNames : ({})
     } catch (error) {

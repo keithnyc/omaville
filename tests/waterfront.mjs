@@ -32,7 +32,7 @@ grid.fill('_0');grid[8]='L0';assert.equal(M.waterfrontBonus(grid,9,9),0,'no row 
 grid[40]='R1';assert(!M.canPlace(grid,40,'L',100),'water cannot erase buildings');
 // Actual service charging/refund path: restore water first, terrain second.
 const service=fs.readFileSync(new URL('../Service.qml',import.meta.url),'utf8');
-const root={grid:Array(81).fill('_0'),treasury:100};let saves=0;
+const root={grid:Array(81).fill('_0'),treasury:100,citizens:[],memorials:{}};let saves=0;
 const ctx=vm.createContext({root,Model:M,flushState(){saves++;}});
 const action=n=>vm.runInContext('('+service.match(new RegExp('  function '+n+'\\([\\s\\S]*?\\n  \\}'))[0]+')',ctx);
 const zone=action('zoneTile'),remove=action('bulldozeTile');

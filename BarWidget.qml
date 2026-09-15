@@ -29,6 +29,9 @@ BarWidget {
   // only place these are visible without opening anything, which is the whole
   // point of a city that keeps running while you work.
   readonly property int unseenCount: serviceReady ? cityService.unseenLog.length : 0
+  // A thank-you, a gift, a birthday or a memorial waiting in the Residents
+  // panel. Rides the same badge, in its own colour.
+  readonly property int residentNews: serviceReady ? cityService.residentNews : 0
 
   // Nerd-font glyphs, matching the rest of the bar rather than emoji.
   readonly property var alertIcons: ({
@@ -48,6 +51,8 @@ BarWidget {
         + (root.paused ? "  (paused)" : ""),
       "Pop " + root.population + " · " + root.money(root.treasury) + " · " + s.happiness + "% happy"
     ]
+    if (root.residentNews > 0)
+      lines.push("♥ " + root.residentNews + " from your residents — see Residents")
     if (s.outOfOffice) {
       var left = Math.max(1, Math.ceil(s.outOfOfficeUntil - s.ageMinutes))
       lines.push("\nOut of office · " + left + (left === 1 ? " month left" : " months left"))
@@ -262,10 +267,10 @@ BarWidget {
         // the widget, and is deliberately absent while an alert is showing —
         // the alert already says "look at me".
         Rectangle {
-          visible: root.unseenCount > 0 && !root.alerting
+          visible: (root.unseenCount > 0 || root.residentNews > 0) && !root.alerting
           width: Style.space(4); height: width
           radius: width / 2
-          color: button.activeColor
+          color: root.residentNews > 0 ? "#e58fa6" : button.activeColor
           anchors.right: parent.right
           anchors.rightMargin: -Style.space(2)
           anchors.top: parent.top

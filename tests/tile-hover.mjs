@@ -8,7 +8,7 @@ const qml=fs.readFileSync(new URL('../CityView.qml',import.meta.url),'utf8');
 // for the sweep below, and exercised on its own further down.
 // grid/gridSize are read when the card reports how a lot is reached; a bare
 // grid means "no footpath anywhere", which is what the sweep below wants.
-const root={attractiveness:4,coverageRadii:{E:M.POWER_RADIUS,W:M.WATER_RADIUS,F:M.FIRE_RADIUS,S:M.POLICE_RADIUS},demandPercent:()=>50,residentAt:()=>null,
+const root={attractiveness:4,coverageRadii:{E:M.POWER_RADIUS,W:M.WATER_RADIUS,F:M.FIRE_RADIUS,S:M.POLICE_RADIUS},demandPercent:()=>50,residentAt:()=>null,memorialAt:()=>null,
   grid:M.emptyGrid(M.GRID_SIZE), gridSize:M.GRID_SIZE, serviceReady:false};
 const ctx=vm.createContext({root,Model:M});
 for(const n of ['inspectTitle','inspectLines']) root[n]=vm.runInContext('('+qml.match(new RegExp('  function '+n+'\\([\\s\\S]*?\\n  \\}'))[0]+')',ctx);
@@ -54,16 +54,20 @@ console.log('PASS: inspect info identifies its own tile.');
 
   root.residentAt = i => i !== 101 ? null : {
     index: 101, name: 'Elsie Halloway', age: 62, trade: 'a moulder',
-    street: 'Mill Road', arrivedYear: 94, yearsHere: 44, grievance: ''
+    street: 'Mill Road', arrivedYear: 94, yearsHere: 44, grievance: '',
+    friendship: { title: 'Friend' }
   };
   const text = root.inspectLines(info).join('\n');
   assert.ok(!/undefined|NaN/.test(text), text);
-  for (const fact of ['Elsie Halloway', '62', 'a moulder', 'Mill Road', 'Year 94', '44'])
+  // Tenure is read off the people clock, so the city-calendar year they arrived
+  // is no longer printed beside it — the two would disagree.
+  for (const fact of ['Elsie Halloway', '62', 'a moulder', 'Mill Road', '44 years', 'Friend'])
     assert.ok(text.includes(fact), `the inspector should mention ${fact}`);
   assert.ok(!text.includes('Unhappy'), 'a contented resident is not flagged as unhappy');
 
   root.residentAt = () => ({ index: 101, name: 'Cyril Rooke', age: 40, trade: '',
-    street: 'the outskirts', arrivedYear: 130, yearsHere: 0, grievance: 'fire' });
+    street: 'the outskirts', arrivedYear: 130, yearsHere: 0, grievance: 'fire',
+    friendship: { title: 'Newcomer' } });
   const cross = root.inspectLines(info).join('\n');
   assert.ok(!/undefined|NaN/.test(cross), cross);
   assert.ok(cross.includes('Unhappy'), 'and an unhappy one is');

@@ -3478,8 +3478,8 @@ function cityCharacter(stats) {
 // buildings land: a statistic nobody reads becoming a person with an address.
 //
 // Deliberately a handful. Simulating four thousand people would cost more than
-// the rest of the tick put together and read as noise; a dozen is enough for
-// the letters column to always have somebody in it.
+// the rest of the tick put together and read as noise; a couple of dozen is
+// enough for the letters column to always have somebody in it.
 
 var CITIZEN_FIRST = ["Elsie", "Walter", "Mabel", "Arthur", "Ada", "Cyril",
   "Nora", "Alfred", "Hettie", "Stanley", "Vera", "Horace", "Lottie", "Ernest",
@@ -3675,8 +3675,13 @@ function citizenAgeYears(citizen, ageMinutes) {
   return Math.max(0, Math.floor((Math.max(0, ageMinutes || 0) - born) / 12))
 }
 
-function citizenYearsInCity(citizen, ageMinutes) {
-  return Math.max(0, Math.floor((Math.max(0, ageMinutes || 0) - (citizen.s || 0)) / 12))
+// Ages and tenure are read off the people clock (see PEOPLE_CLOCK below), in
+// the same twelve-to-a-year units the city calendar uses. `a` is when they
+// arrived on that clock; `s` stays the city month they arrived in, which is a
+// date for the paper rather than a duration.
+function citizenYearsInCity(citizen, clock) {
+  var arrived = isFinite(citizen.a) ? citizen.a : (citizen.s || 0)
+  return Math.max(0, Math.floor((Math.max(0, clock || 0) - arrived) / 12))
 }
 
 // What somebody living here does for a living, from what is actually built
@@ -3731,7 +3736,7 @@ function ordinalWords(value) {
 
 // Everything the city knows about one resident, for the panel and the paper.
 function citizenBio(citizen, ctx) {
-  var now = Math.max(0, (ctx && ctx.ageMinutes) || 0)
+  var now = Math.max(0, peopleClockOf(ctx))
   var years = citizenAgeYears(citizen, now)
   var tenure = citizenYearsInCity(citizen, now)
   var grievance = ctx && ctx.grid ? citizenGrievance(ctx, citizen.i) : null
@@ -3754,7 +3759,10 @@ function citizenBio(citizen, ctx) {
       ctx && ctx.streetNames).text : "",
     // How close they are to giving up, for a panel that wants to warn.
     patience: citizen.p,
-    settled: citizen.p >= CITIZEN_PATIENCE
+    // Months of trouble left before they go, counting a friend's extra allowance.
+    monthsLeft: citizen.p + citizenPatienceReserve(citizen),
+    settled: citizen.p >= CITIZEN_PATIENCE,
+    friendship: friendshipFor(citizen, ctx, grievance)
   }
 }
 
@@ -3780,7 +3788,12 @@ function capitalise(text) {
 // How long somebody puts up with a grievance before packing. Long enough that
 // a problem the player is already fixing does not cost them a resident.
 var CITIZEN_PATIENCE = 6
-var CITIZEN_MAX = 12
+// Raised from twelve once residents became people to befriend: a dozen was
+// enough to write letters, and too few to make a town feel lived in. The
+// request board and the once-a-day hello keep a bigger cast from becoming
+// more to do.
+var CITIZEN_MAX = 24
+var CITIZENS_PER_RESIDENT = 150
 
 // What is wrong where somebody lives, worst first. The order is the order a
 // person would actually care: whether the place is safe, then whether it
@@ -3905,7 +3918,7 @@ function citizenLetters(citizens, ctx, limit) {
 // How many named residents a city of this size supports. A hamlet with one
 // letter-writer is right; so is a city with a full column.
 function citizenTarget(population) {
-  return Math.max(0, Math.min(CITIZEN_MAX, Math.floor((population || 0) / 250)))
+  return Math.max(0, Math.min(CITIZEN_MAX, Math.floor((population || 0) / CITIZENS_PER_RESIDENT)))
 }
 
 function residentialTiles(grid) {
@@ -3927,15 +3940,49 @@ function citizenBirthMinute(seed, ageMinutes) {
 // Residents saved before anybody had a birthday. Without this they all read as
 // having been born in the city's Year 1, and a hundred-year-old city kills
 // every one of them the moment it loads.
-function seedCitizenLives(citizens, ageMinutes) {
+//
+// Also moves anybody from before the people clock onto it: their age and years
+// here are read off the city calendar they were written against, and re-based
+// on `clock` so nobody gets older or younger in the move. Years here can never
+// exceed their adult life — on the city calendar a resident of a century-old
+// town had often "lived here" longer than they had been alive to.
+function seedCitizenLives(citizens, ageMinutes, clock) {
+  var now = isFinite(clock) ? clock : (ageMinutes || 0)
   var out = []
   for (var i = 0; i < (citizens || []).length; i++) {
     var person = citizens[i]
-    if (isFinite(person.b)) { out.push(person); continue }
-    out.push({ n: person.n, i: person.i, s: person.s, p: person.p,
-      b: citizenBirthMinute(cityHash(person.i, 5), person.s || ageMinutes || 0) })
+    if (isFinite(person.b) && isFinite(person.a) && isFinite(person.t)) { out.push(person); continue }
+    var born = isFinite(person.b) ? person.b
+      : citizenBirthMinute(cityHash(person.i, 5), person.s || ageMinutes || 0)
+    var next = copyCitizen(person, { b: born })
+    if (!isFinite(person.a)) {
+      var age = citizenAgeYears(next, ageMinutes)
+      var tenure = Math.min(citizenYearsInCity(person, ageMinutes),
+        Math.max(0, age - CITIZEN_ARRIVAL_AGE_MIN))
+      next.b = now - age * 12
+      next.a = now - tenure * 12
+    }
+    if (!isFinite(next.t)) next.t = cityHash(person.i, 29) % TRAITS.length
+    if (!isFinite(next.f)) next.f = 0
+    out.push(next)
   }
   return out
+}
+
+// Residents are small records that keep gaining fields; a copy that lists the
+// fields by hand is how a new one gets silently dropped on the next tick.
+function copyCitizen(person, changes) {
+  var out = {}
+  for (var key in person) if (person.hasOwnProperty(key)) out[key] = person[key]
+  for (var change in (changes || {})) if (changes.hasOwnProperty(change)) out[change] = changes[change]
+  return out
+}
+
+// The chance is per year of life, and a day played is only part of one. The
+// cap stays certain.
+function citizenDeathChanceToday(age) {
+  var yearly = citizenDeathChance(age)
+  return yearly >= 1 ? 1 : yearly * PEOPLE_YEAR_PER_DAY
 }
 
 function citizenDeathChance(age) {
@@ -3949,36 +3996,63 @@ function citizenDeathChance(age) {
 // working it out again.
 function advanceCitizens(citizens, ctx) {
   var random = ctx.random || Math.random
+  var clock = peopleClockOf(ctx)
   var living = residentialTiles(ctx.grid)
   var occupied = {}
-  var next = [], departures = [], arrivals = [], deaths = []
-  citizens = seedCitizenLives(citizens, ctx.ageMinutes)
+  var next = [], departures = [], arrivals = [], deaths = [], moves = [], homeless = []
+  citizens = seedCitizenLives(citizens, ctx.ageMinutes, clock)
+  // People age on the people clock, which only turns over once per day
+  // played, so old age is rolled then — not every month of city time, which
+  // made a dozen residents a steady stream of obituaries.
+  var rollDeaths = ctx.newDay !== false
 
   for (var i = 0; i < (citizens || []).length; i++) {
     var person = citizens[i]
     var street = streetOf(ctx.grid, ctx.gridSize, person.i, ctx.streetNames)
-    // Their house is gone — burnt down, bulldozed, or emptied by crime.
+    // Their house is gone — burnt down, bulldozed, or emptied by crime. They
+    // look for somewhere else in town before giving up on it (below).
     if (living.indexOf(person.i) < 0) {
-      departures.push({ name: person.n, street: street, reason: "gone", to: "" })
+      homeless.push({ person: person, street: street })
       continue
     }
     // Old age, before anything else this month. Somebody who dies is not also
     // recorded as having moved away in disgust.
-    if (random() < citizenDeathChance(citizenAgeYears(person, ctx.ageMinutes))) {
+    if (rollDeaths && random() < citizenDeathChanceToday(citizenAgeYears(person, clock))) {
       deaths.push(citizenBio(person, ctx))
       continue
     }
     var grievance = citizenGrievance(ctx, person.i)
+    // A friend puts up with twice as much before packing: their patience may
+    // run on below zero by a whole extra allowance, however full it was when
+    // the trouble started.
     var patience = grievance
       ? person.p - 1
       : Math.min(CITIZEN_PATIENCE, person.p + 1)
-    if (patience <= 0) {
+    if (patience <= -citizenPatienceReserve(person)) {
       departures.push({ name: person.n, street: street,
         reason: grievance ? grievance.key : "gone", to: pickNeighborName(ctx, random) })
       continue
     }
-    next.push({ n: person.n, i: person.i, s: person.s, p: patience, b: person.b })
+    next.push(copyCitizen(person, { p: patience }))
     occupied[person.i] = true
+  }
+
+  // Somebody who lost their house moves to an empty one if the city has one,
+  // keeping everything the office knows about them. Only with nowhere at all
+  // to go do they leave.
+  for (var hIndex = 0; hIndex < homeless.length; hIndex++) {
+    var home = -1
+    for (var l = 0; l < living.length; l++)
+      if (!occupied[living[l]]) { home = living[l]; break }
+    var who = homeless[hIndex]
+    if (home < 0) {
+      departures.push({ name: who.person.n, street: who.street, reason: "gone", to: "" })
+      continue
+    }
+    occupied[home] = true
+    next.push(copyCitizen(who.person, { i: home, p: Math.max(who.person.p, 1) }))
+    moves.push({ name: who.person.n, from: who.street,
+      street: streetOf(ctx.grid, ctx.gridSize, home, ctx.streetNames) })
   }
 
   var want = citizenTarget(ctx.population)
@@ -3993,16 +4067,507 @@ function advanceCitizens(citizens, ctx) {
     if (clash) continue
     occupied[spot] = true
     next.push({ n: name, i: spot, s: Math.round(ctx.ageMinutes || 0), p: CITIZEN_PATIENCE,
-      b: citizenBirthMinute(seed, ctx.ageMinutes || 0) })
+      b: citizenBirthMinute(seed, clock), a: clock,
+      t: cityHash(seed, 29) % TRAITS.length, f: 0 })
     arrivals.push({ name: name, street: streetOf(ctx.grid, ctx.gridSize, spot, ctx.streetNames) })
   }
-  return { citizens: next, departures: departures, arrivals: arrivals, deaths: deaths }
+  return { citizens: next, departures: departures, arrivals: arrivals, deaths: deaths, moves: moves }
 }
 
 function pickNeighborName(ctx, random) {
   var towns = ctx.neighbors || []
   if (towns.length === 0) return ""
   return towns[Math.floor((random || Math.random)() * towns.length)].name || ""
+}
+
+// --- the people clock, and friendship -----------------------------------------
+// The city calendar turns a month every fifteen seconds, which is right for
+// budgets and wrong for people: a resident who arrived at thirty was dead of
+// old age within an afternoon, before anybody could get to know them. People
+// run on their own clock instead — one year of a life per day the city is
+// actually played. Days away do not count, so a fortnight's holiday does not
+// come back to a column of obituaries.
+//
+// Half a year per day. A year a day was tried first and measured: a town of
+// twelve lost one and a half residents a week, which is a funeral every few
+// days rather than a rare event. At half, residents live around three and a
+// half months of play and a death comes every week or two.
+//
+// The clock is held in the same twelve-to-a-year units as the city calendar
+// (see peopleClock), so every age and tenure function reads either one.
+var PEOPLE_YEAR_PER_DAY = 0.5
+
+function peopleClock(playDay) {
+  return Math.max(0, Math.round(playDay || 0)) * 12 * PEOPLE_YEAR_PER_DAY
+}
+
+// Callers pass the people clock where they have one. Tests and anything older
+// that only knows the city calendar still get a consistent answer from that.
+function peopleClockOf(ctx) {
+  if (ctx && isFinite(ctx.peopleClock)) return ctx.peopleClock
+  return (ctx && ctx.ageMinutes) || 0
+}
+
+// "2026-09-15", in local time, so a day turns over at the player's midnight.
+function playDateKey(date) {
+  var d = date || new Date()
+  function two(n) { return (n < 10 ? "0" : "") + n }
+  return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate())
+}
+
+// A resident is somebody before they are a list of wishes. The trait decides
+// what they ask for and how they talk, which is what makes twelve residents
+// read as twelve people rather than the same letter-writer twelve times.
+var TRAITS = ["gardener", "bookish", "sociable", "commuter", "waterside", "oldguard"]
+var TRAIT_LABELS = {
+  gardener: "Gardener", bookish: "Bookish", sociable: "Sociable",
+  commuter: "Commuter", waterside: "Waterside", oldguard: "Old guard"
+}
+
+function citizenTraitKey(citizen) {
+  var t = isFinite(citizen.t) ? citizen.t : cityHash(citizen.i, 29)
+  return TRAITS[Math.abs(Math.round(t)) % TRAITS.length]
+}
+
+// Friendship is 0-100 points, shown as five hearts. The thresholds widen, so
+// the first heart comes in a day or two and the fifth takes weeks.
+var FRIEND_MAX = 100
+var FRIEND_HEARTS = [10, 25, 45, 70, 100]
+var FRIEND_TITLES = ["Newcomer", "Acquaintance", "Friendly", "Friend", "Close friend", "Best friend"]
+var FRIEND_REQUEST = 20
+var FRIEND_GOOD_DAY = 2
+var FRIEND_BAD_DAY = -3
+var FRIEND_HELLO = 2
+var FRIEND_BIRTHDAY = 10
+var FRIEND_BULLDOZED = -30
+// What each heart unlocks. Named here so the panel and the sim read one number.
+var FRIEND_TRAIT_HEARTS = 1
+var FRIEND_CHAT_HEARTS = 2
+var FRIEND_PATIENCE_HEARTS = 3
+var FRIEND_GIFT_HEARTS = 3
+var FRIEND_GIFT_CHANCE = 0.12
+var MEMORIAL_HEARTS = 3
+var MEMORIAL_MAX_OFFERS = 3
+// A request board, not homework: a few open at once, and only a couple new a day.
+var REQUESTS_OPEN_MAX = 3
+var REQUESTS_PER_DAY = 2
+// A request nobody can grant — the street is built out, there is nowhere for a
+// tree to go — must not hold a place on the board for ever. It lapses quietly,
+// costing no friendship: they asked, and life went on.
+var REQUEST_LAPSE_DAYS = 5
+
+function friendshipHearts(points) {
+  var hearts = 0
+  for (var i = 0; i < FRIEND_HEARTS.length; i++) if ((points || 0) >= FRIEND_HEARTS[i]) hearts = i + 1
+  return hearts
+}
+
+function addFriendship(citizen, delta) {
+  return copyCitizen(citizen, { f: clamp((citizen.f || 0) + delta, 0, FRIEND_MAX) })
+}
+
+function citizenPatienceReserve(citizen) {
+  return friendshipHearts(citizen.f) >= FRIEND_PATIENCE_HEARTS ? CITIZEN_PATIENCE : 0
+}
+
+function nameHash(text) {
+  var h = 7
+  for (var i = 0; i < (text || "").length; i++) h = (h * 31 + text.charCodeAt(i)) % 1000003
+  return h
+}
+
+// A real calendar date, because a birthday is something that happens on a day
+// rather than every 180 seconds. From the name and birth, not the house, so it
+// survives a move.
+function citizenBirthday(citizen) {
+  var h = cityHash(nameHash(citizen.n), Math.round(citizen.b || 0) + 31)
+  return { month: h % 12, day: 1 + Math.floor(h / 12) % 28 }
+}
+
+function isBirthdayOn(citizen, today) {
+  if (!today) return false
+  var b = citizenBirthday(citizen)
+  return b.month === today.month && b.day === today.day
+}
+
+function todayParts(date) {
+  var d = date || new Date()
+  return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate() }
+}
+
+// --- what people want -------------------------------------------------------
+function countNear(grid, gridSize, index, radius, types, minLevel) {
+  var x = index % gridSize, y = (index / gridSize) | 0, n = 0
+  for (var dy = -radius; dy <= radius; dy++) {
+    for (var dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dy * dy > radius * radius) continue
+      var nx = x + dx, ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize) continue
+      var raw = grid[ny * gridSize + nx]
+      if (types.indexOf(tileTypeOf(raw)) >= 0 && tileLevelOf(raw) >= (minLevel || 0)) n++
+    }
+  }
+  return n
+}
+
+function avenueNear(grid, gridSize, index, radius) {
+  var x = index % gridSize, y = (index / gridSize) | 0
+  for (var dy = -radius; dy <= radius; dy++)
+    for (var dx = -radius; dx <= radius; dx++) {
+      var nx = x + dx, ny = y + dy
+      if (nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize) continue
+      var raw = grid[ny * gridSize + nx]
+      if (tileTypeOf(raw) === TILE_ROAD && tileLevelOf(raw) >= 2) return true
+    }
+  return false
+}
+
+// Every wish is something the map can be asked about, so it is granted the
+// moment the thing is built, with nothing for the player to report. None of
+// them duplicates a complaint: a school "within reach" is what a complaint is
+// about, so the bookish ask for one within walking distance instead.
+var WISHES = {
+  trees: { traits: ["gardener"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_TREE]) >= 2 },
+    ask: "There isn't a single tree within sight of my door on $STREET. One would do. Two would be generous.",
+    thanks: "The trees on $STREET are in. I have already told them where they may and may not drop leaves." },
+  flowers: { traits: ["gardener"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_FLOWERS, TILE_HEDGE]) >= 1 },
+    ask: "A flowerbed or a bit of hedge near $STREET, if the council can spare one. Something to fuss over.",
+    thanks: "Somebody has planted the bed on $STREET too close together. I have moved them. Thank you all the same." },
+  park: { traits: ["gardener", "sociable"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_PARK], 1) + countNear(c.grid, c.gridSize, c.index, 4, [TILE_WATERFRONT_PARK]) >= 1 },
+    ask: "A proper park near $STREET — not a playground, a park, with room to sit and disapprove of dogs.",
+    thanks: "The park near $STREET is everything I asked for. I have disapproved of three dogs already." },
+  statue: { traits: ["bookish", "oldguard"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_STATUE, TILE_ARBOUR]) >= 1 },
+    ask: "A town with no statues has no history it admits to. Something near $STREET to look at while thinking.",
+    thanks: "The statue near $STREET is a fine thing. I have no idea who it is meant to be and prefer it that way." },
+  path: { traits: ["bookish", "waterside"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_PATH]) >= 1 },
+    ask: "I should like to walk somewhere from $STREET without being run down. A footpath would answer.",
+    thanks: "I walked the new path from $STREET this morning and was not run down once. Remarkable." },
+  school_near: { traits: ["bookish"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 5, [TILE_SCHOOL]) >= 1 },
+    ask: "The school is within reach, they tell me. I would like it within earshot. There is a difference.",
+    thanks: "I can hear the school bell from $STREET now. I had forgotten how much I liked that." },
+  shops: { traits: ["sociable"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_COM], 2) >= 1 },
+    ask: "Somewhere near $STREET worth being seen in. A proper row of shops, not a kiosk.",
+    thanks: "The new shops by $STREET are splendid. I have been in every one and bought nothing, which is the point." },
+  bench: { traits: ["sociable", "oldguard"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_BENCH, TILE_BANDSTAND, TILE_FOUNTAIN]) >= 1 },
+    ask: "A bench on $STREET. Somewhere to sit and find out what everybody is up to.",
+    thanks: "The bench on $STREET has been occupied since it went in. Mostly by me. I know everything now." },
+  playground: { traits: ["sociable"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_PARK]) >= 1 },
+    ask: "The children on $STREET play in the road. A playground would move the noise somewhere I can enjoy it from.",
+    thanks: "The children have a playground by $STREET and the road is quiet. Both of these are wonderful." },
+  bus: { traits: ["commuter"],
+    met: function (c) { return transitRelief(c.gridSize, (c.utilities || {}).transit, c.index, c.funding) > 0 },
+    ask: "I spend more of my life getting to work than doing it. A bus from somewhere near $STREET, please.",
+    thanks: "Caught the bus from $STREET this morning. Read a whole chapter. Nearly missed my stop. Worth it." },
+  avenue: { traits: ["commuter"],
+    met: function (c) { return avenueNear(c.grid, c.gridSize, c.index, 4) },
+    ask: "The roads out of $STREET are a single lane of everybody. Widen one into an avenue and I'll stop writing.",
+    thanks: "The avenue near $STREET has given me back ten minutes a day. I am spending them writing to you." },
+  corner_shop: { traits: ["commuter"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_COM], 1) >= 1 },
+    ask: "There is nowhere between $STREET and the station to buy a paper. One shop. I'm not asking for much.",
+    thanks: "There's a shop on the way now. I buy a paper every morning and read it on the way home." },
+  water: { traits: ["waterside"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_LAKE]) >= 1 },
+    ask: "I moved to $STREET hoping to see water from the window. There is none. Could there be some?",
+    thanks: "I can see water from my window on $STREET. I have moved my chair to face it and may never move it back." },
+  waterfront: { traits: ["waterside"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 5, [TILE_WATERFRONT_PARK]) >= 1 },
+    ask: "A garden by the water near $STREET, with somewhere to sit and watch nothing happen on it.",
+    thanks: "The waterfront garden is perfect. Nothing has happened on the water all week. I watched all of it." },
+  fountain: { traits: ["waterside"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 4, [TILE_FOUNTAIN]) >= 1 },
+    ask: "A fountain near $STREET. The sound of water without the bother of a lake.",
+    thanks: "The fountain near $STREET is lovely. I have thrown a coin in for every wish, including this one." },
+  clinic_near: { traits: ["oldguard"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 5, [TILE_MEDICAL]) >= 1 },
+    ask: "At my age a doctor 'within reach' is not near enough. I should like one I can walk to from $STREET.",
+    thanks: "The clinic is a short walk from $STREET. I have been twice, for nothing, to make sure it works." },
+  police_near: { traits: ["oldguard"],
+    met: function (c) { return countNear(c.grid, c.gridSize, c.index, 6, [TILE_POLICE]) >= 1 },
+    ask: "I should sleep better with a police station in sight of $STREET. Not that I sleep, much.",
+    thanks: "There is a constable within sight of $STREET now. I nod to him. He has started nodding back." }
+}
+
+// Thank-you letters for a complaint put right. The complaint itself is the ask.
+var FIX_THANKS = {
+  fire: "There is a fire station within reach of $STREET at last. I have put the bucket back under the sink.",
+  power: "The lights came on in this house last night for the first time. I left them all on, out of spite.",
+  water: "Water comes out of the tap on $STREET now. I turned it on and off for most of an evening.",
+  police: "There are police about $STREET now. I have not had to deal with a single matter myself.",
+  traffic: "I got off $STREET this morning in no time at all, and arrived early, which nobody believed.",
+  industry: "The washing dries on $STREET again. It does not sound like much. It was everything.",
+  medical: "There is a doctor within reach of $STREET. We will still manage. We will manage better.",
+  schools: "The children walk to school in daylight now. Thank you. They are less grateful than I am."
+}
+// Complaints that come and go on their own are not worth a formal request.
+var FIX_REQUEST_KEYS = ["fire", "power", "water", "police", "traffic", "industry", "medical", "schools"]
+
+function requestContext(ctx, citizen) {
+  return { grid: ctx.grid, gridSize: ctx.gridSize, utilities: ctx.utilities,
+    funding: ctx.funding, index: citizen.i }
+}
+
+function requestMet(citizen, ctx) {
+  var q = citizen.q
+  if (!q || !q.k) return false
+  if (q.k.indexOf("fix:") === 0) {
+    var grievance = citizenGrievance(ctx, citizen.i)
+    return !grievance || grievance.key !== q.k.slice(4)
+  }
+  var wish = WISHES[q.k]
+  return wish ? wish.met(requestContext(ctx, citizen)) : true
+}
+
+function requestText(citizen, ctx, which) {
+  var q = citizen.q
+  if (!q || !q.k) return ""
+  var street = ctx && ctx.grid ? streetOf(ctx.grid, ctx.gridSize, citizen.i, ctx.streetNames)
+    : streetName((ctx && ctx.gridSize) || GRID_SIZE, citizen.i)
+  var body = ""
+  if (q.k.indexOf("fix:") === 0) {
+    var key = q.k.slice(4)
+    body = which === "thanks" ? FIX_THANKS[key] : CITIZEN_COMPLAINTS[key]
+  } else if (WISHES[q.k]) body = WISHES[q.k][which === "thanks" ? "thanks" : "ask"]
+  return (body || "").split("$STREET").join(street)
+}
+
+// Every tick, cheaply — there are only ever a few open. A granted request pays
+// its friendship and comes back as a letter for the caller to deliver.
+function checkRequests(citizens, ctx) {
+  var out = [], thanked = []
+  for (var i = 0; i < (citizens || []).length; i++) {
+    var person = citizens[i]
+    if (person.q && requestMet(person, ctx)) {
+      thanked.push({ name: person.n, index: person.i, text: requestText(person, ctx, "thanks") })
+      person = addFriendship(copyCitizen(person, { q: null }), FRIEND_REQUEST)
+    }
+    out.push(person)
+  }
+  return { citizens: out, thanked: thanked }
+}
+
+// Once per day played: a day's goodwill or grievance, new requests, and the
+// occasional gift from a friend. Returns what happened for the caller to apply
+// — money and planting touch state this pure function does not own.
+function advancePeopleDay(citizens, ctx) {
+  var random = ctx.random || Math.random
+  var day = Math.round(ctx.playDay || 0)
+  var out = [], gifts = [], requests = [], claimed = {}
+  var open = 0
+  for (var o = 0; o < (citizens || []).length; o++) if (citizens[o].q) open++
+
+  for (var i = 0; i < (citizens || []).length; i++) {
+    var person = citizens[i]
+    if (person.q && day - (person.q.d || 0) >= REQUEST_LAPSE_DAYS) {
+      person = copyCitizen(person, { q: null })
+      open--
+    }
+    var grievance = citizenGrievance(ctx, person.i)
+    person = addFriendship(person, grievance ? FRIEND_BAD_DAY : FRIEND_GOOD_DAY)
+    if (friendshipHearts(person.f) >= FRIEND_GIFT_HEARTS && random() < FRIEND_GIFT_CHANCE) {
+      var gift = chooseGift(person, ctx, random, claimed)
+      if (gift) gifts.push(gift)
+    }
+    out.push(person)
+  }
+
+  // Requests go first to whoever has a real complaint, then to everybody else
+  // in an order that changes by the day.
+  var order = out.map(function (p, k) {
+    var g = citizenGrievance(ctx, p.i)
+    var fixable = g && FIX_REQUEST_KEYS.indexOf(g.key) >= 0
+    return { k: k, rank: (fixable ? 0 : 1000003) + cityHash(p.i, day) % 1000003, grievance: fixable ? g.key : "" }
+  }).sort(function (a, b) { return a.rank - b.rank })
+  var added = 0
+  for (var r = 0; r < order.length && open < REQUESTS_OPEN_MAX && added < REQUESTS_PER_DAY; r++) {
+    var who = out[order[r].k]
+    if (who.q) continue
+    var key = order[r].grievance ? "fix:" + order[r].grievance : pickWish(who, ctx, day)
+    if (!key) continue
+    who = copyCitizen(who, { q: { k: key, d: day } })
+    out[order[r].k] = who
+    requests.push({ name: who.n, index: who.i, text: requestText(who, ctx, "ask") })
+    open++; added++
+  }
+  return { citizens: out, gifts: gifts, requests: requests }
+}
+
+function pickWish(citizen, ctx, day) {
+  var trait = citizenTraitKey(citizen)
+  var wanted = []
+  for (var key in WISHES)
+    if (WISHES[key].traits.indexOf(trait) >= 0 && !WISHES[key].met(requestContext(ctx, citizen)))
+      wanted.push(key)
+  if (wanted.length === 0) return ""
+  return wanted[cityHash(citizen.i, day + 11) % wanted.length]
+}
+
+var GIFT_PLANT_TEXT = {
+  gardener: "has planted flowers on the corner of $STREET, unasked, and would like it noted that they are doing well.",
+  other: "has planted a tree near $STREET — “for the street, and for the office, which has been good to us.”"
+}
+
+function chooseGift(citizen, ctx, random, claimed) {
+  var street = streetOf(ctx.grid, ctx.gridSize, citizen.i, ctx.streetNames)
+  if (random() < 0.5) {
+    var spot = nearestOpenLand(ctx.grid, ctx.gridSize, citizen.i, 2, claimed)
+    if (spot >= 0) {
+      claimed[spot] = true
+      var gardener = citizenTraitKey(citizen) === "gardener"
+      return { kind: "plant", name: citizen.n, index: spot, type: gardener ? TILE_FLOWERS : TILE_TREE,
+        text: citizen.n + " " + GIFT_PLANT_TEXT[gardener ? "gardener" : "other"].split("$STREET").join(street) }
+    }
+  }
+  var amount = clamp(Math.round(30 + (ctx.population || 0) / 200), 30, 150)
+  return { kind: "money", name: citizen.n, index: citizen.i, amount: amount,
+    text: citizen.n + " of " + street + " has sent the office $" + amount
+      + " “towards something nice. You'll know what.”" }
+}
+
+// The closest bare ground or wild woodland to a spot, nearest ring first.
+function nearestOpenLand(grid, gridSize, index, maxRadius, claimed) {
+  var x = index % gridSize, y = (index / gridSize) | 0
+  for (var radius = 1; radius <= maxRadius; radius++) {
+    for (var dy = -radius; dy <= radius; dy++) {
+      for (var dx = -radius; dx <= radius; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue
+        var nx = x + dx, ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize) continue
+        var at = ny * gridSize + nx
+        if (claimed && claimed[at]) continue
+        if (isOpenLand(tileTypeOf(grid[at]))) return at
+      }
+    }
+  }
+  return -1
+}
+
+// --- saying hello -------------------------------------------------------------
+// Once a day each, from the Residents panel: the small daily ritual. Lines by
+// trait and by how well they know you — reserved, then friendly, then fond.
+var HELLO_LINES = {
+  gardener: [
+    ["Good day, Mayor. Mind the verge; it's been reseeded.", "Oh — the Mayor. I'm told you like trees. We'll see.",
+      "Morning. The soil on $STREET is terrible. That isn't a complaint, it's a fact.", "Hello. Don't stand on that. Or that."],
+    ["Mayor! Come and look at my runner beans. No, properly look.", "I've a cutting for you, if City Hall has a windowsill.",
+      "The roses on $STREET are the best they've been. Don't tell the neighbours I said so.", "You look tired, Mayor. Fresh air. Dig something."],
+    ["There's my favourite mayor. I've named a tomato after you. It's a large one.", "I saved you the first sweet peas of the year. Don't argue.",
+      "When I go, I want to be composted somewhere nice in $CITY. Somewhere you built.", "You've made $STREET a place things grow. People too, I think."]
+  ],
+  bookish: [
+    ["Mayor. I was just reading. I am generally just reading.", "Good afternoon. You'll forgive me if I finish this paragraph.",
+      "Hello. I've been meaning to write to you about the semicolons on the new signs.", "Ah. The Mayor. I've read about you. Mixed reviews."],
+    ["Mayor — I've a book you should read. Two, actually. Three.", "The library's quiet today. I like it that way, but don't let them close it.",
+      "I am writing a history of $CITY. You are in chapter four. It's a flattering chapter, so far.", "Have you ever noticed the street names here rhyme, if you squint? I have. I squint a lot."],
+    ["Mayor. I've dedicated the history to you. Don't make me regret it.", "I read in the evenings by the window on $STREET and think this is a good town. You did that.",
+      "If you ever need a quiet hour, my door is open. I'll lend you a chair and say nothing.", "Chapter eleven is about you. It's the best chapter. Don't tell the others."]
+  ],
+  sociable: [
+    ["Mayor! Hello! Have you met everyone? You should meet everyone.", "Oh, it's you! Did you hear about the pigeons? You will.",
+      "Lovely to see you on $STREET. Everyone's watching, you know. Wave.", "Hello hello! I'm organising something. Not sure what yet."],
+    ["Mayor, sit down, you've got to hear what happened at the shop.", "Everybody on $STREET is coming to mine on Friday. You're invited. Bring a dish.",
+      "I told the whole street you were lovely. Nobody believed me, so do be lovely.", "Guess who's courting? No, guess. You'll never guess."],
+    ["My dear Mayor! Sit, sit. The kettle's on. It's always on for you.", "I'd have left $CITY years ago if not for you. Well. The people. But you made the people.",
+      "The street threw a party for my birthday and I made them toast you. Twice.", "You're family on $STREET now. That means you get told things. Brace yourself."]
+  ],
+  commuter: [
+    ["Mayor. Can't stop — the bus.", "Morning. Running late. Always running late.",
+      "Hello. Is it me or are the lights on the high road longer than they were?", "Mayor. Nice to meet you. Must dash."],
+    ["Mayor! Walk with me, I've got four minutes.", "I've worked out the fastest route across $CITY. It changes every time you build something.",
+      "Got to work in twenty minutes today. A personal best. I credit you partly.", "One day I'll sit on a bench on $STREET and not look at my watch. Not today."],
+    ["I missed my bus to say hello. That's how much I like you, Mayor.", "My commute's the best part of my day now. I never thought I'd say that.",
+      "I sat on a bench on $STREET yesterday and didn't look at my watch once. Your fault.", "If you ever run for another term, I'll drive everyone to the polls. On time."]
+  ],
+  waterside: [
+    ["Hello, Mayor. Have you seen the light on the water this evening?", "Oh — good day. I was watching the ducks. They're very busy.",
+      "Mayor. $STREET is nice, but it's the water I came for.", "Afternoon. The wind's from the east. You can smell the lake, if there is one."],
+    ["Mayor! Come and sit by the water. Five minutes. It fixes most things.", "I row on Sundays. You'd be welcome. You'd be terrible, but welcome.",
+      "I painted the lake from my window. It's not good. I'll give it to you anyway.", "Every town should have water in it. $CITY understands that. Mostly."],
+    ["Mayor. I've kept a seat by the water for you. It has your name on. Literally — I carved it.", "I watched the sun go down over $CITY last night and thought of you. The town, I mean. Mostly the town.",
+      "If I'm ever gone, scatter me in the lake. Somewhere you can see from City Hall.", "You gave me a window onto the water, Mayor. That's all I ever wanted from a town."]
+  ],
+  oldguard: [
+    ["Mayor. Hmph. In my day we didn't have mayors. We had a man with a bell.", "Good day. You're younger than the last one. That's not a compliment.",
+      "Hello. $STREET was all fields once. I preferred the fields.", "Mayor. I've written to you. Several times. You'll get round to it."],
+    ["Mayor. The new building isn't as bad as I said it would be. Don't let it go to your head.", "Sit down, Mayor, you're making the place untidy.",
+      "I've lived in $CITY longer than anyone on $STREET. I'll tell you how it was, if you've a week.", "You fixed the thing I wrote about. I'm still writing about the other thing."],
+    ["Mayor. You'll do. That's the highest praise I give, so frame it.", "I told the whole street you're the best mayor we've had. Then I told them there's only been you.",
+      "I don't say this, so listen. $CITY is better than the fields were.", "When I'm gone, tell them I complained about everything and meant none of it. Well. Some of it."]
+  ]
+}
+
+function friendshipTier(hearts) {
+  return hearts >= FRIEND_PATIENCE_HEARTS ? 2 : hearts >= FRIEND_CHAT_HEARTS ? 1 : 0
+}
+
+function helloLine(citizen, day, street, cityName) {
+  var lines = HELLO_LINES[citizenTraitKey(citizen)][friendshipTier(friendshipHearts(citizen.f))]
+  var line = lines[cityHash(nameHash(citizen.n), Math.round(day || 0)) % lines.length]
+  return line.split("$STREET").join(street || "the street").split("$CITY").join(cityName || "the city")
+}
+
+// Returns null when there is nobody at that address or they were already
+// greeted today — saying hello twice is not twice as friendly.
+function sayHello(citizens, index, day) {
+  var out = [], greeted = null
+  for (var i = 0; i < (citizens || []).length; i++) {
+    var person = citizens[i]
+    if (person.i === index && person.h !== day) {
+      person = addFriendship(copyCitizen(person, { h: day }), FRIEND_HELLO)
+      greeted = person
+    }
+    out.push(person)
+  }
+  return greeted ? { citizens: out, citizen: greeted } : null
+}
+
+// Once a year, on the real day.
+function noticeBirthday(citizens, index, today) {
+  var out = [], noticed = null
+  for (var i = 0; i < (citizens || []).length; i++) {
+    var person = citizens[i]
+    if (person.i === index && isBirthdayOn(person, today) && person.y !== today.year) {
+      person = addFriendship(copyCitizen(person, { y: today.year }), FRIEND_BIRTHDAY)
+      noticed = person
+    }
+    out.push(person)
+  }
+  return noticed ? { citizens: out, citizen: noticed } : null
+}
+
+// Everything about how a resident and the office stand, for the panel.
+function friendshipFor(citizen, ctx, grievance) {
+  var hearts = friendshipHearts(citizen.f)
+  var day = ctx && isFinite(ctx.playDay) ? ctx.playDay : -1
+  var street = ctx && ctx.grid ? streetOf(ctx.grid, ctx.gridSize, citizen.i, ctx.streetNames) : ""
+  var today = ctx ? ctx.today : null
+  return {
+    points: citizen.f || 0,
+    hearts: hearts,
+    title: FRIEND_TITLES[hearts],
+    trait: hearts >= FRIEND_TRAIT_HEARTS ? TRAIT_LABELS[citizenTraitKey(citizen)] : "",
+    request: citizen.q ? requestText(citizen, ctx, "ask") : "",
+    greetedToday: citizen.h === day,
+    hello: citizen.h === day ? helloLine(citizen, day, street, ctx && ctx.cityName) : "",
+    birthdayToday: isBirthdayOn(citizen, today),
+    birthdayNoticed: !!today && citizen.y === today.year,
+    loyal: hearts >= FRIEND_PATIENCE_HEARTS
+  }
+}
+
+// A memorial for somebody the office knew well: a statue on the nearest open
+// ground to where they lived, and a name the map remembers.
+function memorialSite(grid, gridSize, index) {
+  return nearestOpenLand(grid, gridSize, index, 6, null)
 }
 
 // --- the city Gazette -----------------------------------------------------
