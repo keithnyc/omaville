@@ -409,6 +409,8 @@ Item {
       + "no cars at all — a block reached only on foot puts nothing on the network. "
       + "Industry needs a real road; shops on a path alone grow slowly."
     if (type === Model.TILE_TRANSIT) return "Transit · $130\nTakes car trips off the roads nearby. Costs a monthly per-resident budget like the other departments."
+    if (type === Model.TILE_POST) return "Post Office · $" + Model.COSTS[Model.TILE_POST]
+      + "\nWhere your residents' letters are read. Click it to open the mailbox. One is enough."
     if (type === "decorations") return "Decorations · hover to choose\nSix kinds, from a $10 hedgerow to a $55 fountain. Raise nearby home values and residential demand; the dearer ones raise them more."
     if (type === "inspect") return "Inspect · click a tile for services, property value and upgrades."
     if (type === "bulldoze") return "Bulldoze · remove a tile and reclaim its construction cost."
@@ -431,7 +433,7 @@ Item {
   readonly property bool modalOpen: root.gameMenuOpen || root.confirmNewGameOpen
     || root.settingsOpen || root.budgetOpen || root.advisorsOpen || root.overlayMenuOpen
     || root.historyOpen || root.goalOpen || root.marketOpen || root.residentsOpen
-    || root.gazetteOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
+    || root.mailOpen || root.gazetteOpen || (root.awaySummaryOpen && root.unseenEvents.length > 0)
   readonly property int tileHoverIndex: root.active && root.serviceReady && gridMouse.containsMouse
     && !gridMouse.pressed && !gridMouse.painting && !gridMouse.panning
     && !root.modalOpen && !root.currentEvent && root.flyoutType === ""
@@ -560,6 +562,10 @@ Item {
     }
     if (info.type === Model.TILE_LAKE)
       lines.push("Natural water · nearby homes gain up to 12% value", "Draw a road here to build a $35 bridge", "Does not provide utility water")
+    if (info.type === Model.TILE_POST)
+      lines.push(root.unreadMail > 0
+        ? root.unreadMail + (root.unreadMail === 1 ? " unread letter" : " unread letters") + " · click to open"
+        : "No new mail · click to read old letters", "Upkeep $" + Model.POST_UPKEEP + " a month")
     if (info.type === Model.TILE_WILD)
       lines.push("Wild woodland · free to keep", "Build over it to clear the land")
     if (info.type === Model.TILE_WATERFRONT_PARK)
@@ -597,6 +603,27 @@ Item {
     cityName: root.cityService.cityName
   }) : null
   readonly property var memorialOffers: root.serviceReady ? root.cityService.memorialOffers : []
+
+  // The post office. Clicking one opens the mailbox; with unread letters an
+  // envelope bobs over every post office on screen.
+  property bool mailOpen: false
+  property int openLetterId: -1
+  onMailOpenChanged: if (mailOpen && root.serviceReady) root.cityService.markResidentsSeen()
+  readonly property var postOffices: root.serviceReady ? root.cityService.postOffices : []
+  readonly property int unreadMail: root.serviceReady ? root.cityService.unreadMail : 0
+  // Gated until Astra's sprites land (assets/postoffice/BRIEF-post-office.md);
+  // tests/post-office.mjs fails if this and the files disagree either way.
+  readonly property bool postOfficeArt: false
+  readonly property string postOfficeSprite: Qt.resolvedUrl("assets/postoffice/post-office.png").toString()
+  readonly property string envelopeSprite: Qt.resolvedUrl("assets/postoffice/envelope.png").toString()
+  readonly property var letterKinds: ({
+    request: "A request", thanks: "Thank you", gift: "A gift", birthday: "Birthday",
+    news: "News", farewell: "Farewell", family: "In memoriam"
+  })
+  function letterAge(day) {
+    var ago = root.serviceReady ? root.cityService.playDay - day : 0
+    return ago <= 0 ? "today" : ago === 1 ? "yesterday" : ago + " days ago"
+  }
   function memorialAt(index) {
     if (!root.serviceReady) return null
     return root.cityService.memorials[index] || null
@@ -647,6 +674,7 @@ Item {
     { action: "history", label: "History", enabled: root.serviceReady },
     { action: "market", label: "Market", enabled: root.serviceReady },
     { action: "residents", label: "Residents", enabled: root.serviceReady },
+    { action: "mail", label: "Post Office", enabled: root.serviceReady && root.postOffices.length > 0 },
     { action: "goal", label: "City Goal", enabled: root.serviceReady },
     { action: "name", label: "Name Town", enabled: root.serviceReady },
     { action: "", label: "", enabled: false, heading: true },
@@ -663,6 +691,7 @@ Item {
     else if (action === "goal") root.goalOpen = true
     else if (action === "market") root.marketOpen = true
     else if (action === "residents") root.residentsOpen = true
+    else if (action === "mail") root.mailOpen = true
     else if (action === "settings") root.settingsOpen = true
     else if (action === "name") {
       root.settingsOpen = true
@@ -687,6 +716,7 @@ Item {
     if (t === Model.TOOL_AVENUE) return "Avenue — $30 new · $20 to widen a street · carries 2.5x a street"
     if (t === Model.TILE_LAKE) return "Water — $4 · paint empty land · waterfront homes gain up to 12%"
     if (t === Model.TILE_WATERFRONT_PARK) return "Waterfront Park — $30 · requires empty land beside water" + root.monthlyNote(t, 0)
+    if (t === Model.TILE_POST) return "Post Office — $" + Model.COSTS[t] + " · click it to read residents' mail" + root.monthlyNote(t, 0)
     if (t === "decorations") return "Decorations — hover to choose one of six"
     if (Model.isDecoration(t)) return Model.TILE_LABELS[t] + " — $" + Model.COSTS[t] + " · improves nearby home values"
     var item = null
@@ -1028,6 +1058,7 @@ Item {
     { type: Model.TILE_SCHOOL, label: "Elementary School" },
     { type: Model.TILE_MEDICAL, label: "Clinic" },
     { type: Model.TILE_TRANSIT, label: "Bus Depot" },
+    { type: Model.TILE_POST, label: "Post Office" },
     { type: "decorations", label: "Decorations" },
     { type: "inspect", label: "Info" },
     { type: "bulldoze", label: "Bulldoze" }
@@ -1646,6 +1677,7 @@ Item {
     if (type === Model.TILE_WATERFRONT_PARK) return root.infrastructureSpriteSource(Model.TILE_PARK, 2)
     if (type === "decorations") return root.decorationSpriteUrls[root.decorationTool]
     if (root.decorationSpriteUrls[type]) return root.decorationSpriteUrls[type]
+    if (type === Model.TILE_POST) return root.postOfficeArt ? root.postOfficeSprite : ""
     if (type === Model.TILE_RES && root.useResidentialSprites) return root.residentialSpriteUrls[0][0]
     if (type === Model.TILE_COM && root.useCommercialSprites) return root.commercialSpriteUrls[0][0]
     if (type === Model.TILE_IND && root.useIndustrialSprites) return root.industrialSpriteUrls[0][0]
@@ -4006,6 +4038,35 @@ Item {
     ctx.fillRect(gx + cellSize * 0.33, gy + cellSize * 0.53, cellSize * 0.34, cellSize * 0.12)
   }
 
+  // The stand-in until the sprite lands: red brick, a slate roof, an arched
+  // door and a pillar box, which is what reads as "post" at 32 pixels.
+  function drawPostOffice(ctx, gx, gy, cellSize) {
+    root.drawSpriteLot(ctx, gx, gy, cellSize, Model.TILE_POST)
+    if (root.postOfficeArt && cityCanvas.isImageLoaded(root.postOfficeSprite)) {
+      var size = cellSize * 0.98
+      ctx.drawImage(root.postOfficeSprite, gx + (cellSize - size) / 2, gy + cellSize * 0.98 - size, size, size)
+      return
+    }
+    ctx.fillStyle = "#a64b3c"
+    ctx.fillRect(gx + cellSize * 0.16, gy + cellSize * 0.38, cellSize * 0.62, cellSize * 0.46)
+    ctx.fillStyle = "#3e4f63"
+    ctx.beginPath()
+    ctx.moveTo(gx + cellSize * 0.10, gy + cellSize * 0.40)
+    ctx.lineTo(gx + cellSize * 0.47, gy + cellSize * 0.16)
+    ctx.lineTo(gx + cellSize * 0.84, gy + cellSize * 0.40)
+    ctx.closePath()
+    ctx.fill()
+    ctx.fillStyle = "#e9dcc0"
+    ctx.fillRect(gx + cellSize * 0.40, gy + cellSize * 0.58, cellSize * 0.14, cellSize * 0.26)
+    ctx.fillRect(gx + cellSize * 0.22, gy + cellSize * 0.50, cellSize * 0.10, cellSize * 0.10)
+    ctx.fillRect(gx + cellSize * 0.62, gy + cellSize * 0.50, cellSize * 0.10, cellSize * 0.10)
+    ctx.fillStyle = "#d8352a"
+    ctx.fillRect(gx + cellSize * 0.815, gy + cellSize * 0.70, cellSize * 0.06, cellSize * 0.14)
+    ctx.beginPath(); ctx.arc(gx + cellSize * 0.845, gy + cellSize * 0.70, cellSize * 0.03, 0, Math.PI * 2); ctx.fill()
+    ctx.fillStyle = "#2b2b2b"
+    ctx.fillRect(gx + cellSize * 0.825, gy + cellSize * 0.72, cellSize * 0.04, cellSize * 0.012)
+  }
+
   function drawTransit(ctx, gx, gy, cellSize, level) {
     root.drawSpriteLot(ctx, gx, gy, cellSize, Model.TILE_TRANSIT)
     // A shelter canopy over a bus, gaining a second vehicle and a taller
@@ -4066,6 +4127,9 @@ Item {
         ctx.fillStyle = root.decorationBlobColors[tile.type] || "#6c9a4d"
         ctx.beginPath(); ctx.arc(gx + cellSize * 0.5, gy + cellSize * 0.6, cellSize * 0.22, 0, Math.PI * 2); ctx.fill()
       }
+      break
+    case Model.TILE_POST:
+      root.drawPostOffice(ctx, gx, gy, cellSize)
       break
     case Model.TILE_WILD:
       root.drawEmpty(ctx, gx, gy, cellSize)
@@ -4721,6 +4785,7 @@ Item {
                     case Model.TILE_SCHOOL: root.drawSchool(ctx, 0, 0, width, 0); break
                     case Model.TILE_MEDICAL: root.drawMedical(ctx, 0, 0, width, 0); break
                     case Model.TILE_TRANSIT: root.drawTransit(ctx, 0, 0, width, 0); break
+                    case Model.TILE_POST: root.drawPostOffice(ctx, 0, 0, width); break
                     case "decorations": root.drawPark(ctx, 0, 0, width, 0); break
                     case "inspect": root.drawInfoIcon(ctx, 0, 0, width); break
                     default: root.drawBulldozeIcon(ctx, 0, 0, width); break
@@ -4892,6 +4957,7 @@ Item {
               for (var ij = 0; ij < root.industrialSpriteUrls[ii].length; ij++)
                 loadImage(root.industrialSpriteUrls[ii][ij])
             loadImage(root.footbridgeSprite)
+            if (root.postOfficeArt) loadImage(root.postOfficeSprite)
             for (var type in root.infrastructureSpriteUrls)
               for (var ti = 0; ti < root.infrastructureSpriteUrls[type].length; ti++)
                 loadImage(root.infrastructureSpriteUrls[type][ti])
@@ -4989,6 +5055,12 @@ Item {
 
             function applyIndex(idx) {
               if (idx < 0 || idx >= root.gridSize * root.gridSize) return
+              // A post office is opened, not inspected or built on.
+              if ((root.activeTool === "" || root.activeTool === "inspect")
+                  && Model.tileTypeOf(root.grid[idx]) === Model.TILE_POST) {
+                root.mailOpen = true
+                return
+              }
               if (root.activeTool === "inspect") { root.inspectedIndex = idx; return }
               if (paintedTiles[idx]) return
               paintedTiles[idx] = true
@@ -5315,6 +5387,110 @@ Item {
           }
         }
 
+        // An envelope over every post office on screen while there is unread
+        // mail: bobbing, with a few sparkles winking around it. Plain items
+        // rather than canvas paint, so the animation never repaints the map.
+        Item {
+          id: mailOverlay
+          anchors.horizontalCenter: parent.horizontalCenter
+          width: root.viewportWidth
+          height: root.viewportHeight
+          clip: true
+          visible: root.unreadMail > 0 && root.postOffices.length > 0
+
+          Repeater {
+            model: mailOverlay.visible ? root.postOffices : []
+            Item {
+              id: envelopeSpot
+              required property var modelData
+              readonly property real cell: root.effectiveCellSize
+              readonly property real size: Math.max(Style.space(14), cell * 0.5)
+              property real bob: 0
+              width: size
+              height: size
+              x: (modelData % root.gridSize) * cell - root.panX + (cell - size) / 2
+              y: Math.floor(modelData / root.gridSize) * cell - root.panY - size * 0.55 - bob
+              visible: x > -size && y > -size * 2 && x < mailOverlay.width && y < mailOverlay.height
+
+              SequentialAnimation on bob {
+                running: envelopeSpot.visible && root.active
+                loops: Animation.Infinite
+                NumberAnimation { from: 0; to: envelopeSpot.size * 0.22; duration: 900; easing.type: Easing.InOutSine }
+                NumberAnimation { from: envelopeSpot.size * 0.22; to: 0; duration: 900; easing.type: Easing.InOutSine }
+              }
+
+              Image {
+                anchors.fill: parent
+                visible: root.postOfficeArt && status === Image.Ready
+                source: root.postOfficeArt ? root.envelopeSprite : ""
+                fillMode: Image.PreserveAspectFit
+                smooth: false
+              }
+              // Drawn envelope until the sprite lands.
+              Canvas {
+                anchors.fill: parent
+                visible: !root.postOfficeArt
+                rotation: -8
+                onWidthChanged: requestPaint()
+                onPaint: {
+                  var ctx = getContext("2d")
+                  ctx.clearRect(0, 0, width, height)
+                  var w = width * 0.86, h = height * 0.58
+                  var x = (width - w) / 2, y = (height - h) / 2
+                  ctx.fillStyle = "#f3ead6"
+                  ctx.strokeStyle = "#5b4a3a"
+                  ctx.lineWidth = Math.max(1, width * 0.06)
+                  ctx.fillRect(x, y, w, h)
+                  ctx.strokeRect(x, y, w, h)
+                  ctx.beginPath()
+                  ctx.moveTo(x, y)
+                  ctx.lineTo(x + w / 2, y + h * 0.58)
+                  ctx.lineTo(x + w, y)
+                  ctx.stroke()
+                  ctx.fillStyle = "#c8323a"
+                  ctx.beginPath()
+                  ctx.arc(x + w / 2, y + h * 0.58, width * 0.08, 0, Math.PI * 2)
+                  ctx.fill()
+                }
+              }
+
+              // Four-point sparkles, each on its own offset and phase so they
+              // twinkle in turn rather than pulsing together.
+              Repeater {
+                model: [
+                  { dx: -0.55, dy: -0.35, delay: 0 }, { dx: 0.62, dy: -0.15, delay: 420 },
+                  { dx: 0.45, dy: 0.62, delay: 860 }, { dx: -0.48, dy: 0.5, delay: 1250 }
+                ]
+                Item {
+                  id: sparkle
+                  required property var modelData
+                  readonly property real reach: envelopeSpot.size * 0.34
+                  width: reach
+                  height: reach
+                  x: envelopeSpot.size / 2 + modelData.dx * envelopeSpot.size - reach / 2
+                  y: envelopeSpot.size / 2 + modelData.dy * envelopeSpot.size - reach / 2
+                  scale: 0
+                  rotation: 0
+                  Rectangle { anchors.centerIn: parent; width: parent.width; height: Math.max(1, parent.width * 0.16); radius: height / 2; color: "#fff4c2" }
+                  Rectangle { anchors.centerIn: parent; height: parent.width; width: Math.max(1, parent.width * 0.16); radius: width / 2; color: "#fff4c2" }
+                  Rectangle { anchors.centerIn: parent; width: parent.width * 0.3; height: width; radius: width / 2; color: "#ffffff" }
+                  SequentialAnimation {
+                    running: envelopeSpot.visible && root.active
+                    loops: Animation.Infinite
+                    PauseAnimation { duration: sparkle.modelData.delay }
+                    ParallelAnimation {
+                      NumberAnimation { target: sparkle; property: "scale"; from: 0; to: 1; duration: 260; easing.type: Easing.OutQuad }
+                      NumberAnimation { target: sparkle; property: "rotation"; from: 0; to: 45; duration: 520 }
+                    }
+                    NumberAnimation { target: sparkle; property: "scale"; from: 1; to: 0; duration: 260; easing.type: Easing.InQuad }
+                    PauseAnimation { duration: 1700 - sparkle.modelData.delay }
+                  }
+                }
+              }
+            }
+          }
+        }
+
         Timer {
           interval: 33
           running: root.active && root.serviceReady
@@ -5564,7 +5740,7 @@ Item {
         root.gameMenuOpen = false; root.settingsOpen = false; root.budgetOpen = false
         root.advisorsOpen = false; root.overlayMenuOpen = false; root.historyOpen = false
         root.goalOpen = false; root.marketOpen = false; root.residentsOpen = false
-        root.gazetteOpen = false
+        root.gazetteOpen = false; root.mailOpen = false
       }
     }
 
@@ -5844,6 +6020,203 @@ Item {
       }
     }
 
+    // The mailbox, opened by clicking a post office. Letters arrive sealed;
+    // opening one is the small daily ritual, and writing back to somebody who
+    // still lives here is worth a little of their friendship.
+    Rectangle {
+      id: mailCard
+      visible: root.mailOpen
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(24), Style.space(400))
+      height: Math.min(parent.height - Style.space(24),
+        mailHeader.implicitHeight + mailList.contentHeight + mailDone.implicitHeight + Style.space(48))
+      radius: Style.cornerRadius
+      color: Color.menu.background
+      border.width: 1
+      border.color: Color.menu.border
+
+      MouseArea { anchors.fill: parent }
+
+      Column {
+        id: mailColumn
+        anchors.fill: parent
+        anchors.margins: Style.space(16)
+        spacing: Style.space(8)
+
+        Column {
+          id: mailHeader
+          width: parent.width
+          spacing: Style.space(2)
+          Text {
+            text: "Post Office"
+            color: Color.menu.text
+            font.bold: true
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.body
+          }
+          Text {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            text: !root.serviceReady || root.cityService.mail.length === 0
+              ? "No letters yet. Residents write when they want something, when you have done "
+                + "something for them, and — once they like you — just to say how things are."
+              : root.unreadMail > 0
+                ? root.unreadMail + (root.unreadMail === 1 ? " unopened letter" : " unopened letters")
+                  + ". Click one to open it."
+                : "All caught up. The last " + root.cityService.mail.length + " letters are kept."
+            color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
+            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        Flickable {
+          id: mailList
+          width: parent.width
+          height: Math.max(0, mailColumn.height - mailHeader.height - mailDone.height - mailColumn.spacing * 2)
+          contentHeight: mailLetters.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+
+          Column {
+            id: mailLetters
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+              model: root.serviceReady ? root.cityService.mail : []
+              Rectangle {
+                id: letterRow
+                required property var modelData
+                readonly property bool opened: root.openLetterId === modelData.id
+                readonly property bool canReply: root.serviceReady
+                  && Model.canReplyTo(modelData, root.cityService.citizens)
+                width: mailLetters.width
+                height: letterColumn.implicitHeight + Style.space(12)
+                radius: Style.cornerRadius
+                color: letterMouse.containsMouse
+                  ? Qt.rgba(0.5, 0.6, 0.6, 0.14)
+                  : modelData.read ? Qt.rgba(0.5, 0.6, 0.6, 0.05) : Qt.rgba(0.95, 0.85, 0.6, 0.12)
+                border.width: 1
+                border.color: modelData.read ? root.neutralTint(0.18) : Qt.rgba(0.95, 0.8, 0.45, 0.6)
+
+                MouseArea {
+                  id: letterMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    root.openLetterId = letterRow.opened ? -1 : letterRow.modelData.id
+                    if (root.serviceReady) root.cityService.readLetter(letterRow.modelData.id)
+                  }
+                }
+
+                Column {
+                  id: letterColumn
+                  z: 1
+                  x: Style.space(9); y: Style.space(6)
+                  width: parent.width - Style.space(18)
+                  spacing: Style.space(3)
+
+                  Item {
+                    width: parent.width
+                    height: letterFrom.implicitHeight
+                    Text {
+                      id: letterFrom
+                      width: parent.width - letterWhen.implicitWidth - Style.space(8)
+                      elide: Text.ElideRight
+                      text: (letterRow.modelData.read ? "" : "✉ ")
+                        + (letterRow.modelData.kind === "family" ? "From the family"
+                          : "From " + letterRow.modelData.from)
+                        + " · " + (root.letterKinds[letterRow.modelData.kind] || "A letter")
+                      color: Color.menu.text
+                      font.bold: !letterRow.modelData.read
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                    Text {
+                      id: letterWhen
+                      anchors.right: parent.right
+                      text: root.letterAge(letterRow.modelData.d)
+                      color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                  Text {
+                    width: parent.width
+                    wrapMode: letterRow.opened ? Text.WordWrap : Text.NoWrap
+                    elide: letterRow.opened ? Text.ElideNone : Text.ElideRight
+                    text: letterRow.modelData.read || letterRow.opened
+                      ? "“" + letterRow.modelData.text + "”"
+                      : "Sealed — click to open"
+                    color: letterRow.modelData.read || letterRow.opened
+                      ? Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.85)
+                      : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+                    font.italic: true
+                    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                  Row {
+                    visible: letterRow.opened
+                    spacing: Style.space(6)
+                    topPadding: Style.space(3)
+                    Repeater {
+                      model: [
+                        { label: letterRow.modelData.replied ? "You wrote back" : "Write back",
+                          kind: "reply", show: letterRow.canReply || letterRow.modelData.replied },
+                        { label: "Show their street", kind: "map", show: letterRow.modelData.i >= 0 }
+                      ]
+                      Rectangle {
+                        id: letterButton
+                        required property var modelData
+                        readonly property bool live: modelData.kind !== "reply" || letterRow.canReply
+                        visible: modelData.show
+                        width: letterButtonLabel.implicitWidth + Style.space(14)
+                        height: Style.space(22)
+                        radius: Style.space(4)
+                        color: live && letterButtonMouse.containsMouse
+                          ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.3)
+                          : live ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.14) : "transparent"
+                        border.width: 1
+                        border.color: live ? Color.accent : root.neutralTint(0.25)
+                        Text {
+                          id: letterButtonLabel
+                          anchors.centerIn: parent
+                          text: letterButton.modelData.label
+                          color: letterButton.live ? Color.accent : root.neutralTint(0.6)
+                          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                          font.pixelSize: Style.font.caption
+                        }
+                        MouseArea {
+                          id: letterButtonMouse
+                          anchors.fill: parent
+                          hoverEnabled: true
+                          enabled: letterButton.live
+                          cursorShape: Qt.PointingHandCursor
+                          onClicked: {
+                            if (!root.serviceReady) return
+                            if (letterButton.modelData.kind === "reply")
+                              root.cityService.replyToLetter(letterRow.modelData.id)
+                            else {
+                              root.mailOpen = false
+                              root.goToTile(letterRow.modelData.i)
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        Button { id: mailDone; text: "Done"; onClicked: root.mailOpen = false }
+      }
+    }
+
     // Who lives here. The roster the mayor can actually read: every named
     // resident, oldest tenancy first, with what they do, how long they have
     // been here and whether they are about to give up on the place. Clicking
@@ -5884,12 +6257,18 @@ Item {
           Text {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: root.residents.length > 0
+            text: (root.unreadMail > 0
+                ? (root.postOffices.length > 0
+                  ? root.unreadMail + (root.unreadMail === 1 ? " letter is" : " letters are") + " waiting at the post office. "
+                  : root.unreadMail + (root.unreadMail === 1 ? " letter has" : " letters have")
+                    + " arrived with nowhere to read them — build a post office. ")
+                : "")
+              + (root.residents.length > 0
               ? "The people this office knows by name, longest-standing first. "
                 + "Grant what they ask for and say hello once a day to win them over. "
                 + "Click one to go to their street."
               : "Nobody is known here by name yet. A city of a few hundred is "
-                + "still small enough to be a list of buildings."
+                + "still small enough to be a list of buildings.")
             color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption

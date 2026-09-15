@@ -63,12 +63,15 @@ var TILE_ARBOUR = "U"
 // so it costs nothing to keep and adds nothing to appeal, and anything can be
 // built straight over it — it is scenery on the open land, not an obstacle.
 var TILE_WILD = "X"
+// Where residents' letters are read. See the post office section below.
+var TILE_POST = "Y"
+var POST_UPKEEP = 2
 
-var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "N": 100, "H": 110, "M": 130, "L": 4, "Q": 30, "D": PATH_COST }
+var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "N": 100, "H": 110, "M": 130, "L": 4, "Q": 30, "D": PATH_COST, "Y": 120 }
 var TILE_LABELS = {
   "_": "Clear", "#": "Road", "A": "Avenue", "R": "Residential", "C": "Commercial",
   "I": "Industrial", "P": "Playground", "E": "Generator", "W": "Well",
-  "F": "Firehouse", "S": "Substation", "N": "Elementary School", "H": "Clinic", "M": "Bus Depot", "L": "Water", "Q": "Waterfront Park", "D": "Footpath", "X": "Woodland"
+  "F": "Firehouse", "S": "Substation", "N": "Elementary School", "H": "Clinic", "M": "Bus Depot", "L": "Water", "Q": "Waterfront Park", "D": "Footpath", "X": "Woodland", "Y": "Post Office"
 }
 
 // Land a new building may go on: bare ground, or the wild woodland a new map
@@ -825,7 +828,7 @@ function summarize(grid) {
     // (and gives) more than a tier-1 Playground or Generator.
     parkHappinessBonus: 0, serviceUpkeep: 0,
     // Split out so the monthly bill can itemise where the money goes.
-    powerUpkeep: 0, waterUpkeep: 0, decorationUpkeep: 0,
+    powerUpkeep: 0, waterUpkeep: 0, decorationUpkeep: 0, postCount: 0, postUpkeep: 0,
     departmentPresent: { F: false, S: false, N: false, H: false, M: false },
     // Level-weighted building counts per department, so the monthly bill can
     // charge for premises as well as staff. A tier-2 counts 1.85 where a
@@ -886,6 +889,10 @@ function summarize(grid) {
       stats.waterCount++
       stats.waterUpkeep += WATER_UPKEEP * INFRA_UPKEEP_SCALE[level]
       break
+    case TILE_POST:
+      stats.postCount++
+      stats.postUpkeep += POST_UPKEEP
+      break
     // Staffed departments are billed per resident served through the funding
     // budget (departmentSpend), not per building like the power and water
     // utilities above — a firehouse in a town of 200 and the same firehouse in
@@ -935,7 +942,7 @@ function summarize(grid) {
       break
     }
   }
-  stats.serviceUpkeep = stats.powerUpkeep + stats.waterUpkeep + stats.decorationUpkeep
+  stats.serviceUpkeep = stats.powerUpkeep + stats.waterUpkeep + stats.decorationUpkeep + stats.postUpkeep
   return stats
 }
 
@@ -1474,6 +1481,7 @@ function upkeepBreakdown(stats, funding, ordinances) {
     { key: "water", label: "Water", amount: stats.waterUpkeep },
     { key: "parks", label: "Parks", amount: stats.parkCount * PARK_UPKEEP },
     { key: "decorations", label: "Landscaping", amount: stats.decorationUpkeep },
+    { key: "post", label: "Post office", amount: stats.postUpkeep || 0 },
     { key: "services", label: "City services", amount: stats.builtDensity * densityRate },
     { key: "ordinances", label: "Ordinances", amount: ordinanceCost(ordinances, stats.population) }
   ]
@@ -1498,6 +1506,7 @@ function monthlyCostOf(type, level) {
   if (type === TILE_PARK || type === TILE_WATERFRONT_PARK) return PARK_UPKEEP
   if (type === TILE_POWER) return POWER_UPKEEP * tier
   if (type === TILE_WATER) return WATER_UPKEEP * tier
+  if (type === TILE_POST) return POST_UPKEEP
   if (DECORATIONS[type]) return DECORATIONS[type].upkeep
   return 0
 }
@@ -4148,6 +4157,24 @@ var FRIEND_GIFT_HEARTS = 3
 var FRIEND_GIFT_CHANCE = 0.12
 var MEMORIAL_HEARTS = 3
 var MEMORIAL_MAX_OFFERS = 3
+// Memorial names are kept in the save, so they are bounded: past this the
+// oldest statue keeps standing but forgets whose it was.
+var MEMORIAL_MAX = 24
+
+function recordMemorial(memorials, site, entry) {
+  var out = {}
+  for (var key in (memorials || {})) if (memorials.hasOwnProperty(key)) out[key] = memorials[key]
+  out[site] = entry
+  var keys = Object.keys(out)
+  while (keys.length > MEMORIAL_MAX) {
+    var oldest = keys[0]
+    for (var k = 1; k < keys.length; k++)
+      if ((out[keys[k]].year || 0) < (out[oldest].year || 0)) oldest = keys[k]
+    delete out[oldest]
+    keys = Object.keys(out)
+  }
+  return out
+}
 // A request board, not homework: a few open at once, and only a couple new a day.
 var REQUESTS_OPEN_MAX = 3
 var REQUESTS_PER_DAY = 2
@@ -4568,6 +4595,160 @@ function friendshipFor(citizen, ctx, grievance) {
 // ground to where they lived, and a name the map remembers.
 function memorialSite(grid, gridSize, index) {
   return nearestOpenLand(grid, gridSize, index, 6, null)
+}
+
+// --- the post office -----------------------------------------------------------
+// Residents write to the office: to ask for something, to say thank you, to
+// send a gift, to invite you round on their birthday, or just to say how things
+// are. The letters are always written; a post office is where they can be read.
+// A city without one still has a pile of mail — the Residents panel says how
+// much — which is the reason to build one.
+//
+// Mail is kept, not derived: a letter is what somebody said on the day they
+// said it, and regenerating it from today's city would rewrite history. So it
+// is bounded tightly, and every letter is short.
+var MAIL_MAX = 16
+var FRIEND_REPLY = 2
+// A friendly letter now and then from somebody who likes you, once they do.
+var MAIL_NEWS_HEARTS = 2
+var MAIL_NEWS_CHANCE = 0.3
+
+function postOffices(grid) {
+  var out = []
+  for (var i = 0; i < grid.length; i++) if (tileTypeOf(grid[i]) === TILE_POST) out.push(i)
+  return out
+}
+
+// Newest first. `id` only has to be unique within the box, which the playDay
+// and a running count are between them.
+function postLetter(mail, letter) {
+  var box = Array.isArray(mail) ? mail : []
+  var id = (letter.d || 0) * 1000 + (box.length > 0 ? (box[0].id % 1000 + 1) % 1000 : 0)
+  var entry = { id: id, d: letter.d || 0, from: letter.from || "", i: isFinite(letter.i) ? letter.i : -1,
+    kind: letter.kind || "news", text: letter.text || "", read: false, replied: false }
+  var next = [entry].concat(box)
+  // Over the limit, the oldest *read* letter goes first, so an unread one is
+  // never lost to a busy week.
+  while (next.length > MAIL_MAX) {
+    var drop = -1
+    for (var k = next.length - 1; k >= 0; k--) if (next[k].read) { drop = k; break }
+    next.splice(drop >= 0 ? drop : next.length - 1, 1)
+  }
+  return next
+}
+
+function unreadMail(mail) {
+  var n = 0
+  for (var i = 0; i < (mail || []).length; i++) if (!mail[i].read) n++
+  return n
+}
+
+function markLetterRead(mail, id) {
+  return (mail || []).map(function (letter) {
+    return letter.id === id && !letter.read ? copyCitizen(letter, { read: true }) : letter
+  })
+}
+
+// Writing back: once per letter, to somebody who still lives here, a little
+// friendship for the trouble.
+function replyToLetter(mail, citizens, id) {
+  var letter = null
+  for (var i = 0; i < (mail || []).length; i++) if (mail[i].id === id) letter = mail[i]
+  if (!letter || letter.replied || !letter.from) return null
+  var found = false
+  var people = (citizens || []).map(function (person) {
+    if (person.n !== letter.from) return person
+    found = true
+    return addFriendship(person, FRIEND_REPLY)
+  })
+  if (!found) return null
+  return {
+    mail: mail.map(function (l) { return l.id === id ? copyCitizen(l, { replied: true, read: true }) : l }),
+    citizens: people
+  }
+}
+
+function canReplyTo(letter, citizens) {
+  if (!letter || letter.replied || !letter.from) return false
+  for (var i = 0; i < (citizens || []).length; i++) if (citizens[i].n === letter.from) return true
+  return false
+}
+
+// What somebody writes when there is nothing to ask for — by trait, because a
+// gardener's news is not a commuter's.
+var MAIL_NEWS = {
+  gardener: [
+    "The marrows are coming on. I mention it only because nobody on $STREET will listen.",
+    "I have been given a cutting by a woman two streets over. We are not speaking, but the cutting is thriving.",
+    "Frost warning tonight. I have wrapped the roses. I have also, by mistake, wrapped the cat. Both are fine.",
+    "A robin has taken to following me round the garden. I have named it after you. It is also bossy."
+  ],
+  bookish: [
+    "I have finished the book I was reading when we last spoke. It did not end well for anyone. Recommended.",
+    "Chapter six of my history of $CITY is complete. It concerns drains. It is better than it sounds.",
+    "I found a first edition at the church sale for tuppence. I have told nobody but you, and now I regret that.",
+    "It rained all day, so I read all day. I believe this is what the city is for."
+  ],
+  sociable: [
+    "You'll never guess who's been seen walking out together on $STREET. I'll tell you when you write back.",
+    "We had a street supper on Saturday. Eleven dishes, three of them trifle. You were missed.",
+    "The new people at number nine are lovely. Loud, but lovely. Mostly loud.",
+    "I've started a choir. It is very bad. Everybody is having a wonderful time."
+  ],
+  commuter: [
+    "Made it across $CITY in record time this week. Still not sure how. Wrote the route down.",
+    "The 8:10 was late again. I used the time to write to you. So, swings and roundabouts.",
+    "Took a day off and didn't go anywhere. Strangest day of my life. Might do it again.",
+    "I timed the walk from $STREET to the shops. Four minutes. It used to be nine. Thought you should know."
+  ],
+  waterside: [
+    "There was mist on the water this morning, and a heron standing in it like it owned the place.",
+    "I rowed out to the middle on Sunday and just sat. I recommend it to any mayor with an afternoon.",
+    "The ducks have had ducklings. Seven. I've counted them every day and keep getting eight.",
+    "I painted the water again. Still not good. Enclosed, anyway, for the office wall."
+  ],
+  oldguard: [
+    "In my day letters were longer. This one will be short. Things are acceptable. That is all.",
+    "Somebody has put a new bench outside the shop. I have sat on it. It will do.",
+    "I was going to write to complain, but I could not think of anything. I will try again next week.",
+    "Tell whoever is responsible that the new lamps on $STREET are adequate. High praise. Don't let it go to their heads."
+  ]
+}
+
+function newsLetterText(citizen, day, street, cityName) {
+  var lines = MAIL_NEWS[citizenTraitKey(citizen)]
+  var line = lines[cityHash(nameHash(citizen.n), Math.round(day || 0) + 7) % lines.length]
+  return line.split("$STREET").join(street || "the street").split("$CITY").join(cityName || "the city")
+}
+
+function birthdayLetterText(citizen, street) {
+  return "It is my birthday today. There will be cake on " + (street || "the street")
+    + " and you are welcome to some, if the office can spare its mayor for an hour."
+}
+
+function farewellLetterText(departure) {
+  var reason = CITIZEN_FAREWELL_REASONS[departure.reason] || "I could not make it work"
+  return "By the time this reaches you I will be in " + (departure.to || "another town")
+    + ". " + reason + ". I did like it here, for a while."
+}
+
+var CITIZEN_FAREWELL_REASONS = {
+  fire: "Nobody could promise an engine would come",
+  power: "I got tired of living by candlelight",
+  water: "I got tired of carrying water",
+  police: "I stopped feeling safe on my own street",
+  crime: "I stopped feeling safe on my own street",
+  "fire-now": "I watched the fire and nobody came",
+  traffic: "I spent more of my life in traffic than at home",
+  industry: "I could not breathe for the works",
+  medical: "I need a doctor nearer than this",
+  schools: "The children needed a school"
+}
+
+function familyLetterText(bio) {
+  return "The family of " + bio.name + " write to say that " + bio.name
+    + " spoke well of the office to the end, and would have liked to be remembered on "
+    + bio.street + "."
 }
 
 // --- the city Gazette -----------------------------------------------------

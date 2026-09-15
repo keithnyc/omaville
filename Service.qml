@@ -140,6 +140,11 @@ Item {
   // Resident news since the Residents panel was last opened: a thank-you, a
   // gift, a birthday, a memorial to decide on. Drives the bar marker.
   property int residentNews: 0
+  // Letters from residents, newest first (Model.postLetter). Read at a post
+  // office; kept whether or not the city has one.
+  property var mail: []
+  readonly property int unreadMail: Model.unreadMail(root.mail)
+  readonly property var postOffices: Model.postOffices(root.grid)
   // Streets the mayor has named, keyed by axis and line so a name survives the
   // road being extended. Only the overrides are stored; every other street
   // still generates its own name and costs nothing.
@@ -539,6 +544,7 @@ Item {
     root.citizens = []
     root.memorials = ({})
     root.memorialOffers = []
+    root.mail = []
     root.residentNews = 0
     root.paused = false
     root.streetNames = ({})
@@ -964,9 +970,15 @@ Item {
     for (var d = 0; d < moved.deaths.length; d++) {
       var dead = moved.deaths[d]
       if (dead.friendship.hearts < Model.MEMORIAL_HEARTS) continue
-      if (root.memorialOffers.length >= Model.MEMORIAL_MAX_OFFERS) break
+      root.writeLetter({ from: "", i: dead.index, kind: "family", text: Model.familyLetterText(dead) })
+      if (root.memorialOffers.length >= Model.MEMORIAL_MAX_OFFERS) continue
       root.memorialOffers = root.memorialOffers.concat([{ n: dead.name, i: dead.index, street: dead.street }])
-      root.residentNews += 1
+    }
+    // Somebody who gave up on the city says so, in writing.
+    for (var l = 0; l < moved.departures.length; l++) {
+      var leaver = moved.departures[l]
+      if (leaver.reason === "gone" || !leaver.to) continue
+      root.writeLetter({ from: leaver.name, i: -1, kind: "farewell", text: Model.farewellLetterText(leaver) })
     }
     for (var m = 0; m < moved.moves.length; m++) {
       var mover = moved.moves[m]
@@ -978,8 +990,7 @@ Item {
     for (var t = 0; t < granted.thanked.length; t++) {
       var thanks = granted.thanked[t]
       root.notify(thanks.name, thanks.text)
-      root.logEvent("resident", thanks.name + ": “" + thanks.text + "”")
-      root.residentNews += 1
+      root.writeLetter({ from: thanks.name, i: thanks.index, kind: "thanks", text: thanks.text })
     }
     if (!newDay) return
     var day = Model.advancePeopleDay(root.citizens, ctx)
@@ -993,26 +1004,56 @@ Item {
         if (!Model.isOpenLand(Model.tileTypeOf(next[gift.index]))) continue
         next[gift.index] = Model.makeTile(gift.type, 0)
       }
-      root.logEvent("resident", gift.text)
-      root.residentNews += 1
+      root.writeLetter({ from: gift.name, i: gift.index, kind: "gift", text: gift.text })
     }
     if (next) root.grid = next
-    for (var r = 0; r < day.requests.length; r++) {
-      root.logEvent("resident", day.requests[r].name + " asks: “" + day.requests[r].text + "”")
-      root.residentNews += 1
-    }
+    for (var r = 0; r < day.requests.length; r++)
+      root.writeLetter({ from: day.requests[r].name, i: day.requests[r].index, kind: "request",
+        text: day.requests[r].text })
     for (var b = 0; b < root.citizens.length; b++) {
-      if (!Model.isBirthdayOn(root.citizens[b], root.today)) continue
-      root.logEvent("resident", "It is " + root.citizens[b].n + "'s birthday today.")
-      root.residentNews += 1
+      var person = root.citizens[b]
+      if (!Model.isBirthdayOn(person, root.today)) continue
+      root.writeLetter({ from: person.n, i: person.i, kind: "birthday",
+        text: Model.birthdayLetterText(person, Model.streetOf(root.grid, root.gridSize, person.i, root.streetNames)) })
+    }
+    // And now and then, from somebody who likes the office, just news.
+    var random = ctx.random || Math.random
+    if (random() < Model.MAIL_NEWS_CHANCE) {
+      var fond = root.citizens.filter(function (c) {
+        return Model.friendshipHearts(c.f) >= Model.MAIL_NEWS_HEARTS
+      })
+      if (fond.length > 0) {
+        var writer = fond[Math.floor(random() * fond.length)]
+        root.writeLetter({ from: writer.n, i: writer.i, kind: "news",
+          text: Model.newsLetterText(writer, root.playDay,
+            Model.streetOf(root.grid, root.gridSize, writer.i, root.streetNames), root.cityName) })
+      }
     }
   }
 
-  function residentCtx() {
-    return { grid: root.grid, gridSize: root.gridSize, utilities: root.utilities,
-      funding: root.funding, traffic: root.traffic, crimes: root.crimes, fires: root.fires,
-      streetNames: root.streetNames, playDay: root.playDay, today: root.today,
-      cityName: root.cityName, peopleClock: root.peopleClock, ageMinutes: root.ageMinutes }
+  // Every letter goes through here, so the box, its bound and the bar's badge
+  // can never disagree.
+  function writeLetter(letter) {
+    letter.d = root.playDay
+    root.mail = Model.postLetter(root.mail, letter)
+    root.residentNews += 1
+  }
+
+  function readLetter(id) {
+    var next = Model.markLetterRead(root.mail, id)
+    if (Model.unreadMail(next) === Model.unreadMail(root.mail)) return
+    root.mail = next
+    flushState()
+  }
+
+  function replyToLetter(id) {
+    if (!root.initialized) return false
+    var result = Model.replyToLetter(root.mail, root.citizens, id)
+    if (!result) return false
+    root.mail = result.mail
+    root.citizens = result.citizens
+    flushState()
+    return true
   }
 
   function sayHello(index) {
@@ -1046,9 +1087,8 @@ Item {
     var next = root.grid.slice()
     next[site] = Model.makeTile(Model.TILE_STATUE, 0)
     root.grid = next
-    var raised = Object.assign({}, root.memorials)
-    raised[site] = { n: offer.n, street: offer.street, year: Model.calendarFor(root.ageMinutes).year }
-    root.memorials = raised
+    root.memorials = Model.recordMemorial(root.memorials, site,
+      { n: offer.n, street: offer.street, year: Model.calendarFor(root.ageMinutes).year })
     root.declineMemorial(position)
     root.logEvent("resident", "A memorial to " + offer.n + ", of " + offer.street + ", has been raised.")
     flushState()
@@ -1190,6 +1230,7 @@ Item {
       lastPlayDate: root.lastPlayDate,
       memorials: root.memorials,
       memorialOffers: root.memorialOffers,
+      mail: root.mail,
       residentNews: root.residentNews,
       streetNames: root.streetNames
     }, null, 2) + "\n")
@@ -1287,6 +1328,7 @@ Item {
         Array.isArray(saved.citizens) ? saved.citizens : [], ageMinutes, Model.peopleClock(playDay))
       memorials = (saved.memorials && typeof saved.memorials === "object") ? saved.memorials : ({})
       memorialOffers = Array.isArray(saved.memorialOffers) ? saved.memorialOffers : []
+      mail = Array.isArray(saved.mail) ? saved.mail.slice(0, Model.MAIL_MAX) : []
       residentNews = Math.max(0, Math.round(num(saved.residentNews, 0)))
       streetNames = (saved.streetNames && typeof saved.streetNames === "object")
         ? saved.streetNames : ({})

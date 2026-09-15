@@ -334,19 +334,19 @@ const person = (over = {}) => Object.assign(
   const grid = town();
   const root = {
     initialized: true, outOfOffice: false, grid, gridSize: size, treasury: 100, ageMinutes: 600,
-    citizens: [person({ f: 50 })], memorials: {}, memorialOffers: [], residentNews: 0,
+    citizens: [person({ f: 50 })], memorials: {}, memorialOffers: [], residentNews: 0, mail: [],
     playDay: 10, today: { year: 2026, month: 0, day: 1 }, cityLog: [], notified: [],
     notify(t, b) { this.notified.push(b) }, logEvent(k, t) { this.cityLog.push({ kind: k, text: t }) }
   };
   const ctx = vm.createContext({ root, Model: M, flushState() {}, Object });
-  for (const n of ['tendResidents', 'acceptMemorial', 'declineMemorial', 'bulldozeTile', 'sayHello'])
+  for (const n of ['tendResidents', 'acceptMemorial', 'declineMemorial', 'bulldozeTile', 'sayHello', 'writeLetter'])
     root[n] = vm.runInContext('(' + fn(n) + ')', ctx);
   const peopleCtx = context(grid);
 
   // A friend's death offers a memorial; a stranger's does not.
   const friendBio = M.citizenBio(person({ f: 50 }), peopleCtx);
   const strangerBio = M.citizenBio(person({ n: 'Cyril Rooke', f: 0 }), peopleCtx);
-  root.tendResidents({ deaths: [friendBio, strangerBio], moves: [] }, peopleCtx, false);
+  root.tendResidents({ deaths: [friendBio, strangerBio], moves: [], departures: [] }, peopleCtx, false);
   assert.equal(root.memorialOffers.length, 1, 'only for somebody the office knew well');
   assert.equal(root.memorialOffers[0].n, 'Mabel Ashby');
 
@@ -367,15 +367,15 @@ const person = (over = {}) => Object.assign(
   root.grid = grid.slice(); root.grid[at(17, 19)] = 'T0'; root.grid[at(16, 19)] = 'T0';
   root.citizens = [person({ t: 0, q: { k: 'trees', d: 1 } })];
   root.residentNews = 0;
-  root.tendResidents({ deaths: [], moves: [] }, context(root.grid), false);
+  root.tendResidents({ deaths: [], moves: [], departures: [] }, context(root.grid), false);
   assert.equal(root.notified.length, 1, 'a popup');
   assert.equal(root.residentNews, 1, 'a mark on the bar');
-  assert.ok(root.cityLog.some(e => e.kind === 'resident' && e.text.startsWith('Mabel Ashby')), 'and a log entry');
+  assert.ok(root.mail.some(l => l.kind === 'thanks' && l.from === 'Mabel Ashby'), 'and a letter');
 
   // A friend's gift of money reaches the treasury; a planting reaches the map.
   root.citizens = [person({ f: 60, t: 1 })];
   const before = root.treasury;
-  root.tendResidents({ deaths: [], moves: [] }, context(root.grid, { random: () => 0.01 }), true);
+  root.tendResidents({ deaths: [], moves: [], departures: [] }, context(root.grid, { random: () => 0.01 }), true);
   const planted = root.grid.filter((t, k) => grid[k] !== t && t === 'T0').length;
   assert.ok(root.treasury > before || planted > 2, 'the gift arrived');
 }

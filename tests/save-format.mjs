@@ -38,6 +38,15 @@ assert.equal(M.summarize(legacyGrid).population, M.summarize(
   M.unpackGrid(M.packGrid(legacyGrid))).population, 'population survives a repack');
 
 // --- the headroom this whole change exists for ----------------------------
+const longestLetter = [].concat(
+  Object.values(M.WISHES).flatMap(w => [w.ask, w.thanks]),
+  Object.values(M.FIX_THANKS), Object.values(M.CITIZEN_COMPLAINTS),
+  Object.values(M.MAIL_NEWS).flat(),
+  [M.farewellLetterText({ reason: 'traffic', to: 'A Fairly Long Town Name Here' }),
+   M.familyLetterText({ name: 'Reginald Marchbank', street: 'Gasworks Terrace' }),
+   M.birthdayLetterText({ n: 'Reginald Marchbank' }, 'Gasworks Terrace')]
+).map(t => t.split('$STREET').join('Gasworks Terrace').split('$CITY').join('A Fairly Long Town Name Here'))
+  .sort((a, b) => b.length - a.length)[0];
 function saveBytes(grid, pendingEvents, recentEventIds = []) {
   return Buffer.byteLength(JSON.stringify({
     cityName: 'A Fairly Long Town Name Here', foundedAtMs: Date.now(), ageMinutes: 99999,
@@ -52,10 +61,14 @@ function saveBytes(grid, pendingEvents, recentEventIds = []) {
       n: 'Reginald Marchbank', i: 4095 - k, s: 99999, p: -M.CITIZEN_PATIENCE, b: -99999, a: -99999,
       t: 5, f: 100, h: 99999, y: 2026, q: { k: 'fix:industry', d: 99999 } })),
     playDay: 99999, lastPlayDate: '2026-12-31', residentNews: 999,
-    memorials: Object.fromEntries(Array.from({ length: 60 }, (_, k) => [4000 - k,
+    memorials: Object.fromEntries(Array.from({ length: M.MEMORIAL_MAX }, (_, k) => [4000 - k,
       { n: 'Reginald Marchbank', street: 'Gasworks Terrace', year: 9999 }])),
     memorialOffers: Array.from({ length: M.MEMORIAL_MAX_OFFERS }, (_, k) => ({
-      n: 'Reginald Marchbank', i: k, street: 'Gasworks Terrace' }))
+      n: 'Reginald Marchbank', i: k, street: 'Gasworks Terrace' })),
+    // A full mailbox of the longest letter any resident writes.
+    mail: Array.from({ length: M.MAIL_MAX }, (_, k) => ({ id: 99999000 + k, d: 99999,
+      from: 'Reginald Marchbank', i: 4095, kind: 'birthday', read: false, replied: false,
+      text: longestLetter }))
   }, null, 2) + '\n');
 }
 // Worst case the game can actually produce, on a fully-built grid: the

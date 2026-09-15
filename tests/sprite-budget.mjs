@@ -33,6 +33,9 @@ for (const spot of ['fire', 'election', 'growth', 'money', 'civic', 'crime',
 // unreachable at runtime, so they are not part of the set the game loads.
 const extraVariants = /readonly property bool useExtraVariants: true/.test(view)
   ? [] : [/\/[rci]3[efgh]\.png$/];
+// The post office art is commissioned (assets/postoffice/BRIEF-post-office.md)
+// and gated the same way until it lands.
+if (!/readonly property bool postOfficeArt: true/.test(view)) extraVariants.push(/^assets\/postoffice\//);
 for (const file of Array.from(referenced))
   if (extraVariants.some(p => p.test(file))) referenced.delete(file);
 
