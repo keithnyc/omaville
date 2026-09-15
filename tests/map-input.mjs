@@ -22,6 +22,11 @@ Item {
   property var upgradeableTypes: []
   property int paints: 0
   property var cityService: ({ zoneTile: function(i, t) { root.paints++ } })
+  // The real decision is tested in tests/post-office.mjs; here only which
+  // tile it answers for, so a real press can be sent at one.
+  property int mailTile: -1
+  property bool mailOpen: false
+  function pressOpensMail(index) { return index === mailTile }
   function clampPan() {}
   function setZoom(z) { zoom = z }
   Flickable {
@@ -58,6 +63,23 @@ Item {
       gridMouse.painting = true; gridMouse.panning = true
       gridMouse.canceled()
       verify(!gridMouse.painting && !gridMouse.panning)
+    }
+    // A real press on a post office opens the mailbox — with a building tool
+    // in hand and with none — and paints nothing. Clicking one used to do
+    // nothing in either case.
+    function test_pressOpensMail() {
+      root.mailTile = gridMouse.tileIndexAt(100, 180)
+      for (var k = 0; k < 2; k++) {
+        root.activeTool = k === 0 ? "Y" : ""
+        root.mailOpen = false
+        var painted = root.paints
+        mouseClick(gridMouse, 100, 180, Qt.LeftButton)
+        wait(50)
+        verify(root.mailOpen, "a press on a post office opens the mailbox with tool '" + root.activeTool + "'")
+        compare(root.paints, painted, "and builds nothing")
+      }
+      root.mailTile = -1
+      root.activeTool = "#"
     }
   }
 }
