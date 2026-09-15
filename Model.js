@@ -1277,12 +1277,26 @@ function trafficHappinessPenalty(traffic) {
 // and a water plant's coverage — served, not just zoned. Losing any one
 // of the three (plant bulldozed, road cut) puts it at decay risk exactly
 // like a road disconnect always has.
+// The chance a well-placed lot grows a level on a given tick, before demand,
+// happiness and local effects scale it. Module-level so the tests that pin the
+// growth roll can derive their rolls from it rather than hardcode numbers that
+// happen to sit either side of one particular value.
+//
+// 0.15 until a week of real play said houses reached their top level far too
+// fast. The effect is steeply non-linear at the tail, which is why the change
+// is small: on a fully serviced block 0.12 slows new houses appearing by about
+// a fifth but nearly doubles the time to fill the block to its top level
+// (roughly fourteen minutes to twenty-six). Below about 0.08 growth stops
+// reliably outpacing decay and a block never fills at all, so treat that as
+// the floor.
+var BASE_GROWTH_CHANCE = 0.12
+
 function tickGrid(grid, gridSize, stats, happiness, utilities, demand, funding, load, effects, traffic) {
   var policy = effects || ordinanceEffects([])
   var powerSatisfaction = load ? load.power : 1
   var waterSatisfaction = load ? load.water : 1
   var happinessFactor = clamp(happiness / 70, 0.3, 1.5)
-  var baseGrowthChance = 0.15
+  var baseGrowthChance = BASE_GROWTH_CHANCE
   var baseDecayChance = 0.08
 
   // Funding buys reach and safety. Resolved once per tick rather than per

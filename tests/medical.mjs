@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-const math=Object.create(Math); math.random=()=>0.17;
+const math=Object.create(Math); math.random=()=>0;
 const M=vm.createContext({Math:math});
 vm.runInContext(fs.readFileSync(new URL('../Model.js',import.meta.url),'utf8').replace('.pragma library',''),M);
+// The roll sits between an unserved house's chance and a served one's, derived
+// from the growth constant rather than hardcoded, so retuning the pace of the
+// city does not quietly move every threshold out from under this test. Served
+// by a school throughout (x1.15); healthcare is x1.10 when covered and x0.85
+// when not, once the town is past its starter grace.
+const b=M.BASE_GROWTH_CHANCE*1.15;
+math.random=()=>b*0.925;
 const grid=Array(400).fill('_0'), home=210;
 grid[home]='R1';grid[home+1]='#0';
 const covered=[{index:home,level:2}];

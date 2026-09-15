@@ -60,12 +60,17 @@ assert(!T.update([car], 33, grid, size, 1, roads, ['#fff']).includes(car));
 grid.fill('_0'); grid[school] = 'R1'; grid[school + 1] = '#0';
 const utilities = { power: [{ index: school, level: 2 }], water: [{ index: school, level: 2 }],
   fire: [{ index: school, level: 2 }], police: [{ index: school, level: 2 }], schools: [] };
-math.random = () => 0.13;
+// Rolls derived from the growth constant, so retuning the city's pace does not
+// move the thresholds out from under the test. No school and no clinic past
+// the starter grace is x0.75 x0.85; inside the grace it is x1. Both covered is
+// x1.15 x1.10.
+const base = M.BASE_GROWTH_CHANCE;
+math.random = () => base * 0.9;
 assert.equal(M.tickGrid(grid, size, { population: 100 }, 70, utilities, { R: 1 })[school], 'R1');
 assert.equal(M.tickGrid(grid, size, { population: 50 }, 70, utilities, { R: 1 })[school], 'R2');
 utilities.schools = [{ index: school - size, level: 0 }];
 utilities.medical = [{ index: school - size, level: 0 }];
-math.random = () => 0.16;
+math.random = () => base * 1.2;
 assert.equal(M.tickGrid(grid, size, { population: 100 }, 70, utilities, { R: 1 })[school], 'R2');
 utilities.water = [];
 assert.equal(M.tickGrid(grid, size, { population: 100 }, 70, utilities, { R: 1 })[school], 'R1');
