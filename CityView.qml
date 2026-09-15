@@ -555,6 +555,8 @@ Item {
     }
     if (info.type === Model.TILE_LAKE)
       lines.push("Natural water · nearby homes gain up to 12% value", "Draw a road here to build a $35 bridge", "Does not provide utility water")
+    if (info.type === Model.TILE_WILD)
+      lines.push("Wild woodland · free to keep", "Build over it to clear the land")
     if (info.type === Model.TILE_WATERFRONT_PARK)
       lines.push("Waterfront garden · contributes to park happiness")
     if (info.type === Model.TILE_PARK)
@@ -1683,6 +1685,32 @@ Item {
       ctx.lineTo(tx, ty - cellSize * 0.06)
       ctx.lineTo(tx + cellSize * 0.04, ty + cellSize * 0.05)
       ctx.stroke()
+    }
+  }
+
+  // Wild woodland on a new map, drawn with the planted tree's sprite so the
+  // two read as the same kind of thing — but as a stand of smaller trees,
+  // never one neat specimen, so a player can tell nobody paid for it. The
+  // tile's level picks the arrangement; offsets run back-to-front so nearer
+  // trunks overlap farther crowns.
+  readonly property var woodlandStands: [
+    [[0.28, 0.58, 1.10], [0.72, 0.70, 1.15], [0.40, 1.00, 1.20]],
+    [[0.62, 0.52, 1.05], [0.30, 0.78, 1.20], [0.74, 1.00, 1.15]],
+    [[0.50, 0.66, 1.35], [0.22, 0.98, 1.05], [0.80, 0.96, 1.10]],
+    [[0.34, 0.54, 1.00], [0.70, 0.74, 1.25], [0.30, 1.02, 1.10]]
+  ]
+  function drawWoodland(ctx, gx, gy, cellSize, variant) {
+    var source = root.decorationSpriteUrls[Model.TILE_TREE]
+    var loaded = cityCanvas.isImageLoaded(source)
+    var trees = root.woodlandStands[variant] || root.woodlandStands[0]
+    for (var i = 0; i < trees.length; i++) {
+      var size = cellSize * trees[i][2]
+      var cx = gx + cellSize * trees[i][0], base = gy + cellSize * trees[i][1]
+      if (loaded) ctx.drawImage(source, cx - size / 2, base - size, size, size)
+      else {
+        ctx.fillStyle = "#4f7a3c"
+        ctx.beginPath(); ctx.arc(cx, base - size * 0.45, size * 0.28, 0, Math.PI * 2); ctx.fill()
+      }
     }
   }
 
@@ -4024,6 +4052,10 @@ Item {
         ctx.fillStyle = root.decorationBlobColors[tile.type] || "#6c9a4d"
         ctx.beginPath(); ctx.arc(gx + cellSize * 0.5, gy + cellSize * 0.6, cellSize * 0.22, 0, Math.PI * 2); ctx.fill()
       }
+      break
+    case Model.TILE_WILD:
+      root.drawEmpty(ctx, gx, gy, cellSize)
+      root.drawWoodland(ctx, gx, gy, cellSize, tile.level)
       break
     case Model.TILE_PATH:
       if (tile.level % 2 === 1) {

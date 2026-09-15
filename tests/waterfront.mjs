@@ -38,7 +38,9 @@ const action=n=>vm.runInContext('('+service.match(new RegExp('  function '+n+'\\
 const zone=action('zoneTile'),remove=action('bulldozeTile');
 zone(40,'L');zone(40,'#');assert.equal(root.treasury,61);
 remove(40);assert.equal(root.treasury,96);assert.equal(root.grid[40],'L0');
-remove(40);assert.equal(root.treasury,100);assert.equal(saves,4);
+// Draining refunds nothing: new maps start with lakes nobody paid for (see
+// Model.totalInvestment), so the $4 painting it stays spent.
+remove(40);assert.equal(root.treasury,96);assert.equal(saves,4);
 // Same road identity means existing traffic pathing traverses bridges.
 const T=vm.createContext({});
 vm.runInContext(fs.readFileSync(new URL('../Traffic.js',import.meta.url),'utf8').replace('.pragma library',''),T);

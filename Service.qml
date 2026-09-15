@@ -467,7 +467,6 @@ Item {
   function resetCity(newCityName, newMayorName) {
     if (Model.validName(newCityName)) root.cityName = Model.sanitizeName(newCityName)
     if (newMayorName !== undefined) root.mayorName = Model.sanitizeName(newMayorName)
-    root.grid = Model.emptyGrid(root.gridSize)
     root.treasury = 500
     root.taxRatePercent = 10
     root.population = 0
@@ -492,7 +491,10 @@ Item {
     root.holdings = ({})
     root.outOfOfficeUntil = 0
     root.lastApproval = 0
-    root.neighbors = Model.makeNeighbors(root.gridSize, Date.now())
+    var foundedSeed = Date.now()
+    root.neighbors = Model.makeNeighbors(root.gridSize, foundedSeed)
+    // After the neighbours, so the land can keep their highway connectors dry.
+    root.grid = Model.generateTerrain(root.gridSize, foundedSeed, root.neighbors)
     root.connectedNeighborNames = []
     root.history = []
     root.cityLog = []
@@ -503,7 +505,7 @@ Item {
     root.streetNames = ({})
     root.brownoutActive = false
     root.ageMinutes = 0
-    root.foundedAtMs = Date.now()
+    root.foundedAtMs = foundedSeed
     flushState()
   }
 
@@ -1124,6 +1126,9 @@ Item {
     if (foundedAtMs === 0) {
       foundedAtMs = Date.now()
       founded = true
+      // The very first city gets land to found on too — but never lay terrain
+      // over a grid that has anything on it.
+      if (Model.isBlankGrid(grid)) grid = Model.generateTerrain(gridSize, foundedAtMs, neighbors)
     }
 
     initialized = true

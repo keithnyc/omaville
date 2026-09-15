@@ -59,12 +59,22 @@ var TILE_STATUE = "V"
 var TILE_FOUNTAIN = "O"
 var TILE_BANDSTAND = "J"
 var TILE_ARBOUR = "U"
+// Woodland that was here before the city. Not a decoration: nobody planted it,
+// so it costs nothing to keep and adds nothing to appeal, and anything can be
+// built straight over it — it is scenery on the open land, not an obstacle.
+var TILE_WILD = "X"
 
 var COSTS = { "#": 10, "A": 30, "R": 5, "C": 5, "I": 5, "P": 10, "E": 90, "W": 60, "F": 70, "S": 70, "N": 100, "H": 110, "M": 130, "L": 4, "Q": 30, "D": PATH_COST }
 var TILE_LABELS = {
   "_": "Clear", "#": "Road", "A": "Avenue", "R": "Residential", "C": "Commercial",
   "I": "Industrial", "P": "Playground", "E": "Generator", "W": "Well",
-  "F": "Firehouse", "S": "Substation", "N": "Elementary School", "H": "Clinic", "M": "Bus Depot", "L": "Water", "Q": "Waterfront Park", "D": "Footpath"
+  "F": "Firehouse", "S": "Substation", "N": "Elementary School", "H": "Clinic", "M": "Bus Depot", "L": "Water", "Q": "Waterfront Park", "D": "Footpath", "X": "Woodland"
+}
+
+// Land a new building may go on: bare ground, or the wild woodland a new map
+// starts with, which building clears.
+function isOpenLand(type) {
+  return type === TILE_EMPTY || type === TILE_WILD
 }
 
 // Decorations are the one tile family that keeps growing, so they get a single
@@ -372,6 +382,9 @@ function upgradeTile(grid, index) {
 // tearing down an upgraded plant returns what it really cost, not just
 // its original tier-1 price.
 function totalInvestment(type, level) {
+  // Water refunds nothing: a new map starts with lakes nobody paid for, and
+  // draining them must not be a way to print money.
+  if (type === TILE_LAKE || type === TILE_WILD) return 0
   // A footbridge cost more to lay than the path either side of it, so
   // bulldozing one must refund what it actually cost.
   if (type === TILE_PATH) return level % 2 === 1 ? PATH_BRIDGE_COST : PATH_COST
@@ -393,7 +406,7 @@ function canBuildTier(grid, index, type, level, population, treasury, civic) {
       || !Number.isInteger(index) || index < 0 || index >= grid.length)
     return { ok: false, cost: 0 }
   var current = parseTile(grid[index])
-  if (current.type !== TILE_EMPTY && (current.type !== type || current.level >= level))
+  if (!isOpenLand(current.type) && (current.type !== type || current.level >= level))
     return { ok: false, cost: 0 }
   var cost = totalInvestment(type, level)
     - (current.type === type ? totalInvestment(type, current.level) : 0)
@@ -427,6 +440,11 @@ function emptyGrid(size) {
   var grid = new Array(size * size)
   for (var i = 0; i < grid.length; i++) grid[i] = TILE_EMPTY + "0"
   return grid
+}
+
+function isBlankGrid(grid) {
+  for (var i = 0; i < grid.length; i++) if (tileTypeOf(grid[i]) !== TILE_EMPTY) return false
+  return true
 }
 
 // A grown GRID_SIZE would otherwise strand an existing save (its grid
@@ -524,7 +542,7 @@ function roadAccessIndices(grid, gridSize, index) {
     var next = neighbors[i]
     var type = (grid[next] || "")[0]
     if (type === TILE_ROAD) roads.push(next)
-    else if (type && "_RCIPQTB".indexOf(type) >= 0) {
+    else if (type && "_XRCIPQTB".indexOf(type) >= 0) {
       var outer = neighborIndices(gridSize, next)
       for (var j = 0; j < outer.length; j++) {
         var candidate = outer[j]
@@ -552,7 +570,7 @@ function footAccessIndices(grid, gridSize, index) {
     var next = neighbors[i]
     var type = (grid[next] || "")[0]
     if (type === TILE_PATH) paths.push(next)
-    else if (type && "_RCIPQTB".indexOf(type) >= 0) {
+    else if (type && "_XRCIPQTB".indexOf(type) >= 0) {
       var outer = neighborIndices(gridSize, next)
       for (var j = 0; j < outer.length; j++) {
         var candidate = outer[j]
@@ -1581,11 +1599,11 @@ function canPlace(grid, index, type, treasury) {
   // existing street or bridge in place. Widening an avenue is a no-op, so it
   // is refused rather than silently charging for nothing.
   if (type === TOOL_AVENUE)
-    return current.type === TILE_EMPTY || current.type === TILE_LAKE
+    return isOpenLand(current.type) || current.type === TILE_LAKE
       || (current.type === TILE_ROAD && !isAvenueTile(current))
   if (type === TILE_WATERFRONT_PARK)
-    return current.type === TILE_EMPTY && shoreAdjacent(grid, Math.round(Math.sqrt(grid.length)), index)
-  return current.type === TILE_EMPTY
+    return isOpenLand(current.type) && shoreAdjacent(grid, Math.round(Math.sqrt(grid.length)), index)
+  return isOpenLand(current.type)
 }
 
 function placeTile(grid, index, type) {
@@ -4059,6 +4077,131 @@ function neighborRandom(seed) {
   }
   next(); next(); next()
   return next
+}
+
+// --- the land a new city is founded on --------------------------------------
+// A fresh map used to be 4096 tiles of identical grass. This lays down a few
+// lakes, sometimes a river, and stands of woodland, from a seed so the same
+// founding always produces the same land.
+//
+// Three things are kept clear: the middle of the map, where every city starts;
+// a ring around each highway connector, so the first road out never needs a
+// bridge; and the edges of rivers, which are left a tile of bank so a
+// waterfront is buildable. Woodland is built over freely (see isOpenLand), so
+// it is never in the way — water is, which is why there is less of it.
+var TERRAIN_CLEAR_RADIUS = 9
+var TERRAIN_CONNECTOR_CLEARANCE = 4
+
+function generateTerrain(gridSize, seed, neighbors) {
+  var random = neighborRandom(seed)
+  var grid = emptyGrid(gridSize)
+  var centre = (gridSize - 1) / 2
+  var connectors = []
+  for (var n = 0; neighbors && n < neighbors.length; n++) {
+    var ci = neighbors[n].index
+    connectors.push({ x: ci % gridSize, y: Math.floor(ci / gridSize) })
+  }
+  function distance(x1, y1, x2, y2) {
+    var dx = x1 - x2, dy = y1 - y2
+    return Math.sqrt(dx * dx + dy * dy)
+  }
+  function reserved(x, y, margin) {
+    if (distance(x, y, centre, centre) < TERRAIN_CLEAR_RADIUS + margin) return true
+    for (var c = 0; c < connectors.length; c++)
+      if (distance(x, y, connectors[c].x, connectors[c].y) < TERRAIN_CONNECTOR_CLEARANCE + margin) return true
+    return false
+  }
+  function inside(x, y) { return x >= 0 && y >= 0 && x < gridSize && y < gridSize }
+  // Lakes keep two tiles off the border, so only a river ever reaches it.
+  function setLake(x, y) {
+    if (x >= 2 && y >= 2 && x < gridSize - 2 && y < gridSize - 2 && !reserved(x, y, 0))
+      grid[y * gridSize + x] = makeTile(TILE_LAKE, 0)
+  }
+
+  // A river, a little over half the time: a meandering band from one edge to
+  // the opposite, held well to one side of the centre. It is laid whole or not
+  // at all — clipping it around a highway connector left a river that stopped
+  // dead in a field and started again three tiles on — so a course that would
+  // cross a reserved tile is thrown away and another lane tried.
+  if (random() < 0.55) {
+    var vertical = random() < 0.5
+    var wide = random() < 0.5
+    for (var attempt = 0; attempt < 6; attempt++) {
+      var side = random() < 0.5 ? -1 : 1
+      var lane = centre + side * (TERRAIN_CLEAR_RADIUS + 5 + random() * (gridSize * 0.5 - TERRAIN_CLEAR_RADIUS - 9))
+      var drift = 0
+      var previous = -1
+      var course = []
+      var blocked = false
+      for (var t = 0; t < gridSize && !blocked; t++) {
+        drift = clamp(drift + (random() - 0.5) * 0.3, -0.45, 0.45)
+        lane = clamp(lane + drift, 2, gridSize - 4)
+        // Never let the meander carry it into the middle.
+        if (Math.abs(lane - centre) < TERRAIN_CLEAR_RADIUS + 3) {
+          lane = centre + side * (TERRAIN_CLEAR_RADIUS + 3)
+          drift = 0
+        }
+        var at = Math.round(lane)
+        // When the course steps sideways, fill the gap at this row too so the
+        // banks share an edge — otherwise it reads as a chain of ponds.
+        var from = previous < 0 ? at : Math.min(previous, at)
+        var to = previous < 0 ? at : Math.max(previous, at)
+        for (var w = from; w <= to + (wide ? 1 : 0); w++) {
+          var rx = vertical ? w : t, ry = vertical ? t : w
+          if (reserved(rx, ry, 1)) { blocked = true; break }
+          course.push(ry * gridSize + rx)
+        }
+        previous = at
+      }
+      if (blocked) continue
+      for (var c = 0; c < course.length; c++) grid[course[c]] = makeTile(TILE_LAKE, 0)
+      break
+    }
+  }
+
+  // Lakes: irregular blobs, one to three of them.
+  var lakes = 1 + Math.floor(random() * 3)
+  for (var l = 0; l < lakes; l++) {
+    var lx = 0, ly = 0, tries = 0
+    do {
+      lx = 4 + Math.floor(random() * (gridSize - 8))
+      ly = 4 + Math.floor(random() * (gridSize - 8))
+    } while (reserved(lx, ly, 6) && ++tries < 40)
+    if (tries >= 40) continue
+    var radius = 3 + random() * 3
+    var wobble = [random(), random(), random(), random()]
+    for (var y = Math.floor(ly - radius - 2); y <= ly + radius + 2; y++) {
+      for (var x = Math.floor(lx - radius - 2); x <= lx + radius + 2; x++) {
+        var angle = Math.atan2(y - ly, x - lx)
+        var edge = radius * (0.8 + 0.25 * Math.sin(angle * 2 + wobble[0] * 6.28)
+          + 0.15 * Math.sin(angle * 3 + wobble[1] * 6.28))
+        if (distance(x, y, lx, ly) <= edge) setLake(x, y)
+      }
+    }
+  }
+
+  // Woodland: a handful of stands, dense in the middle and thinning out, plus
+  // the odd lone tree. Trees crowd up to the water but never sit in it.
+  function plant(x, y) {
+    if (!inside(x, y) || reserved(x, y, 0)) return
+    var i = y * gridSize + x
+    if (tileTypeOf(grid[i]) === TILE_EMPTY) grid[i] = makeTile(TILE_WILD, Math.floor(random() * 4))
+  }
+  var stands = 7 + Math.floor(random() * 5)
+  for (var s = 0; s < stands; s++) {
+    var sx = Math.floor(random() * gridSize), sy = Math.floor(random() * gridSize)
+    var reach = 3 + random() * 5
+    for (var fy = Math.floor(sy - reach); fy <= sy + reach; fy++) {
+      for (var fx = Math.floor(sx - reach); fx <= sx + reach; fx++) {
+        var closeness = 1 - distance(fx, fy, sx, sy) / reach
+        if (closeness > 0 && random() < 0.45 + closeness * 0.55) plant(fx, fy)
+      }
+    }
+  }
+  var strays = Math.floor(gridSize * gridSize * 0.006)
+  for (var r = 0; r < strays; r++)
+    plant(Math.floor(random() * gridSize), Math.floor(random() * gridSize))
+  return grid
 }
 
 function makeNeighbors(gridSize, seed) {
