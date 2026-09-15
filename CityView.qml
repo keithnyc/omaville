@@ -122,6 +122,16 @@ Item {
   readonly property bool tradeArt: true
   readonly property var tradeKinds: ["works", "counter", "street", "retired"]
   onActiveChanged: {
+    // "Away" means the time the panel was shut. Seen used to be recorded only
+    // when the player clicked Got it, so everything logged while they were
+    // sitting there watching still counted as unseen — play for a few
+    // minutes, close the panel, reopen it, and it would welcome them back
+    // with a list of what they had just watched happen.
+    if (!active && root.serviceReady) {
+      root.awaySummaryOpen = false
+      root.cityService.markSeen()
+      return
+    }
     if (active && root.serviceReady && root.unseenEvents.length > 0) root.awaySummaryOpen = true
     // Opening the panel is a moment somebody is about to read the coverage
     // card, and the spare-building survey only refreshes on the tick.

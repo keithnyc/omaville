@@ -68,5 +68,21 @@ for (const name of declared)
     'without dismissing on an outside click — the mayor picks one of the two');
 }
 
+// --- "away" means the panel was shut --------------------------------------
+// Seen used to be recorded only on Got it, so events logged while the player
+// sat watching still counted as unseen, and closing then reopening the panel
+// greeted them with what they had just watched happen.
+{
+  const handler = view.slice(view.indexOf('onActiveChanged: {'));
+  const body = handler.slice(0, handler.indexOf('\n  }'));
+  const closing = body.indexOf('if (!active');
+  assert.ok(closing >= 0, 'closing the panel is handled');
+  const branch = body.slice(closing, body.indexOf('}', closing));
+  assert.ok(/markSeen\(\)/.test(branch), 'closing the panel records everything as seen');
+  assert.ok(/awaySummaryOpen = false/.test(branch), 'and drops a summary the player already had in front of them');
+  assert.ok(closing < body.indexOf('awaySummaryOpen = true'),
+    'handled before the opening branch, so a close can never fall through into it');
+}
+
 console.log(`PASS: ${declared.length} cards in one list, read by the overlay, the scrim and ` +
   `the map hover, with nothing keeping a second copy.`);
