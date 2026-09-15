@@ -611,9 +611,10 @@ Item {
   onMailOpenChanged: if (mailOpen && root.serviceReady) root.cityService.markResidentsSeen()
   readonly property var postOffices: root.serviceReady ? root.cityService.postOffices : []
   readonly property int unreadMail: root.serviceReady ? root.cityService.unreadMail : 0
-  // Gated until Astra's sprites land (assets/postoffice/BRIEF-post-office.md);
-  // tests/post-office.mjs fails if this and the files disagree either way.
-  readonly property bool postOfficeArt: false
+  // Astra's sprites (assets/postoffice/BRIEF-post-office.md). The drawn
+  // stand-ins stay as the fallback while they load; tests/post-office.mjs
+  // fails if this and the files disagree either way.
+  readonly property bool postOfficeArt: true
   readonly property string postOfficeSprite: Qt.resolvedUrl("assets/postoffice/post-office.png").toString()
   readonly property string envelopeSprite: Qt.resolvedUrl("assets/postoffice/envelope.png").toString()
   readonly property var letterKinds: ({
@@ -4043,8 +4044,11 @@ Item {
   function drawPostOffice(ctx, gx, gy, cellSize) {
     root.drawSpriteLot(ctx, gx, gy, cellSize, Model.TILE_POST)
     if (root.postOfficeArt && cityCanvas.isImageLoaded(root.postOfficeSprite)) {
-      var size = cellSize * 0.98
-      ctx.drawImage(root.postOfficeSprite, gx + (cellSize - size) / 2, gy + cellSize * 0.98 - size, size, size)
+      // The sprite carries 12px of padding under the building (a clinic's
+      // runs to the frame edge), so it is anchored a little lower to stand on
+      // the same line — and drawn a touch smaller, as the cosier building.
+      var size = cellSize * 0.94
+      ctx.drawImage(root.postOfficeSprite, gx + (cellSize - size) / 2, gy + cellSize * 1.024 - size, size, size)
       return
     }
     ctx.fillStyle = "#a64b3c"
@@ -5420,16 +5424,20 @@ Item {
               }
 
               Image {
+                id: envelopeImage
                 anchors.fill: parent
                 visible: root.postOfficeArt && status === Image.Ready
                 source: root.postOfficeArt ? root.envelopeSprite : ""
                 fillMode: Image.PreserveAspectFit
-                smooth: false
+                // Drawn at a fraction of its 128px, where filtering reads
+                // better than dropped pixels.
+                smooth: true
+                mipmap: true
               }
-              // Drawn envelope until the sprite lands.
+              // Drawn envelope until the sprite has loaded.
               Canvas {
                 anchors.fill: parent
-                visible: !root.postOfficeArt
+                visible: !envelopeImage.visible
                 rotation: -8
                 onWidthChanged: requestPaint()
                 onPaint: {
