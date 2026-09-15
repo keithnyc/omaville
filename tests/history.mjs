@@ -138,6 +138,15 @@ for (let i = 0; i < M.HISTORY_MAX; i++)
     minute: 99999, population: 999999, treasury: 9999999,
     happiness: 100, income: 999999, upkeep: 999999
   });
+// Worst case the queue can actually hold: the EVENT_MAX_PENDING largest
+// dilemmas, with the longest names the templates can be filled with.
+const longName = 'A Fairly Long Town Name Here';
+const worstPending = M.EVENTS
+  .map(e => M.instantiateEvent(e, { city: longName, neighborNames: [longName] }))
+  .sort((a, b) => JSON.stringify(b).length - JSON.stringify(a).length)
+  .slice(0, M.EVENT_MAX_PENDING);
+const worstRecent = M.EVENTS.map(e => e.id)
+  .sort((a, b) => b.length - a.length).slice(0, M.EVENT_RECENT_MEMORY);
 let worstLog = [];
 for (let i = 0; i < M.LOG_MAX; i++)
   worstLog = M.pushLogEntry(worstLog, 99999, 'loss',
@@ -147,7 +156,8 @@ const worst = Buffer.byteLength(JSON.stringify({
   treasury: 123456.789, taxRatePercent: 30, grid: M.packGrid(fullGrid), gridSize: size,
   saveVersion: M.SAVE_VERSION, population: 99999, jobs: 99999, happiness: 100,
   demand: { R: 1.234567, C: 1.234567, I: 1.234567 }, reachedMilestones: M.MILESTONES.slice(),
-  budgetCrisisActive: true, pendingEvents: M.EVENTS, activeEffects: [], eventChance: 0.05,
+  budgetCrisisActive: true, pendingEvents: worstPending, recentEventIds: worstRecent,
+  activeEffects: [], eventChance: 0.05,
   eventFrequency: 2, funding: M.defaultFunding(),
   loans: M.takeLoan(M.takeLoan([], M.loanOffer('growth'), 0), M.loanOffer('seed'), 0),
   missedLoanTicks: 3,

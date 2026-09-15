@@ -38,19 +38,27 @@ assert.equal(M.summarize(legacyGrid).population, M.summarize(
   M.unpackGrid(M.packGrid(legacyGrid))).population, 'population survives a repack');
 
 // --- the headroom this whole change exists for ----------------------------
-function saveBytes(grid, pendingEvents) {
+function saveBytes(grid, pendingEvents, recentEventIds = []) {
   return Buffer.byteLength(JSON.stringify({
     cityName: 'A Fairly Long Town Name Here', foundedAtMs: Date.now(), ageMinutes: 99999,
     treasury: 123456.789, taxRatePercent: 30, grid: M.packGrid(grid), gridSize: M.GRID_SIZE,
     saveVersion: M.SAVE_VERSION, population: 99999, jobs: 99999, happiness: 100,
     demand: { R: 1.234567, C: 1.234567, I: 1.234567 },
     reachedMilestones: M.MILESTONES.slice(), budgetCrisisActive: true,
-    pendingEvents, activeEffects: [], eventChance: 0.05, eventFrequency: 2
+    pendingEvents, recentEventIds, activeEffects: [], eventChance: 0.05, eventFrequency: 2
   }, null, 2) + '\n');
 }
-// Worst case the game can actually produce: every dilemma queued at once
-// (rollForEvent never queues a duplicate id) on a fully-built grid.
-const worst = saveBytes(mixed, M.EVENTS);
+// Worst case the game can actually produce, on a fully-built grid: the
+// EVENT_MAX_PENDING largest dilemmas, with the longest names the templates
+// can be filled with.
+const longName = 'A Fairly Long Town Name Here';
+const worstPending = M.EVENTS
+  .map(e => M.instantiateEvent(e, { city: longName, neighborNames: [longName] }))
+  .sort((a, b) => JSON.stringify(b).length - JSON.stringify(a).length)
+  .slice(0, M.EVENT_MAX_PENDING);
+const worstRecent = M.EVENTS.map(e => e.id)
+  .sort((a, b) => b.length - a.length).slice(0, M.EVENT_RECENT_MEMORY);
+const worst = saveBytes(mixed, worstPending, worstRecent);
 assert.ok(worst < MAX_STATE_BYTES / 2,
   `worst-case save ${worst}B must sit well under the ${MAX_STATE_BYTES}B cap`);
 

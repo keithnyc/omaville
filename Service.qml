@@ -53,8 +53,13 @@ Item {
   property bool budgetCrisisActive: false
   // Queue of unresolved mayor's-dilemma events (oldest first) — stacking is
   // intentional, a mayor who's been away comes back to a backlog, not a
-  // silently-dropped one. Each entry is a full event object from Model.EVENTS.
+  // silently-dropped one — up to Model.EVENT_MAX_PENDING, after which no new
+  // dilemma is rolled until one is decided. Each entry is a full event object
+  // from Model.EVENTS, with its {city}/{neighbor} names already filled in.
   property var pendingEvents: []
+  // Ids of the dilemmas fired most recently, oldest first — see
+  // Model.rollForEvent. Saved, so a shell restart does not reset the rotation.
+  property var recentEventIds: []
   // Lingering effects from resolved dilemmas (a happiness or income hit/boost
   // that plays out over a few ticks rather than landing all at once) —
   // folded into every tick via Model.advanceCity's modifier params.
@@ -476,6 +481,7 @@ Item {
     root.reachedMilestones = []
     root.budgetCrisisActive = false
     root.pendingEvents = []
+    root.recentEventIds = []
     root.activeEffects = []
     root.eventChance = Model.EVENT_CHANCE_MAX
     root.funding = Model.defaultFunding()
@@ -552,9 +558,22 @@ Item {
   function rollEvent() {
     var pendingIds = root.pendingEvents.map(function(e) { return e.id })
     var effectiveChance = root.eventChance * root.eventFrequency
-    var event = Model.rollForEvent(pendingIds, root.population, effectiveChance)
+    var stats = root.cityStats
+    var event = Model.rollForEvent(pendingIds, root.population, effectiveChance, {
+      recent: root.recentEventIds,
+      population: root.population,
+      lakes: stats.lakeCount,
+      woodland: stats.wildCount + stats.treeCount,
+      industry: stats.indCount,
+      transit: stats.transitCount,
+      schools: stats.schoolCount,
+      clinics: stats.medicalCount,
+      neighborNames: root.connectedNeighborNames,
+      city: root.cityName
+    })
     root.eventChance = Model.nextEventChance(root.eventChance, !!event)
     if (!event) return
+    root.recentEventIds = Model.rememberEvent(root.recentEventIds, event.id)
     root.pendingEvents = root.pendingEvents.concat([event])
     root.notify(event.title, event.flavor + " Open Omaville to decide.")
     flushState()
@@ -1008,6 +1027,7 @@ Item {
       lastGazetteMinute: root.lastGazetteMinute,
       popupNotifications: root.popupNotifications,
       paused: root.paused,
+      recentEventIds: root.recentEventIds,
       citizens: root.citizens,
       streetNames: root.streetNames
     }, null, 2) + "\n")
@@ -1056,6 +1076,7 @@ Item {
       reachedMilestones = Array.isArray(saved.reachedMilestones) ? saved.reachedMilestones : []
       budgetCrisisActive = saved.budgetCrisisActive === true
       pendingEvents = Array.isArray(saved.pendingEvents) ? saved.pendingEvents : []
+      recentEventIds = Array.isArray(saved.recentEventIds) ? saved.recentEventIds : []
       activeEffects = Array.isArray(saved.activeEffects) ? saved.activeEffects : []
       eventChance = Model.clamp(num(saved.eventChance, Model.EVENT_CHANCE_MAX),
         Model.EVENT_CHANCE_BASE, Model.EVENT_CHANCE_MAX)

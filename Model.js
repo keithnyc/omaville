@@ -832,7 +832,10 @@ function summarize(grid) {
     // tier-0 counts 0.55 — fewer, bigger buildings genuinely cost less.
     departmentUnits: { F: 0, S: 0, N: 0, H: 0, M: 0 },
     schoolCount: 0, medicalCount: 0,
-    treeCount: 0, flowerCount: 0, decorationCount: 0, decorationPoints: 0, taxablePopulation: 0, transitCount: 0
+    treeCount: 0, flowerCount: 0, decorationCount: 0, decorationPoints: 0, taxablePopulation: 0, transitCount: 0,
+    // The land itself, so a dilemma about the lake only happens to a city
+    // that has one.
+    lakeCount: 0, wildCount: 0
   }
   for (var i = 0; i < grid.length; i++) {
     // Plain locals, not a parsed object: this loop runs over all 4096 tiles
@@ -854,6 +857,12 @@ function summarize(grid) {
       continue
     }
     switch (type) {
+    case TILE_LAKE:
+      stats.lakeCount++
+      break
+    case TILE_WILD:
+      stats.wildCount++
+      break
     case TILE_ROAD:
       stats.roadCount++
       if (level >= 2) stats.avenueCount++
@@ -2108,6 +2117,439 @@ var EVENTS = [
         outcome: "Both groundhog camps are now mad at you specifically."
       }
     ]
+  },
+  {
+    id: "dns_ttl",
+    title: "Mayor — someone set the city's DNS TTL to one week",
+    flavor: "It was meant to be one minute. City Hall's new address won't reach half the residents until next Thursday.",
+    choices: [
+      {
+        label: "Pay for an emergency flush",
+        hint: "Every provider gets a polite, expensive phone call.",
+        effects: { treasuryDelta: -120 },
+        outcome: "Caches cleared. The phone bill is its own incident."
+      },
+      {
+        label: "Put up signs with the old address",
+        hint: "Free — and deeply confusing for a week.",
+        effects: { happinessDelta: -6, effectTicks: 2 },
+        outcome: "The signs say 'City Hall (it's the other one)'. Nobody finds that funny."
+      }
+    ]
+  },
+  {
+    id: "cert_expired",
+    title: "Mayor — the city's TLS certificate expired at midnight",
+    flavor: "The renewal reminder went to an inbox belonging to someone who retired in 2019.",
+    choices: [
+      {
+        label: "Buy the premium certificate",
+        hint: "Fixed in an hour, with a padlock that sparkles.",
+        effects: { treasuryDelta: -80, happinessDelta: 3, effectTicks: 1 },
+        outcome: "Padlock restored. It does not, in fact, sparkle."
+      },
+      {
+        label: "Tell everyone to click 'Proceed anyway'",
+        hint: "Free, and teaches the whole city a terrible habit.",
+        effects: { happinessDelta: -5, effectTicks: 2, incomeMultiplier: 0.95 },
+        outcome: "Residents are clicking through warnings. On everything. Forever."
+      }
+    ]
+  },
+  {
+    id: "disk_full",
+    title: "Mayor — the city archive disk is 100% full",
+    flavor: "Turns out the parking-meter logs have been writing a line every millisecond since the meters went in.",
+    choices: [
+      {
+        label: "Buy more storage",
+        hint: "The classic answer. It always works until it doesn't.",
+        effects: { treasuryDelta: -110 },
+        outcome: "Another rack of disks. See you in eighteen months."
+      },
+      {
+        label: "Delete the oldest logs",
+        hint: "Free. Hopefully nobody needed those.",
+        effects: { treasuryDelta: 30, happinessDelta: -4, effectTicks: 2 },
+        outcome: "Space freed. An auditor has already asked for exactly the logs you deleted."
+      }
+    ]
+  },
+  {
+    id: "printer_sentient",
+    title: "Mayor — the City Hall printer is refusing to print",
+    flavor: "It displays PC LOAD LETTER and nothing else. Staff have begun leaving it small offerings.",
+    choices: [
+      {
+        label: "Replace it",
+        hint: "A fresh printer, and a fresh set of problems.",
+        effects: { treasuryDelta: -60, happinessDelta: 4, effectTicks: 1 },
+        outcome: "The new printer works. The old one is in the basement, still blinking."
+      },
+      {
+        label: "Keep appeasing it",
+        hint: "Free. Productivity will suffer.",
+        effects: { incomeMultiplier: 0.93, effectTicks: 3, happinessDelta: 3 },
+        outcome: "Permits are handwritten now. Staff morale is weirdly high."
+      }
+    ]
+  },
+  {
+    id: "reply_all",
+    title: "Mayor — someone hit Reply All on the all-residents mailing list",
+    flavor: "Four thousand people have now replied asking to be removed from the list, to the whole list.",
+    choices: [
+      {
+        label: "Take the mail server offline for a day",
+        hint: "Stops the storm, stops everything else too.",
+        effects: { incomeMultiplier: 0.88, effectTicks: 1 },
+        outcome: "Silence. Beautiful, expensive silence."
+      },
+      {
+        label: "Let it burn out",
+        hint: "It has to end eventually. Probably.",
+        effects: { happinessDelta: -8, effectTicks: 2 },
+        outcome: "It ended on day three, with a message that just said 'stop'."
+      }
+    ]
+  },
+  {
+    id: "rubber_duck",
+    title: "Mayor — the IT department wants a rubber duck budget",
+    flavor: "They say explaining bugs to a duck fixes them. They have a spreadsheet. The spreadsheet has charts.",
+    choices: [
+      {
+        label: "Approve the ducks",
+        hint: "Cheap, and the charts were honestly convincing.",
+        effects: { treasuryDelta: -35, incomeMultiplier: 1.05, effectTicks: 3 },
+        outcome: "Every desk has a duck. Tickets are closing faster. Nobody can explain why."
+      },
+      {
+        label: "Deny it",
+        hint: "Free. IT will remember this.",
+        effects: { happinessDelta: -3, effectTicks: 1 },
+        outcome: "IT has started explaining bugs to a photo of you instead."
+      }
+    ]
+  },
+  {
+    id: "lakeside_festival",
+    title: "Mayor — residents want a festival on the lake",
+    flavor: "Lanterns, a rowing race, and a man who insists he can water-ski behind a pedalo.",
+    requires: { lakes: 12 },
+    choices: [
+      {
+        label: "Fund the festival",
+        hint: "Costs a little; the whole city turns out.",
+        effects: { treasuryDelta: -90, happinessDelta: 10, effectTicks: 2 },
+        outcome: "The lanterns were lovely. The pedalo man was, astonishingly, right."
+      },
+      {
+        label: "Charge an entry fee",
+        hint: "Turns a profit — some people stay home.",
+        effects: { treasuryDelta: 70, happinessDelta: -3, effectTicks: 1 },
+        outcome: "Tidy profit. The pedalo man did his run for free outside the fence."
+      }
+    ]
+  },
+  {
+    id: "lake_monster",
+    title: "Mayor — three separate people have reported a lake monster",
+    flavor: "All three sightings were at dusk, near the fishing pier, from people who had been at the fishing pier all day.",
+    requires: { lakes: 12 },
+    choices: [
+      {
+        label: "Commission a scientific survey",
+        hint: "Settles it properly, for a price.",
+        effects: { treasuryDelta: -70 },
+        outcome: "The survey found a very large, very old carp. The carp now has a name."
+      },
+      {
+        label: "Put it on the tourism posters",
+        hint: "Free, and tourists love a mystery.",
+        effects: { treasuryDelta: 40, populationPercent: 0.02 },
+        outcome: "Monster-spotting tours are booked out. The carp remains unbothered."
+      }
+    ]
+  },
+  {
+    id: "algae_bloom",
+    title: "Mayor — the lake has turned an alarming shade of green",
+    flavor: "It's not toxic, says the lab. It's just very, very green. Also it smells.",
+    requires: { lakes: 12 },
+    choices: [
+      {
+        label: "Pay for a clean-up crew",
+        hint: "Clears it up before anyone complains too loudly.",
+        effects: { treasuryDelta: -130 },
+        outcome: "The lake is blue again. The smell took a little longer."
+      },
+      {
+        label: "Wait for autumn",
+        hint: "Free — the waterfront is miserable until then.",
+        effects: { happinessDelta: -7, effectTicks: 3 },
+        outcome: "Autumn came. So did a lot of complaints about summer."
+      }
+    ]
+  },
+  {
+    id: "old_growth_oak",
+    title: "Mayor — surveyors found a 400-year-old oak in the woods",
+    flavor: "It's older than the city, the county, and several nearby countries. A developer has asked if it could be 'relocated'.",
+    requires: { woodland: 60 },
+    choices: [
+      {
+        label: "Protect it with a little park",
+        hint: "Costs a bit — the city is quietly proud.",
+        effects: { treasuryDelta: -60, happinessDelta: 8, effectTicks: 2 },
+        outcome: "The oak has a plaque now. It has been through worse than a plaque."
+      },
+      {
+        label: "Sell the timber rights",
+        hint: "A welcome windfall. People notice.",
+        effects: { treasuryDelta: 150, happinessDelta: -9, effectTicks: 3 },
+        outcome: "The cheque cleared. The protest signs were made of recycled paper, pointedly."
+      }
+    ]
+  },
+  {
+    id: "forest_wifi",
+    title: "Mayor — hikers want Wi-Fi in the woods",
+    flavor: "Specifically, enough to post photos of how peaceful it is to be disconnected.",
+    requires: { woodland: 60 },
+    choices: [
+      {
+        label: "Put up a mast",
+        hint: "Costs money and a little of the peace.",
+        effects: { treasuryDelta: -80, populationPercent: 0.02 },
+        outcome: "Five bars in the forest. Nobody can hear the birds over the notifications."
+      },
+      {
+        label: "Keep the woods offline",
+        hint: "Free. Some people are furious; others are delighted.",
+        effects: { happinessDelta: 4, effectTicks: 1 },
+        outcome: "A sign at the trailhead now reads 'No signal. You'll live.'"
+      }
+    ]
+  },
+  {
+    id: "mushroom_foragers",
+    title: "Mayor — foragers are fighting over a mushroom patch",
+    flavor: "Both clubs claim the same clearing. One of them has laminated maps.",
+    requires: { woodland: 60 },
+    choices: [
+      {
+        label: "Draw up a foraging rota",
+        hint: "Small admin cost; peace in the woods.",
+        effects: { treasuryDelta: -30, happinessDelta: 5, effectTicks: 1 },
+        outcome: "Tuesdays and Thursdays, alternate Saturdays. The laminated-map club negotiated hard."
+      },
+      {
+        label: "Stay out of it",
+        hint: "Free. It's only mushrooms. Surely.",
+        effects: { happinessDelta: -5, effectTicks: 2 },
+        outcome: "It was not only mushrooms. It is never only mushrooms."
+      }
+    ]
+  },
+  {
+    id: "factory_whistle",
+    title: "Mayor — the factory whistle is stuck on",
+    flavor: "It's been blowing continuously since six this morning. Nearby dogs have formed a choir.",
+    requires: { industry: 8 },
+    choices: [
+      {
+        label: "Pay for an emergency repair",
+        hint: "Quiet by lunchtime.",
+        effects: { treasuryDelta: -70 },
+        outcome: "Silence at last. The dog choir disbanded, reluctantly."
+      },
+      {
+        label: "Ask industry to cover it",
+        hint: "Free for the city — they'll pass it on.",
+        effects: { incomeMultiplier: 0.92, effectTicks: 3 },
+        outcome: "The factory paid, and quietly raised prices on everything it makes."
+      }
+    ]
+  },
+  {
+    id: "union_barbecue",
+    title: "Mayor — the industrial workers' union invited you to a barbecue",
+    flavor: "It's a very good barbecue. It is also, clearly, a negotiation.",
+    requires: { industry: 8 },
+    choices: [
+      {
+        label: "Attend and agree to a raise",
+        hint: "Costs the city — the works run happier.",
+        effects: { treasuryDelta: -120, incomeMultiplier: 1.06, effectTicks: 4 },
+        outcome: "Excellent ribs. Output is up. You have sauce on your tie in the newspaper photo."
+      },
+      {
+        label: "Send a deputy",
+        hint: "Free. The deputy does not come back with good news.",
+        effects: { happinessDelta: -6, effectTicks: 2 },
+        outcome: "The deputy ate well and promised nothing. Tensions are simmering."
+      }
+    ]
+  },
+  {
+    id: "bus_driver_karaoke",
+    title: "Mayor — a bus driver has been leading karaoke on the night route",
+    flavor: "Ridership on the 11pm route is up 300%. So are noise complaints.",
+    requires: { transit: 1 },
+    choices: [
+      {
+        label: "Make it official",
+        hint: "A little funding, a lot of goodwill.",
+        effects: { treasuryDelta: -40, happinessDelta: 8, effectTicks: 2 },
+        outcome: "The Karaoke Express runs Fridays. There is a waiting list."
+      },
+      {
+        label: "Ask them to stop",
+        hint: "Free, and the city's quieter.",
+        effects: { happinessDelta: -4, effectTicks: 1 },
+        outcome: "The night bus is silent again. Passengers hum, defiantly."
+      }
+    ]
+  },
+  {
+    id: "school_robotics",
+    title: "Mayor — the school robotics team made it to nationals",
+    flavor: "Their robot is called Mayor Bot and it looks, frankly, a bit like you.",
+    requires: { schools: 1 },
+    choices: [
+      {
+        label: "Sponsor the trip",
+        hint: "Costs a little — the whole city cheers them on.",
+        effects: { treasuryDelta: -60, happinessDelta: 7, effectTicks: 2 },
+        outcome: "They came fourth. Mayor Bot got a standing ovation."
+      },
+      {
+        label: "Wish them luck",
+        hint: "Free. A bake sale gets them there anyway.",
+        effects: { happinessDelta: -2, effectTicks: 1 },
+        outcome: "They made it on bake-sale money. The team photo is pointedly bake-sale themed."
+      }
+    ]
+  },
+  {
+    id: "clinic_waiting_room",
+    title: "Mayor — the clinic waiting room TV only plays one channel",
+    flavor: "It's a 24-hour documentary about the history of beige. Patients are recovering faster just to leave.",
+    requires: { clinics: 1 },
+    choices: [
+      {
+        label: "Upgrade the waiting room",
+        hint: "A small cost for a lot of comfort.",
+        effects: { treasuryDelta: -50, happinessDelta: 5, effectTicks: 2 },
+        outcome: "Comfy chairs and a choice of channels. Recovery times are back to normal."
+      },
+      {
+        label: "Leave it",
+        hint: "Free, and it's weirdly effective.",
+        effects: { treasuryDelta: 20, happinessDelta: -3, effectTicks: 1 },
+        outcome: "The beige documentary has a cult following among outpatients."
+      }
+    ]
+  },
+  {
+    id: "neighbor_rivalry",
+    title: "Mayor — {neighbor} says their city is better than {city}",
+    flavor: "Their mayor said it on local radio. Then said it again, slower, in case we missed it.",
+    requires: { neighbors: 1 },
+    choices: [
+      {
+        label: "Challenge them to a charity match",
+        hint: "Costs a little — great for civic pride.",
+        effects: { treasuryDelta: -70, happinessDelta: 9, effectTicks: 2 },
+        outcome: "{city} won 3–1. The trophy is small, ugly and deeply cherished."
+      },
+      {
+        label: "Rise above it",
+        hint: "Free. Deeply unsatisfying.",
+        effects: { happinessDelta: -4, effectTicks: 1 },
+        outcome: "{neighbor}'s mayor is now saying we were scared."
+      }
+    ]
+  },
+  {
+    id: "neighbor_road_trip",
+    title: "Mayor — {neighbor} wants to share the cost of fixing the highway",
+    flavor: "The road between us has a pothole locals have started naming. It's called Gerald.",
+    requires: { neighbors: 1 },
+    choices: [
+      {
+        label: "Split the bill",
+        hint: "Costs now; trade flows easier after.",
+        effects: { treasuryDelta: -110, incomeMultiplier: 1.05, effectTicks: 4 },
+        outcome: "Gerald is gone. Traders from {neighbor} are back on the road."
+      },
+      {
+        label: "Let {neighbor} pay for it",
+        hint: "Free — they won't forget it.",
+        effects: { incomeMultiplier: 0.94, effectTicks: 3 },
+        outcome: "{neighbor} fixed their half. Our half of Gerald lives on."
+      }
+    ]
+  },
+  {
+    id: "city_anniversary",
+    title: "Mayor — {city} wants a birthday party",
+    flavor: "Someone found the founding charter. The ink is barely dry, but people love an excuse.",
+    requires: { minPopulation: 400 },
+    choices: [
+      {
+        label: "Throw a proper party",
+        hint: "Fireworks, bunting, a cake shaped like City Hall.",
+        effects: { treasuryDelta: -150, happinessDelta: 12, effectTicks: 2 },
+        outcome: "The cake was structurally accurate. The fireworks were a triumph."
+      },
+      {
+        label: "A modest picnic",
+        hint: "Cheap and cheerful.",
+        effects: { treasuryDelta: -20, happinessDelta: 4, effectTicks: 1 },
+        outcome: "Sandwiches in the park. Nobody expected fireworks, and that's fine."
+      }
+    ]
+  },
+  {
+    id: "pigeon_census",
+    title: "Mayor — the pigeon population now outnumbers the residents",
+    flavor: "A volunteer counted them. It took four weekends and she wants a medal.",
+    choices: [
+      {
+        label: "Fund humane pigeon control",
+        hint: "Costs money; pavements stay cleaner.",
+        effects: { treasuryDelta: -80, happinessDelta: 5, effectTicks: 2 },
+        outcome: "Pigeons relocated. The volunteer got her medal and a small pigeon statue."
+      },
+      {
+        label: "Declare the pigeon the city bird",
+        hint: "Free, and lean into it.",
+        effects: { happinessDelta: 3, effectTicks: 1, incomeMultiplier: 0.96 },
+        outcome: "Pigeon merch is selling. Pavement cleaning costs are, predictably, up."
+      }
+    ]
+  },
+  {
+    id: "marathon_route",
+    title: "Mayor — the city marathon route goes straight through downtown",
+    flavor: "Four hours of closed roads, on the busiest shopping day of the month.",
+    requires: { minPopulation: 1000 },
+    choices: [
+      {
+        label: "Close the roads",
+        hint: "Shops lose a day — runners love it.",
+        effects: { incomeMultiplier: 0.88, effectTicks: 1, happinessDelta: 8 },
+        outcome: "Record turnout. Shopkeepers handed out water, somewhat grudgingly."
+      },
+      {
+        label: "Reroute it around the edge",
+        hint: "Business as usual. Runners grumble.",
+        effects: { happinessDelta: -4, effectTicks: 1, treasuryDelta: 30 },
+        outcome: "The runners did laps of the ring road. The medals say 'scenic'."
+      }
+    ]
   }
 ]
 
@@ -2118,13 +2560,75 @@ var EVENTS = [
 // been away, a queue of unresolved decisions is the point. `chance` is
 // Service.qml's persisted cooldown value, already scaled by the
 // eventFrequency setting — not a constant here, see nextEventChance.
-function rollForEvent(pendingIds, population, chance) {
+//
+// `context` (optional) is what the city is like right now plus the ids of the
+// dilemmas it has seen most recently:
+//   { recent: [ids, oldest first], population, lakes, woodland, industry,
+//     transit, schools, clinics, neighborNames: [...], city }
+// A week of play drew from 24 scenarios uniformly and the same few kept coming
+// back, so anything in `recent` sits out until the rest have had a turn, and
+// scenarios with `requires` only happen to a city they make sense for.
+var EVENT_RECENT_MEMORY = 20
+// A backlog longer than this is not a set of decisions, it is homework — and
+// every queued dilemma is stored whole in the save.
+var EVENT_MAX_PENDING = 5
+
+function eventEligible(event, context) {
+  var need = event.requires
+  if (!need) return true
+  var ctx = context || {}
+  if (need.minPopulation && (ctx.population || 0) < need.minPopulation) return false
+  var counts = ["lakes", "woodland", "industry", "transit", "schools", "clinics"]
+  for (var i = 0; i < counts.length; i++)
+    if (need[counts[i]] && (ctx[counts[i]] || 0) < need[counts[i]]) return false
+  if (need.neighbors && (ctx.neighborNames || []).length < need.neighbors) return false
+  return true
+}
+
+// Fills {city} and {neighbor} into a copy of the scenario, so what is queued
+// (and saved, and logged) already reads as this city's story.
+function instantiateEvent(event, context) {
+  var ctx = context || {}
+  var names = ctx.neighborNames || []
+  var neighbor = names.length > 0 ? names[Math.floor(Math.random() * names.length)] : "the next town"
+  var city = ctx.city || "the city"
+  var text = JSON.stringify(event)
+    .split("{city}").join(city)
+    .split("{neighbor}").join(neighbor)
+  var out = JSON.parse(text)
+  delete out.requires
+  return out
+}
+
+function rollForEvent(pendingIds, population, chance, context) {
   if (population < EVENT_MIN_POPULATION) return null
   if (chance <= 0) return null
+  if (pendingIds.length >= EVENT_MAX_PENDING) return null
   if (Math.random() >= chance) return null
-  var pool = EVENTS.filter(function(e) { return pendingIds.indexOf(e.id) < 0 })
+  var ctx = context || {}
+  if (ctx.population === undefined) ctx.population = population
+  var recent = ctx.recent || []
+  var eligible = EVENTS.filter(function(e) {
+    return pendingIds.indexOf(e.id) < 0 && eventEligible(e, ctx)
+  })
+  var fresh = eligible.filter(function(e) { return recent.indexOf(e.id) < 0 })
+  var pool = fresh
+  // A small city may have seen everything it qualifies for. Then the one it
+  // has gone longest without comes back, rather than nothing at all.
+  if (pool.length === 0 && eligible.length > 0) {
+    var oldest = eligible[0]
+    for (var i = 1; i < eligible.length; i++)
+      if (recent.indexOf(eligible[i].id) < recent.indexOf(oldest.id)) oldest = eligible[i]
+    pool = [oldest]
+  }
   if (pool.length === 0) return null
-  return pool[Math.floor(Math.random() * pool.length)]
+  return instantiateEvent(pool[Math.floor(Math.random() * pool.length)], ctx)
+}
+
+function rememberEvent(recent, id) {
+  var out = (Array.isArray(recent) ? recent : []).filter(function(r) { return r !== id })
+  out.push(id)
+  return out.slice(-EVENT_RECENT_MEMORY)
 }
 
 // The cooldown step: straight back to the floor the tick an event actually
