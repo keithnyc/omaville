@@ -70,6 +70,9 @@ const Y = M.TILE_POST;
   assert.ok(!kept.some(l => l.id === middle.id), 'a read letter makes room first');
   assert.ok(kept.some(l => l.from === 'A0'), 'so an unread one is never lost to a busy week');
   assert.deepEqual(M.markLetterRead(withRead, middle.id), withRead, 'reading twice changes nothing');
+  const tidy = M.discardReadMail(withRead);
+  assert.equal(tidy.length, M.MAIL_MAX - 1, 'discarding read letters keeps every unread one');
+  assert.ok(tidy.every(l => !l.read));
 }
 
 // --- memorials are bounded too ------------------------------------------------------
@@ -139,10 +142,12 @@ const Y = M.TILE_POST;
   assert.equal(root.mail[0].d, 12, 'dated to the day played');
   assert.equal(root.residentNews, 1, 'and the bar hears about it');
 
-  // A leaver writes a farewell; somebody whose house simply vanished does not.
+  // A leaver who knew the town writes a farewell; a newcomer who gave up
+  // straight away does not, nor does somebody whose house simply vanished.
   root.mail = [];
   root.tendResidents({ deaths: [], moves: [], departures: [
-    { name: 'Walter Pike', street: 'Mill Road', reason: 'water', to: 'Oakhurst' },
+    { name: 'Walter Pike', street: 'Mill Road', reason: 'water', to: 'Oakhurst', knewTown: true },
+    { name: 'Nora Quill', street: 'Mill Road', reason: 'fire', to: 'Oakhurst', knewTown: false },
     { name: 'Ada Pike', street: 'Mill Road', reason: 'gone', to: '' }] },
     { grid, gridSize: size, utilities: M.findUtilities(grid), funding: M.defaultFunding(), random: () => 0.99 }, false);
   assert.deepEqual(Array.from(root.mail, l => l.kind), ['farewell']);
@@ -217,6 +222,9 @@ const Y = M.TILE_POST;
   assert.equal(sparkles.length, 4, 'with sparkles');
   assert.ok(/running: envelopeSpot\.visible && root\.active/.test(view), 'animated only when it can be seen');
   assert.ok(/root\.cityService\.replyToLetter\(letterRow\.modelData\.id\)/.test(view), 'the mailbox writes back');
+  assert.ok(/Style\.space\(440\),\s*\n\s*mailHeader\.implicitHeight/.test(view), 'a full box scrolls in a card of a readable height');
+  assert.ok(/visible: letterRow\.opened\s*\n\s*width: parent\.width\s*\n\s*wrapMode: Text\.WordWrap/.test(view), 'one line per letter until opened');
+  assert.ok(/root\.cityService\.discardReadMail\(\)/.test(view), 'and read letters can be cleared out');
   assert.ok(/\{ action: "mail", label: "Post Office", enabled: root\.serviceReady && root\.postOffices\.length > 0 \}/.test(view),
     'and can be opened from the game menu');
 

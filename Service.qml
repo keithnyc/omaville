@@ -974,10 +974,11 @@ Item {
       if (root.memorialOffers.length >= Model.MEMORIAL_MAX_OFFERS) continue
       root.memorialOffers = root.memorialOffers.concat([{ n: dead.name, i: dead.index, street: dead.street }])
     }
-    // Somebody who gave up on the city says so, in writing.
+    // Somebody who gave up on the city says so, in writing — if they had
+    // been here long enough to know it (see Model.writesFarewell).
     for (var l = 0; l < moved.departures.length; l++) {
       var leaver = moved.departures[l]
-      if (leaver.reason === "gone" || !leaver.to) continue
+      if (leaver.reason === "gone" || !leaver.to || !leaver.knewTown) continue
       root.writeLetter({ from: leaver.name, i: -1, kind: "farewell", text: Model.farewellLetterText(leaver) })
     }
     for (var m = 0; m < moved.moves.length; m++) {
@@ -1043,6 +1044,13 @@ Item {
     var next = Model.markLetterRead(root.mail, id)
     if (Model.unreadMail(next) === Model.unreadMail(root.mail)) return
     root.mail = next
+    flushState()
+  }
+
+  function discardReadMail() {
+    var kept = Model.discardReadMail(root.mail)
+    if (kept.length === root.mail.length) return
+    root.mail = kept
     flushState()
   }
 

@@ -6043,8 +6043,10 @@ Item {
       visible: root.mailOpen
       anchors.centerIn: parent
       width: Math.min(parent.width - Style.space(24), Style.space(400))
-      height: Math.min(parent.height - Style.space(24),
-        mailHeader.implicitHeight + mailList.contentHeight + mailDone.implicitHeight + Style.space(48))
+      // Capped well short of the panel: a full box scrolls inside a card of a
+      // readable size rather than stretching it to the height of the window.
+      height: Math.min(parent.height - Style.space(24), Style.space(440),
+        mailHeader.implicitHeight + mailList.contentHeight + mailActions.implicitHeight + Style.space(48))
       radius: Style.cornerRadius
       color: Color.menu.background
       border.width: 1
@@ -6077,8 +6079,8 @@ Item {
                 + "something for them, and — once they like you — just to say how things are."
               : root.unreadMail > 0
                 ? root.unreadMail + (root.unreadMail === 1 ? " unopened letter" : " unopened letters")
-                  + ". Click one to open it."
-                : "All caught up. The last " + root.cityService.mail.length + " letters are kept."
+                  + " (✉). Click a letter to open it."
+                : "All caught up. Click a letter to read it again."
             color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.6)
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
             font.pixelSize: Style.font.caption
@@ -6088,7 +6090,7 @@ Item {
         Flickable {
           id: mailList
           width: parent.width
-          height: Math.max(0, mailColumn.height - mailHeader.height - mailDone.height - mailColumn.spacing * 2)
+          height: Math.max(0, mailColumn.height - mailHeader.height - mailActions.height - mailColumn.spacing * 2)
           contentHeight: mailLetters.implicitHeight
           clip: true
           boundsBehavior: Flickable.StopAtBounds
@@ -6107,7 +6109,7 @@ Item {
                 readonly property bool canReply: root.serviceReady
                   && Model.canReplyTo(modelData, root.cityService.citizens)
                 width: mailLetters.width
-                height: letterColumn.implicitHeight + Style.space(12)
+                height: letterColumn.implicitHeight + Style.space(10)
                 radius: Style.cornerRadius
                 color: letterMouse.containsMouse
                   ? Qt.rgba(0.5, 0.6, 0.6, 0.14)
@@ -6158,16 +6160,14 @@ Item {
                       font.pixelSize: Style.font.caption
                     }
                   }
+                  // One line per letter until it is opened; the letter itself
+                  // only when it is.
                   Text {
+                    visible: letterRow.opened
                     width: parent.width
-                    wrapMode: letterRow.opened ? Text.WordWrap : Text.NoWrap
-                    elide: letterRow.opened ? Text.ElideNone : Text.ElideRight
-                    text: letterRow.modelData.read || letterRow.opened
-                      ? "“" + letterRow.modelData.text + "”"
-                      : "Sealed — click to open"
-                    color: letterRow.modelData.read || letterRow.opened
-                      ? Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.85)
-                      : Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.5)
+                    wrapMode: Text.WordWrap
+                    text: "“" + letterRow.modelData.text + "”"
+                    color: Qt.rgba(Color.menu.text.r, Color.menu.text.g, Color.menu.text.b, 0.85)
                     font.italic: true
                     font.family: root.bar ? root.bar.fontFamily : Style.font.family
                     font.pixelSize: Style.font.caption
@@ -6228,7 +6228,16 @@ Item {
           }
         }
 
-        Button { id: mailDone; text: "Done"; onClicked: root.mailOpen = false }
+        Row {
+          id: mailActions
+          spacing: Style.space(8)
+          Button { text: "Done"; onClicked: root.mailOpen = false }
+          Button {
+            text: "Discard read letters"
+            enabled: root.serviceReady && root.cityService.mail.length > root.unreadMail
+            onClicked: { root.openLetterId = -1; root.cityService.discardReadMail() }
+          }
+        }
       }
     }
 
@@ -6527,10 +6536,10 @@ Item {
                 // Only worth saying when it is nearly too late to act on.
                 Text {
                   visible: modelData.grievance !== ""
-                    && modelData.monthsLeft <= Math.ceil(Model.CITIZEN_PATIENCE / 2)
+                    && modelData.yearsLeft <= Math.ceil(Model.CITIZEN_PATIENCE / 2)
                   width: parent.width
-                  text: "Packing: " + modelData.monthsLeft
-                    + (modelData.monthsLeft === 1 ? " month left" : " months left")
+                  text: "Packing: " + Math.max(1, modelData.yearsLeft)
+                    + (modelData.yearsLeft <= 1 ? " year left" : " years left")
                   color: "#e0806a"
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.caption

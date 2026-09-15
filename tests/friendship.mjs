@@ -267,6 +267,39 @@ const person = (over = {}) => Object.assign(
   assert.ok(M.noticeBirthday(noticed.citizens, HOME, { year: 2027, month: b.month, day: b.day }), 'and again next year');
 }
 
+// --- patience runs in city years -----------------------------------------------
+// A young city with no firehouse in reach lost its one named resident every
+// ninety seconds: six months of patience at a month a tick. Thirteen came and
+// went in a quarter of an hour, each writing a farewell letter.
+{
+  const grid = town();
+  const noFire = grid.slice(); noFire[at(17, 11)] = '_0';
+  const minutes = ticks => ticks * 15 / 60;
+  let people = [person({ f: 0 })];
+  let leftAt = -1;
+  for (let tick = 1; tick <= 12 * (M.CITIZEN_PATIENCE + 1); tick++) {
+    const step = M.advanceCitizens(people, context(noFire, { ageMinutes: 600 + tick, newDay: false, population: 150 }));
+    people = step.citizens.filter(c => c.n === 'Mabel Ashby');
+    if (step.departures.some(d => d.name === 'Mabel Ashby')) { leftAt = tick; break; }
+  }
+  assert.ok(leftAt > 0, 'an unfixed complaint still drives them out');
+  assert.ok(minutes(leftAt) >= 15, `but not after ${minutes(leftAt)} minutes`);
+  assert.equal(M.CITIZEN_PATIENCE_MONTHS, 12);
+
+  // Between the year's turns nothing moves either way.
+  const steady = M.advanceCitizens([person({ p: 3 })], context(noFire, { ageMinutes: 601, newDay: false, population: 150 }));
+  assert.equal(steady.citizens[0].p, 3, 'patience holds between years');
+
+  // A farewell letter is from somebody who knew the town.
+  const clock = M.peopleClock(10);
+  assert.equal(M.writesFarewell(person({ f: 0, a: clock }), clock), false, 'not a newcomer who never settled');
+  assert.equal(M.writesFarewell(person({ f: 0, a: clock - M.peopleClock(1) }), clock), true, 'a resident of a day or more');
+  assert.equal(M.writesFarewell(person({ f: M.FRIEND_HEARTS[0], a: clock }), clock), true, 'or anyone who knew the office');
+  const gone = M.advanceCitizens([person({ p: 0, a: clock })],
+    context(noFire, { ageMinutes: 612, newDay: false, population: 150, peopleClock: clock }));
+  assert.equal(gone.departures[0].knewTown, false, 'and the departure says which');
+}
+
 // --- what friends do -----------------------------------------------------------------
 {
   // Twice the patience before packing.

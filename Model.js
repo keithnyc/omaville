@@ -3768,8 +3768,8 @@ function citizenBio(citizen, ctx) {
       ctx && ctx.streetNames).text : "",
     // How close they are to giving up, for a panel that wants to warn.
     patience: citizen.p,
-    // Months of trouble left before they go, counting a friend's extra allowance.
-    monthsLeft: citizen.p + citizenPatienceReserve(citizen),
+    // Years of trouble left before they go, counting a friend's extra allowance.
+    yearsLeft: citizen.p + citizenPatienceReserve(citizen),
     settled: citizen.p >= CITIZEN_PATIENCE,
     friendship: friendshipFor(citizen, ctx, grievance)
   }
@@ -3796,7 +3796,15 @@ function capitalise(text) {
 
 // How long somebody puts up with a grievance before packing. Long enough that
 // a problem the player is already fixing does not cost them a resident.
+//
+// Counted in city years, not months: patience moves once every
+// CITIZEN_PATIENCE_MONTHS. At a month a step, six steps was ninety real
+// seconds, so a young city with no firehouse in reach lost a new resident
+// every minute and a half — thirteen in a quarter of an hour, each writing a
+// farewell — and nobody stayed long enough to be befriended. Now it is about
+// eighteen minutes of an unfixed complaint, and twice that for a friend.
 var CITIZEN_PATIENCE = 6
+var CITIZEN_PATIENCE_MONTHS = 12
 // Raised from twelve once residents became people to befriend: a dozen was
 // enough to write letters, and too few to make a town feel lived in. The
 // request board and the once-a-day hello keep a bigger cast from becoming
@@ -4034,12 +4042,14 @@ function advanceCitizens(citizens, ctx) {
     // A friend puts up with twice as much before packing: their patience may
     // run on below zero by a whole extra allowance, however full it was when
     // the trouble started.
-    var patience = grievance
-      ? person.p - 1
+    var patienceTurns = Math.round(ctx.ageMinutes || 0) % CITIZEN_PATIENCE_MONTHS === 0
+    var patience = !patienceTurns ? person.p
+      : grievance ? person.p - 1
       : Math.min(CITIZEN_PATIENCE, person.p + 1)
     if (patience <= -citizenPatienceReserve(person)) {
       departures.push({ name: person.n, street: street,
-        reason: grievance ? grievance.key : "gone", to: pickNeighborName(ctx, random) })
+        reason: grievance ? grievance.key : "gone", to: pickNeighborName(ctx, random),
+        knewTown: writesFarewell(person, clock) })
       continue
     }
     next.push(copyCitizen(person, { p: patience }))
@@ -4191,6 +4201,15 @@ function friendshipHearts(points) {
 
 function addFriendship(citizen, delta) {
   return copyCitizen(citizen, { f: clamp((citizen.f || 0) + delta, 0, FRIEND_MAX) })
+}
+
+// A farewell letter is from somebody who knew the place: a friend of the
+// office, or anyone who lived here a whole day played. A newcomer who gives up
+// within the hour is a line in the log, not a letter saying they liked it here.
+function writesFarewell(citizen, clock) {
+  if (friendshipHearts(citizen.f) >= 1) return true
+  var arrived = isFinite(citizen.a) ? citizen.a : clock
+  return clock - arrived >= peopleClock(1)
 }
 
 function citizenPatienceReserve(citizen) {
@@ -4635,6 +4654,10 @@ function postLetter(mail, letter) {
     next.splice(drop >= 0 ? drop : next.length - 1, 1)
   }
   return next
+}
+
+function discardReadMail(mail) {
+  return (mail || []).filter(function (letter) { return !letter.read })
 }
 
 function unreadMail(mail) {
