@@ -621,6 +621,16 @@ Item {
     request: "A request", thanks: "Thank you", gift: "A gift", birthday: "Birthday",
     news: "News", farewell: "Farewell", family: "In memoriam"
   })
+  // Pressing on a post office opens the mailbox with any tool but the
+  // bulldozer. Decided on the press alone, so a road dragged across one still
+  // paints. It used to live in the paint path, which returns early when no
+  // tool is selected and treats a click with the Post Office tool still in
+  // hand as another build — so clicking one did nothing either way.
+  function pressOpensMail(index) {
+    if (index < 0 || index >= root.grid.length) return false
+    if (root.activeTool === "bulldoze") return false
+    return Model.tileTypeOf(root.grid[index]) === Model.TILE_POST
+  }
   function letterAge(day) {
     var ago = root.serviceReady ? root.cityService.playDay - day : 0
     return ago <= 0 ? "today" : ago === 1 ? "yesterday" : ago + " days ago"
@@ -5059,12 +5069,6 @@ Item {
 
             function applyIndex(idx) {
               if (idx < 0 || idx >= root.gridSize * root.gridSize) return
-              // A post office is opened, not inspected or built on.
-              if ((root.activeTool === "" || root.activeTool === "inspect")
-                  && Model.tileTypeOf(root.grid[idx]) === Model.TILE_POST) {
-                root.mailOpen = true
-                return
-              }
               if (root.activeTool === "inspect") { root.inspectedIndex = idx; return }
               if (paintedTiles[idx]) return
               paintedTiles[idx] = true
@@ -5092,6 +5096,9 @@ Item {
                 // whatever was active — a way back to a neutral
                 // "just looking" cursor without picking Bulldoze.
                 root.activeTool = ""
+              } else if (root.pressOpensMail(tileIndexAt(mouse.x, mouse.y))) {
+                // A post office is opened, whatever tool is in hand.
+                root.mailOpen = true
               } else {
                 painting = true
                 applyAt(mouse.x, mouse.y)

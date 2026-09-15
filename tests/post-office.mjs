@@ -179,8 +179,34 @@ const Y = M.TILE_POST;
 
 // --- the view ----------------------------------------------------------------------------
 {
-  assert.ok(/\(root\.activeTool === "" \|\| root\.activeTool === "inspect"\)\s*\n\s*&& Model\.tileTypeOf\(root\.grid\[idx\]\) === Model\.TILE_POST\) \{\s*\n\s*root\.mailOpen = true/.test(view),
-    'clicking a post office opens the mailbox');
+  // Clicking one opens the mailbox. This was first wired into the paint path,
+  // which returns before doing anything when no tool is selected and treats a
+  // click with the Post Office tool still in hand as a build — so in the game
+  // clicking a post office did nothing at all, while a test that only looked
+  // for the check's source passed. So: run the decision, and pin where it sits.
+  {
+    const grid = M.emptyGrid(M.GRID_SIZE); grid[70] = 'Y0'; grid[71] = 'R1';
+    const vroot = { grid, activeTool: '' };
+    const ctx = vm.createContext({ root: vroot, Model: M });
+    const decide = vm.runInContext('(' + view.match(/  function pressOpensMail\([\s\S]*?\n  \}/)[0] + ')', ctx);
+    for (const tool of ['', 'inspect', 'Y', '#', 'R', 'decorations']) {
+      vroot.activeTool = tool;
+      assert.equal(decide(70), true, `opens with tool "${tool}"`);
+    }
+    vroot.activeTool = 'bulldoze';
+    assert.equal(decide(70), false, 'but the bulldozer still knocks it down');
+    vroot.activeTool = '';
+    assert.equal(decide(71), false, 'and a house is not a post office');
+    assert.equal(decide(-1), false);
+
+    const press = view.match(/onPressed: function\(mouse\) \{[\s\S]*?\n            \}/)[0];
+    const opens = press.indexOf('root.pressOpensMail(tileIndexAt(mouse.x, mouse.y))');
+    const paints = press.indexOf('applyAt(mouse.x, mouse.y)');
+    assert.ok(opens > 0 && paints > opens, 'decided on the press, before any painting');
+    const applyAt = view.match(/function applyAt\(mx, my\) \{[\s\S]*?\n            \}/)[0];
+    assert.ok(!applyAt.includes('mailOpen') && !view.match(/function applyIndex\(idx\) \{[\s\S]*?\n            \}/)[0].includes('mailOpen'),
+      'and not in the paint path, which never runs without a tool');
+  }
   const modal = view.match(/readonly property bool modalOpen:[\s\S]*?\n  readonly/)[0];
   assert.ok(modal.includes('root.mailOpen'), 'the mailbox is a modal, so nothing behind it takes the mouse');
   assert.ok(/root\.gazetteOpen = false; root\.mailOpen = false/.test(view), 'and the scrim closes it');
