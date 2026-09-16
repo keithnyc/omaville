@@ -993,42 +993,41 @@ Item {
       root.notify(thanks.name, thanks.text)
       root.writeLetter({ from: thanks.name, i: thanks.index, kind: "thanks", text: thanks.text })
     }
-    if (!newDay) return
-    var day = Model.advancePeopleDay(root.citizens, ctx)
-    root.citizens = day.citizens
-    var next = null
-    for (var g = 0; g < day.gifts.length; g++) {
-      var gift = day.gifts[g]
-      if (gift.kind === "money") root.treasury += gift.amount
-      else {
-        next = next || root.grid.slice()
-        if (!Model.isOpenLand(Model.tileTypeOf(next[gift.index]))) continue
-        next[gift.index] = Model.makeTile(gift.type, 0)
+    // The post comes on the city's clock: every POST_ROUND_MONTHS, whether or
+    // not the calendar has turned over. Tying letters to the day meant a whole
+    // evening of play produced a single round of post.
+    if (Math.round(root.ageMinutes) % Model.POST_ROUND_MONTHS === 0) {
+      var round = Model.advanceMailRound(root.citizens, ctx)
+      root.citizens = round.citizens
+      var next = null
+      for (var g = 0; g < round.gifts.length; g++) {
+        var gift = round.gifts[g]
+        if (gift.kind === "money") root.treasury += gift.amount
+        else {
+          next = next || root.grid.slice()
+          if (!Model.isOpenLand(Model.tileTypeOf(next[gift.index]))) continue
+          next[gift.index] = Model.makeTile(gift.type, 0)
+        }
+        root.writeLetter({ from: gift.name, i: gift.index, kind: "gift", text: gift.text })
       }
-      root.writeLetter({ from: gift.name, i: gift.index, kind: "gift", text: gift.text })
+      if (next) root.grid = next
+      for (var r = 0; r < round.requests.length; r++)
+        root.writeLetter({ from: round.requests[r].name, i: round.requests[r].index, kind: "request",
+          text: round.requests[r].text })
+      for (var w = 0; w < round.news.length; w++)
+        root.writeLetter({ from: round.news[w].name, i: round.news[w].index, kind: "news",
+          text: round.news[w].text })
     }
-    if (next) root.grid = next
-    for (var r = 0; r < day.requests.length; r++)
-      root.writeLetter({ from: day.requests[r].name, i: day.requests[r].index, kind: "request",
-        text: day.requests[r].text })
+
+    // A day played is what the slow things run on: how a resident feels about
+    // the office, and whose birthday it is.
+    if (!newDay) return
+    root.citizens = Model.advancePeopleDay(root.citizens, ctx).citizens
     for (var b = 0; b < root.citizens.length; b++) {
       var person = root.citizens[b]
       if (!Model.isBirthdayOn(person, root.today)) continue
       root.writeLetter({ from: person.n, i: person.i, kind: "birthday",
         text: Model.birthdayLetterText(person, Model.streetOf(root.grid, root.gridSize, person.i, root.streetNames)) })
-    }
-    // And now and then, from somebody who likes the office, just news.
-    var random = ctx.random || Math.random
-    if (random() < Model.MAIL_NEWS_CHANCE) {
-      var fond = root.citizens.filter(function (c) {
-        return Model.friendshipHearts(c.f) >= Model.MAIL_NEWS_HEARTS
-      })
-      if (fond.length > 0) {
-        var writer = fond[Math.floor(random() * fond.length)]
-        root.writeLetter({ from: writer.n, i: writer.i, kind: "news",
-          text: Model.newsLetterText(writer, root.playDay,
-            Model.streetOf(root.grid, root.gridSize, writer.i, root.streetNames), root.cityName) })
-      }
     }
   }
 

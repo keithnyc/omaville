@@ -130,6 +130,7 @@ const Y = M.TILE_POST;
   const grid = M.emptyGrid(size);
   const root = {
     initialized: true, grid, gridSize: size, treasury: 100, playDay: 12, mail: [], residentNews: 0,
+    ageMinutes: 1,   // between rounds of post unless a test asks for one
     citizens: [{ n: 'Mabel Ashby', i: 100, s: 0, p: 6, b: 0, a: 0, t: 2, f: 60 }],
     memorialOffers: [], today: { year: 2026, month: 0, day: 1 }, streetNames: {}, cityName: 'Omaville',
     notify() {}, logEvent() {}
@@ -159,11 +160,15 @@ const Y = M.TILE_POST;
     { grid, gridSize: size, utilities: M.findUtilities(grid), funding: M.defaultFunding(), random: () => 0.99 }, false);
   assert.deepEqual(Array.from(root.mail, l => l.kind), ['family']);
 
-  // On a new day somebody fond of the office writes with news.
+  // On a round of post, somebody fond of the office writes with news. A roll
+  // above the gift chance and below the news one picks news over a gift.
   root.mail = [];
+  root.ageMinutes = M.POST_ROUND_MONTHS * 4;
+  const newsRoll = (M.MAIL_GIFT_CHANCE + M.MAIL_NEWS_CHANCE) / 2;
+  assert.ok(newsRoll > M.MAIL_GIFT_CHANCE && newsRoll < M.MAIL_NEWS_CHANCE);
   root.tendResidents({ deaths: [], moves: [], departures: [] },
     { grid, gridSize: size, utilities: M.findUtilities(grid), funding: M.defaultFunding(),
-      random: () => 0.01, playDay: 12, today: root.today }, true);
+      random: () => newsRoll, ageMinutes: root.ageMinutes, playDay: 12, today: root.today }, false);
   assert.ok(root.mail.some(l => l.kind === 'news' && l.from === 'Mabel Ashby'), 'news from a friend');
 
   // Reading and writing back through the service.
@@ -173,6 +178,39 @@ const Y = M.TILE_POST;
   const before = root.citizens[0].f;
   assert.equal(root.replyToLetter(letter.id), true);
   assert.equal(root.citizens[0].f, before + M.FRIEND_REPLY);
+
+  // A session brings post. Letters used to be tied to a new day of play, so an
+  // evening at a 5,000-person city produced one round — and none at all if the
+  // city happened to be small when it ran. Play forty minutes and see mail.
+  {
+    const town = M.emptyGrid(size);
+    for (let x = 10; x <= 30; x++) {
+      for (const y of [12, 15, 18]) town[y * size + x] = '#0';
+      for (const y of [13, 14, 16, 17]) town[y * size + x] = 'R3';
+    }
+    for (const [x, t] of [[11, 'E1'], [12, 'W1'], [13, 'F1'], [14, 'S1'], [15, 'N1'], [16, 'H1']])
+      town[11 * size + x] = t;
+    let seed = 3;
+    const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    const cast = M.advanceCitizens([], { grid: town, gridSize: size, utilities: M.findUtilities(town),
+      funding: M.defaultFunding(), crimes: [], fires: [], population: 5000, ageMinutes: 600,
+      peopleClock: M.peopleClock(4), newDay: false, neighbors: [{ name: 'Oakhurst' }],
+      random: rand, streetNames: {} }).citizens.map((c, k) => Object.assign(c, { t: k % 6, f: 40 }));
+    assert.equal(cast.length, M.citizenTarget(5000), 'a full cast of residents');
+    Object.assign(root, { grid: town, citizens: cast, mail: [], playDay: 4, treasury: 5000 });
+    // Forty minutes of city time at fifteen seconds a tick.
+    for (let tick = 1; tick <= 160; tick++) {
+      root.ageMinutes = 600 + tick;
+      root.tendResidents({ deaths: [], moves: [], departures: [] },
+        { grid: root.grid, gridSize: size, utilities: M.findUtilities(root.grid), funding: M.defaultFunding(),
+          crimes: [], fires: [], streetNames: {}, cityName: 'Omaville', population: 5000,
+          ageMinutes: root.ageMinutes, playDay: 4, today: root.today, random: rand }, false);
+    }
+    assert.ok(root.mail.length >= 4, `only ${root.mail.length} letters in forty minutes of play`);
+    assert.ok(root.mail.some(l => l.kind === 'request'), 'including somebody asking for something');
+    const open = root.citizens.filter(c => c.q).length;
+    assert.ok(open <= M.REQUESTS_OPEN_MAX, `${open} requests open at once`);
+  }
 
   for (const field of ['mail'])
     assert.ok(new RegExp(`\\b${field}: root\\.${field},`).test(service), `${field} is saved`);

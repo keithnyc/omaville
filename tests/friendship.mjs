@@ -170,12 +170,12 @@ const person = (over = {}) => Object.assign(
   const grid = town();
   const cast = M.advanceCitizens([], context(grid)).citizens.map((c, k) => Object.assign(c, { t: k % 6 }));
 
-  // A good street, so every request is a wish; no more than the day's share,
-  // and no more open than the board holds, however many days go by.
+  // A good street, so every request is a wish; one a round at most, and no
+  // more open than the board holds, however many rounds of post go by.
   let people = cast;
-  for (let day = 11; day < 30; day++) {
-    const step = M.advancePeopleDay(people, context(grid, { playDay: day, random: never }));
-    assert.ok(step.requests.length <= M.REQUESTS_PER_DAY, `${step.requests.length} new requests in a day`);
+  for (let round = 1; round < 30; round++) {
+    const step = M.advanceMailRound(people, context(grid, { ageMinutes: 600 + round * M.POST_ROUND_MONTHS, random: never }));
+    assert.ok(step.requests.length <= 1, `${step.requests.length} new requests in one round`);
     people = step.citizens;
     const open = people.filter(p => p.q).length;
     assert.ok(open <= M.REQUESTS_OPEN_MAX, `${open} open requests`);
@@ -189,13 +189,13 @@ const person = (over = {}) => Object.assign(
 
   // A complaint comes first, as a request to put it right.
   const noPolice = grid.slice(); noPolice[at(18, 11)] = '_0';
-  const gripes = M.advancePeopleDay(cast, context(noPolice, { random: never }));
+  const gripes = M.advanceMailRound(cast, context(noPolice, { random: never }));
   const fixes = gripes.citizens.filter(p => p.q && p.q.k.startsWith('fix:'));
   assert.ok(fixes.length > 0, 'somebody with a complaint asks for it to be fixed');
   assert.ok(fixes.every(p => p.q.k === 'fix:police'));
 
   // A wish is granted the moment it is built, with nothing to report.
-  const gardener = person({ t: 0, q: { k: 'trees', d: 10 }, f: 12 });
+  const gardener = person({ t: 0, q: { k: 'trees', t: 600 }, f: 12 });
   assert.equal(M.checkRequests([gardener], context(grid)).thanked.length, 0, 'not before it exists');
   const planted = grid.slice();
   planted[at(17, 19)] = 'T0'; planted[at(16, 19)] = 'T0';
@@ -207,18 +207,18 @@ const person = (over = {}) => Object.assign(
   assert.equal(M.checkRequests(granted.citizens, context(planted)).thanked.length, 0, 'once');
 
   // A complaint request is granted by fixing the complaint.
-  const fix = person({ q: { k: 'fix:police', d: 10 } });
+  const fix = person({ q: { k: 'fix:police', t: 600 } });
   assert.equal(M.checkRequests([fix], context(noPolice)).thanked.length, 0);
   assert.equal(M.checkRequests([fix], context(grid)).thanked.length, 1);
 
   // An ungrantable request lapses rather than holding a place for ever, and
   // costs nothing when it does.
-  const stale = person({ f: 20, q: { k: 'trees', d: 10 } });
-  const [still] = M.advancePeopleDay([stale], context(grid, { playDay: 10 + M.REQUEST_LAPSE_DAYS - 1, random: never })).citizens;
-  assert.ok(still.q, 'still asking the day before it lapses');
-  const lapsed = M.advancePeopleDay([stale], context(grid, { playDay: 10 + M.REQUEST_LAPSE_DAYS, random: never }));
-  assert.ok(!lapsed.citizens[0].q || lapsed.citizens[0].q.d === 10 + M.REQUEST_LAPSE_DAYS, 'then lets it go');
-  assert.equal(lapsed.citizens[0].f, 20 + M.FRIEND_GOOD_DAY, 'at no cost');
+  const stale = person({ f: 20, q: { k: 'trees', t: 600 } });
+  const [still] = M.advanceMailRound([stale], context(grid, { ageMinutes: 600 + M.REQUEST_LAPSE_MONTHS - 8, random: never })).citizens;
+  assert.ok(still.q && still.q.t === 600, 'still asking before it lapses');
+  const lapsed = M.advanceMailRound([stale], context(grid, { ageMinutes: 600 + M.REQUEST_LAPSE_MONTHS, random: never }));
+  assert.ok(!lapsed.citizens[0].q || lapsed.citizens[0].q.t > 600, 'then lets it go');
+  assert.equal(lapsed.citizens[0].f, 20, 'at no cost');
 
   // A resident whose every wish is already met asks for nothing.
   const content = person({ t: 0 });
@@ -231,9 +231,9 @@ const person = (over = {}) => Object.assign(
 {
   const grid = town();
   const noPolice = grid.slice(); noPolice[at(18, 11)] = '_0';
-  const [good] = M.advancePeopleDay([person({ f: 20, q: { k: 'x', d: 0 } })], context(grid, { random: never })).citizens;
+  const [good] = M.advancePeopleDay([person({ f: 20 })], context(grid, { random: never })).citizens;
   assert.equal(good.f, 20 + M.FRIEND_GOOD_DAY, 'a good day on a good street');
-  const [bad] = M.advancePeopleDay([person({ f: 20, q: { k: 'x', d: 0 } })], context(noPolice, { random: never })).citizens;
+  const [bad] = M.advancePeopleDay([person({ f: 20 })], context(noPolice, { random: never })).citizens;
   assert.equal(bad.f, 20 + M.FRIEND_BAD_DAY, 'a day with a complaint');
 }
 
@@ -325,8 +325,8 @@ const person = (over = {}) => Object.assign(
 
   // Gifts: only from friends, planted on open ground near home or sent as money.
   const giftCtx = context(grid, { random: always });
-  assert.equal(M.advancePeopleDay([person({ f: 0 })], giftCtx).gifts.length, 0, 'strangers send nothing');
-  const gifts = M.advancePeopleDay([person({ f: 60, t: 0 })], giftCtx).gifts;
+  assert.equal(M.advanceMailRound([person({ f: 0 })], giftCtx).gifts.length, 0, 'strangers send nothing');
+  const gifts = M.advanceMailRound([person({ f: 60, t: 0 })], giftCtx).gifts;
   assert.equal(gifts.length, 1);
   const gift = gifts[0];
   if (gift.kind === 'plant') {
@@ -398,8 +398,9 @@ const person = (over = {}) => Object.assign(
 
   // A granted request is delivered as a letter and a popup, and marks the bar.
   root.grid = grid.slice(); root.grid[at(17, 19)] = 'T0'; root.grid[at(16, 19)] = 'T0';
-  root.citizens = [person({ t: 0, q: { k: 'trees', d: 1 } })];
+  root.citizens = [person({ t: 0, q: { k: 'trees', t: 1 } })];
   root.residentNews = 0;
+  root.ageMinutes = 601;   // between rounds of post, so only the thank-you lands
   root.tendResidents({ deaths: [], moves: [], departures: [] }, context(root.grid), false);
   assert.equal(root.notified.length, 1, 'a popup');
   assert.equal(root.residentNews, 1, 'a mark on the bar');
@@ -408,6 +409,7 @@ const person = (over = {}) => Object.assign(
   // A friend's gift of money reaches the treasury; a planting reaches the map.
   root.citizens = [person({ f: 60, t: 1 })];
   const before = root.treasury;
+  root.ageMinutes = 600;   // a round of post, and a roll that sends a gift
   root.tendResidents({ deaths: [], moves: [], departures: [] }, context(root.grid, { random: () => 0.01 }), true);
   const planted = root.grid.filter((t, k) => grid[k] !== t && t === 'T0').length;
   assert.ok(root.treasury > before || planted > 2, 'the gift arrived');

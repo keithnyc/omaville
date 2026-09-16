@@ -4164,7 +4164,9 @@ var FRIEND_TRAIT_HEARTS = 1
 var FRIEND_CHAT_HEARTS = 2
 var FRIEND_PATIENCE_HEARTS = 3
 var FRIEND_GIFT_HEARTS = 3
-var FRIEND_GIFT_CHANCE = 0.12
+// Per round of post, not per day: a friend sends something roughly every
+// couple of hours of play rather than every couple of minutes.
+var FRIEND_GIFT_CHANCE = 0.02
 var MEMORIAL_HEARTS = 3
 var MEMORIAL_MAX_OFFERS = 3
 // Memorial names are kept in the save, so they are bounded: past this the
@@ -4187,11 +4189,13 @@ function recordMemorial(memorials, site, entry) {
 }
 // A request board, not homework: a few open at once, and only a couple new a day.
 var REQUESTS_OPEN_MAX = 3
-var REQUESTS_PER_DAY = 2
 // A request nobody can grant — the street is built out, there is nowhere for a
 // tree to go — must not hold a place on the board for ever. It lapses quietly,
-// costing no friendship: they asked, and life went on.
-var REQUEST_LAPSE_DAYS = 5
+// costing no friendship: they asked, and life went on. In city months, like
+// the round that opens it.
+var REQUEST_LAPSE_MONTHS = 96
+// How often the post comes, in city months. Every eight is about two minutes.
+var POST_ROUND_MONTHS = 8
 
 function friendshipHearts(points) {
   var hearts = 0
@@ -4404,47 +4408,73 @@ function checkRequests(citizens, ctx) {
 // Once per day played: a day's goodwill or grievance, new requests, and the
 // occasional gift from a friend. Returns what happened for the caller to apply
 // — money and planting touch state this pure function does not own.
+// Once per day played: a day's goodwill or grievance. Slow things — how a
+// resident feels about the office over time — belong to the day.
 function advancePeopleDay(citizens, ctx) {
+  var out = []
+  for (var i = 0; i < (citizens || []).length; i++) {
+    var grievance = citizenGrievance(ctx, citizens[i].i)
+    out.push(addFriendship(citizens[i], grievance ? FRIEND_BAD_DAY : FRIEND_GOOD_DAY))
+  }
+  return { citizens: out }
+}
+
+// The post, on the city's clock rather than the calendar's: a round every
+// POST_ROUND_MONTHS. Letters were tied to the day at first, so a whole evening
+// of play produced one round of post — and if the city happened to be small at
+// the moment it ran, none at all. A session should bring mail.
+//
+// One request at a time per round, so the board fills over half an hour rather
+// than all at once, and at most one gift or one piece of news.
+function advanceMailRound(citizens, ctx) {
   var random = ctx.random || Math.random
+  var now = Math.round(ctx.ageMinutes || 0)
   var day = Math.round(ctx.playDay || 0)
-  var out = [], gifts = [], requests = [], claimed = {}
+  var out = [], gifts = [], requests = [], news = [], claimed = {}
   var open = 0
-  for (var o = 0; o < (citizens || []).length; o++) if (citizens[o].q) open++
 
   for (var i = 0; i < (citizens || []).length; i++) {
     var person = citizens[i]
-    if (person.q && day - (person.q.d || 0) >= REQUEST_LAPSE_DAYS) {
-      person = copyCitizen(person, { q: null })
-      open--
-    }
-    var grievance = citizenGrievance(ctx, person.i)
-    person = addFriendship(person, grievance ? FRIEND_BAD_DAY : FRIEND_GOOD_DAY)
-    if (friendshipHearts(person.f) >= FRIEND_GIFT_HEARTS && random() < FRIEND_GIFT_CHANCE) {
-      var gift = chooseGift(person, ctx, random, claimed)
-      if (gift) gifts.push(gift)
-    }
+    // A request nobody can grant must not hold a place for ever.
+    if (person.q && now - (person.q.t || now) >= REQUEST_LAPSE_MONTHS) person = copyCitizen(person, { q: null })
+    if (person.q) open++
     out.push(person)
   }
 
-  // Requests go first to whoever has a real complaint, then to everybody else
-  // in an order that changes by the day.
+  // Whoever has a real complaint asks first; after that the order changes
+  // from round to round.
   var order = out.map(function (p, k) {
     var g = citizenGrievance(ctx, p.i)
     var fixable = g && FIX_REQUEST_KEYS.indexOf(g.key) >= 0
-    return { k: k, rank: (fixable ? 0 : 1000003) + cityHash(p.i, day) % 1000003, grievance: fixable ? g.key : "" }
+    return { k: k, rank: (fixable ? 0 : 1000003) + cityHash(p.i, now) % 1000003, grievance: fixable ? g.key : "" }
   }).sort(function (a, b) { return a.rank - b.rank })
-  var added = 0
-  for (var r = 0; r < order.length && open < REQUESTS_OPEN_MAX && added < REQUESTS_PER_DAY; r++) {
+  for (var r = 0; r < order.length && open < REQUESTS_OPEN_MAX; r++) {
     var who = out[order[r].k]
     if (who.q) continue
-    var key = order[r].grievance ? "fix:" + order[r].grievance : pickWish(who, ctx, day)
+    var key = order[r].grievance ? "fix:" + order[r].grievance : pickWish(who, ctx, now)
     if (!key) continue
-    who = copyCitizen(who, { q: { k: key, d: day } })
+    who = copyCitizen(who, { q: { k: key, t: now, d: day } })
     out[order[r].k] = who
     requests.push({ name: who.n, index: who.i, text: requestText(who, ctx, "ask") })
-    open++; added++
+    open++
+    break
   }
-  return { citizens: out, gifts: gifts, requests: requests }
+
+  // A gift from a friend, or news from somebody who likes the office. Never
+  // both in one round, so the box fills at a readable pace.
+  var friends = out.filter(function (p) { return friendshipHearts(p.f) >= FRIEND_GIFT_HEARTS })
+  if (friends.length > 0 && random() < MAIL_GIFT_CHANCE) {
+    var gift = chooseGift(friends[Math.floor(random() * friends.length)], ctx, random, claimed)
+    if (gift) gifts.push(gift)
+  } else {
+    var fond = out.filter(function (p) { return friendshipHearts(p.f) >= MAIL_NEWS_HEARTS })
+    if (fond.length > 0 && random() < MAIL_NEWS_CHANCE) {
+      var writer = fond[Math.floor(random() * fond.length)]
+      news.push({ name: writer.n, index: writer.i,
+        text: newsLetterText(writer, now, streetOf(ctx.grid, ctx.gridSize, writer.i, ctx.streetNames), ctx.cityName) })
+    }
+  }
+  return { citizens: out, gifts: gifts, requests: requests, news: news }
 }
 
 function pickWish(citizen, ctx, day) {
@@ -4630,7 +4660,8 @@ var MAIL_MAX = 16
 var FRIEND_REPLY = 2
 // A friendly letter now and then from somebody who likes you, once they do.
 var MAIL_NEWS_HEARTS = 2
-var MAIL_NEWS_CHANCE = 0.3
+var MAIL_NEWS_CHANCE = 0.12
+var MAIL_GIFT_CHANCE = FRIEND_GIFT_CHANCE
 
 function postOffices(grid) {
   var out = []
