@@ -15,7 +15,8 @@ let grid = Array(size * size).fill('_0');
 assert.equal(M.educationStats(grid, size).unmet, 0);
 for (let tier = 0; tier < 3; tier++) {
   grid.fill('_0'); grid[school] = 'N' + tier;
-  const radius = [6, 10, 15][tier];
+  // Derived, not listed: tier 1's reach has been retuned once already.
+  const radius = Math.floor(M.SCHOOL_RADIUS * M.INFRA_RADIUS_SCALE[tier]);
   grid[school + radius] = 'R2'; grid[school + radius + 1] = 'R1';
   const u = M.findUtilities(grid);
   assert.equal(u.schools.length, 1);

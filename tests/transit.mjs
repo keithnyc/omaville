@@ -71,9 +71,18 @@ const survey = (g, u, f, e) => M.trafficSurvey(g, size, u || M.findUtilities(g),
   const nearRoad = (row + 2) * size + 16;
   assert.ok(after.roadCongestion[nearRoad] < before.roadCongestion[nearRoad],
     'the road it covers gets easier');
-  const farRoad = (row + 2) * size + 10;
-  assert.ok(after.roadCongestion[farRoad] >= before.roadCongestion[farRoad] - 1e-9,
+  // Relief itself is what must respect the radius. The roads cannot: they are
+  // a network, so taking cars off one end of a shared street genuinely eases
+  // the other end, which is why this used to be asserted about a road and was
+  // wrong the moment tier 1's reach was retuned.
+  const depot = M.findUtilities(served).transit;
+  const nearLot = (row + 1) * size + 16;
+  const farLot = (row + 1) * size + 23;
+  assert.ok(M.transitRelief(size, depot, nearLot, M.defaultFunding()) > 0, 'a lot it covers is relieved');
+  assert.equal(M.transitRelief(size, depot, farLot, M.defaultFunding()), 0,
     'and one out of its range is not magically helped');
+  assert.ok(Math.hypot(23 - 16, 1 + 3) > M.TRANSIT_RADIUS * M.INFRA_RADIUS_SCALE[0],
+    'which is a lot genuinely out of reach');
 
   // Higher tiers do more.
   let last = after.totalTrips;

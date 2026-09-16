@@ -348,7 +348,12 @@ var UPGRADE_COSTS = {
 
 // A bigger tier covers more ground but also costs more to run — indexed
 // by tile level (0/1/2).
-var INFRA_RADIUS_SCALE = [0.6, 1.0, 1.5]
+//
+// Tier 1 was 0.6 — about five and a half tiles for a generator or a firehouse,
+// which read as too tight to serve even a small neighbourhood without a second
+// one. At 0.75 it reaches nearly seven, half again the ground for the same
+// money, while an upgrade still buys a third more reach on top.
+var INFRA_RADIUS_SCALE = [0.75, 1.0, 1.5]
 var INFRA_UPKEEP_SCALE = [0.55, 1.0, 1.85]
 
 // Replaces a flat per-tile happiness bonus — a Garden helps a lot more
