@@ -119,6 +119,59 @@ const by = (list, name) => list.find(t => t.name === name);
   assert.deepEqual(Object.keys(heavy).sort(), Object.keys(M.ordinanceEffects([])).sort());
 }
 
+// --- a long game must not end beside a town of billions -------------------
+{
+  // Half a percent a month, compounding, is invisible for an hour and absurd
+  // over an evening: the drift alone reached ten figures inside a day of play.
+  // That is not a cosmetic number — pressure is measured against how much
+  // bigger than you a town is, so every connected town pinned at the maximum
+  // and stayed there, which is what a player saw as an RCI meter stuck in the
+  // negative no matter what they built.
+  let list = towns();
+  for (let m = 0; m < 6000; m++)
+    list = M.advanceNeighbors(list, { lost: 0, population: 5000 }).neighbors;
+  for (const t of list)
+    assert.ok(t.pop <= M.NEIGHBOR_CAP, `${t.name} levels off, got ${t.pop}`);
+  assert.ok(by(list, 'Oakhurst').pop > M.NEIGHBOR_START_POP * 4,
+    'having grown a great deal on the way there');
+
+  // Which is what makes outgrowing them worth anything: pass them and the
+  // pressure lifts, instead of chasing a number that always wins.
+  assert.equal(M.rivalPressure(list, M.NEIGHBOR_CAP * 2).commercialDemand, 1,
+    'outgrow your rivals and the competition stops');
+
+  // A save written while the drift still compounded is repaired on load
+  // rather than left permanently unwinnable.
+  const ruined = M.seedNeighborPopulations([
+    { edge: 'north', name: 'Oakhurst', index: 32, pop: 17e9 }]);
+  assert.equal(ruined[0].pop, M.NEIGHBOR_CAP, 'a runaway town settles back to a real one');
+}
+
+// --- and the meter still says something ------------------------------------
+{
+  // The city that prompted this: eight thousand people, everything working,
+  // and all three zones reading negative with nothing to do about it.
+  const stats = { population: 8850, jobsCommercial: 2472, jobsIndustrial: 5328,
+    decorationPoints: 300, resCount: 590 };
+  const percent = (key, value) => {
+    const range = M.DEMAND_RANGE[key];
+    return (value - range.min) / (range.max - range.min) * 200 - 100;
+  };
+  const demandWith = towns => M.computeDemand(stats, towns.length,
+    M.combineEffects(M.ordinanceEffects([]), M.rivalPressure(towns, stats.population)));
+
+  const runaway = demandWith(towns().map(t => ({ ...t, pop: 17e9 })));
+  assert.ok(percent('R', runaway.R) < 50 && percent('C', runaway.C) < 0,
+    'the old behaviour: four runaway towns flatten housing and shops alike');
+
+  const settled = demandWith(towns().map(t => ({ ...t, pop: M.NEIGHBOR_CAP })));
+  assert.ok(percent('R', settled.R) > 0, 'with towns of a real size, housing is wanted');
+  assert.ok(percent('C', settled.C) > 0, 'and so are shops');
+  // Industry is not: this city has more factory jobs than it has residents,
+  // and the meter telling it to stop is the meter working.
+  assert.ok(percent('I', settled.I) < 0, 'a city of factories is told to stop building them');
+}
+
 // --- the loop that makes the gamble uncomfortable -------------------------
 // Your residents leave for Oakhurst; Oakhurst grows; Oakhurst is worth more.
 // A stake in it therefore pays out exactly when you are losing.

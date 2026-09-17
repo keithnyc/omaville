@@ -4199,8 +4199,10 @@ var REQUESTS_OPEN_MAX = 3
 // costing no friendship: they asked, and life went on. In city months, like
 // the round that opens it.
 var REQUEST_LAPSE_MONTHS = 96
-// How often the post comes, in city months. Every eight is about two minutes.
-var POST_ROUND_MONTHS = 8
+// How often the post comes, in city months. Was every eight, about two
+// minutes, which read as a postman who lived on the doorstep. Twelve is three
+// minutes: still a session full of letters, with room to breathe between them.
+var POST_ROUND_MONTHS = 12
 
 function friendshipHearts(points) {
   var hearts = 0
@@ -5592,6 +5594,16 @@ function neighborBonus(connectedCount) {
 var NEIGHBOR_START_POP = 380
 // Their own slow arc, so a town is alive even when this city is doing nothing.
 var NEIGHBOR_DRIFT = 0.006
+// Where that arc levels off. The drift used to compound with nothing to stop
+// it: half a percent a month is quiet for an hour and ruinous over an evening,
+// and a twelve-hour city woke up beside four towns of seventeen billion people.
+// Because rival pressure is measured against how much bigger than you they
+// are, every connected town then sat pinned at RIVAL_PRESSURE_MAX for ever —
+// commercial demand cut to a third with no way to earn it back, and the RCI
+// meter stuck in the negative whatever the player built. Towns now grow
+// logistically toward a size a well-run city can pass, which is the whole
+// reason passing them is worth anything.
+var NEIGHBOR_CAP = 12000
 // How much of what this city loses turns up next door. Not all of it — people
 // leave regions, not just cities.
 var NEIGHBOR_INTAKE_SHARE = 0.55
@@ -5615,8 +5627,14 @@ function seedNeighborPopulations(neighbors) {
   var out = []
   for (var i = 0; i < (neighbors || []).length; i++) {
     var town = neighbors[i]
+    // Saves written while the drift still compounded come back with towns in
+    // the billions, which is not a city the player can ever compete with. They
+    // settle to the cap on load. A town legitimately carried past it by
+    // arrivals loses that overshoot too, which costs nothing worth keeping:
+    // a city big enough to push a neighbour past 12,000 by shedding people is
+    // already far past the size where that neighbour presses on it at all.
     out.push({ edge: town.edge, name: town.name, index: town.index,
-      pop: Math.round(neighborPopulation(town)) })
+      pop: Math.min(NEIGHBOR_CAP, Math.round(neighborPopulation(town))) })
   }
   return out
 }
@@ -5643,7 +5661,10 @@ function advanceNeighbors(neighbors, ctx) {
   for (var t = 0; t < (neighbors || []).length; t++) {
     var town = neighbors[t]
     var before = neighborPopulation(town)
-    var after = before * (1 + NEIGHBOR_DRIFT)
+    // Logistic, not compound: the drift fades as the town fills up. Arrivals
+    // are added on top undamped — those are real people leaving here for
+    // there, and a town your own exodus pushes past the cap has earned it.
+    var after = before + before * NEIGHBOR_DRIFT * Math.max(0, 1 - before / NEIGHBOR_CAP)
       + (total > 0 ? lost * (weights[t] / total) : 0)
       + (intake[town.name] || 0)
     after = Math.round(after)
