@@ -263,6 +263,18 @@ const Y = M.TILE_POST;
   assert.ok(/Style\.space\(440\),\s*\n\s*mailHeader\.implicitHeight/.test(view), 'a full box scrolls in a card of a readable height');
   assert.ok(/visible: letterRow\.opened\s*\n\s*width: parent\.width\s*\n\s*wrapMode: Text\.WordWrap/.test(view), 'one line per letter until opened');
   assert.ok(/root\.cityService\.discardReadMail\(\)/.test(view), 'and read letters can be cleared out');
+  // Emptying the whole box takes unread letters with it, so it asks once. The
+  // arming has to live outside the button, or shutting the card would leave a
+  // confirmation primed for whenever the player next opens the post office.
+  const binAll = view.match(/Button \{\s*\n\s*text: root\.mailDiscardArmed[\s\S]*?\n          \}/)[0];
+  assert.ok(/root\.mailDiscardArmed = true/.test(binAll) && /mailDiscardArm\.restart\(\)/.test(binAll),
+    'the first click only arms it');
+  assert.ok(binAll.indexOf('root.mailDiscardArmed = true') < binAll.indexOf('root.cityService.discardAllMail()'),
+    'and nothing is binned until the second');
+  assert.ok(/onMailOpenChanged: \{\s*\n\s*root\.mailDiscardArmed = false/.test(view),
+    'closing the box disarms it');
+  assert.ok(/id: mailDiscardArm\s*\n\s*interval: \d+\s*\n\s*onTriggered: root\.mailDiscardArmed = false/.test(view),
+    'and so does walking away from it');
   assert.ok(/\{ action: "mail", label: "Post Office", enabled: root\.serviceReady && root\.postOffices\.length > 0 \}/.test(view),
     'and can be opened from the game menu');
 
@@ -271,6 +283,35 @@ const Y = M.TILE_POST;
   const files = ['post-office.png', 'envelope.png'].map(f => fs.existsSync(new URL('../assets/postoffice/' + f, import.meta.url)));
   if (gated) assert.ok(files.every(Boolean), 'postOfficeArt is on but the sprites are missing');
   else assert.ok(!files.some(Boolean), 'the post office sprites have arrived — set postOfficeArt: true');
+}
+
+// --- emptying the box --------------------------------------------------------
+{
+  const fn = n => service.match(new RegExp('  function ' + n + '\\([\\s\\S]*?\\n  \\}'))[0];
+  const letter = (id, read) => ({ id, d: 1, from: 'Mabel Ashby', i: 100, kind: 'news', text: 'hi', read });
+  // A request lives on the resident, not on the letter that announced it, so
+  // binning the post must not quietly cancel what somebody asked for — that is
+  // the whole reason throwing away unread mail is safe to offer.
+  const root = {
+    mail: [letter(1, true), letter(2, false)],
+    citizens: [{ n: 'Mabel Ashby', i: 100, s: 0, p: 6, b: 0, a: 0, t: 0, f: 60,
+      q: { k: 'trees', t: 0, d: 1 } }],
+    residentNews: 3
+  };
+  let flushes = 0;
+  const ctx = vm.createContext({ root, Model: M, flushState() { flushes++ }, Object });
+  for (const n of ['discardReadMail', 'discardAllMail']) root[n] = vm.runInContext('(' + fn(n) + ')', ctx);
+
+  root.discardReadMail();
+  assert.deepEqual(Array.from(root.mail, l => l.id), [2], 'read letters go, unread ones stay');
+  root.discardAllMail();
+  assert.equal(root.mail.length, 0, 'and discarding all takes the unread one too');
+  assert.equal(root.citizens[0].q.k, 'trees', 'without cancelling what she asked for');
+  assert.equal(M.unreadMail(root.mail), 0, 'so the envelope stops bobbing');
+  assert.equal(flushes, 2, 'each one written to the save');
+
+  root.discardAllMail();
+  assert.equal(flushes, 2, 'an empty box is not saved again');
 }
 
 console.log(`PASS: post office built, charged and drawn; ${M.MAIL_MAX}-letter box keeps unread mail; writing back once, to residents still here; farewells, family letters and news delivered; envelope and sparkles over post offices with mail.`);

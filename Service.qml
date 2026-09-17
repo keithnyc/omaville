@@ -1053,6 +1053,16 @@ Item {
     flushState()
   }
 
+  // The whole box, unread letters included. Nothing is lost but the reading:
+  // a request a resident has made lives on the resident, not on the letter, so
+  // binning the post neither cancels what anybody asked for nor costs any
+  // friendship. The badge is already cleared by opening the box.
+  function discardAllMail() {
+    if (root.mail.length === 0) return
+    root.mail = []
+    flushState()
+  }
+
   function replyToLetter(id) {
     if (!root.initialized) return false
     var result = Model.replyToLetter(root.mail, root.citizens, id)

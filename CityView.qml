@@ -608,7 +608,15 @@ Item {
   // envelope bobs over every post office on screen.
   property bool mailOpen: false
   property int openLetterId: -1
-  onMailOpenChanged: if (mailOpen && root.serviceReady) root.cityService.markResidentsSeen()
+  // Emptying the whole box takes unread letters with it, so the button asks
+  // once rather than opening a modal over a card this small. Disarms on its
+  // own, and whenever the box is shut, so a stray second click days later
+  // cannot land on a confirmation nobody remembers giving.
+  property bool mailDiscardArmed: false
+  onMailOpenChanged: {
+    root.mailDiscardArmed = false
+    if (mailOpen && root.serviceReady) root.cityService.markResidentsSeen()
+  }
   readonly property var postOffices: root.serviceReady ? root.cityService.postOffices : []
   readonly property int unreadMail: root.serviceReady ? root.cityService.unreadMail : 0
   // Astra's sprites (assets/postoffice/BRIEF-post-office.md). The drawn
@@ -6228,14 +6236,42 @@ Item {
           }
         }
 
-        Row {
+        // Flow, not Row: three buttons is as many as this card's width holds at
+        // the default scale, and a theme with roomier spacing would otherwise
+        // push the last one off the edge rather than onto a second line.
+        Flow {
           id: mailActions
+          width: parent.width
           spacing: Style.space(8)
-          Button { text: "Done"; onClicked: root.mailOpen = false }
+          Button { text: "Done"; onClicked: { root.mailDiscardArmed = false; root.mailOpen = false } }
           Button {
-            text: "Discard read letters"
+            text: "Discard read"
             enabled: root.serviceReady && root.cityService.mail.length > root.unreadMail
-            onClicked: { root.openLetterId = -1; root.cityService.discardReadMail() }
+            onClicked: {
+              root.mailDiscardArmed = false
+              root.openLetterId = -1
+              root.cityService.discardReadMail()
+            }
+          }
+          Button {
+            text: root.mailDiscardArmed ? "Bin them all?" : "Discard all"
+            enabled: root.serviceReady && root.cityService.mail.length > 0
+            onClicked: {
+              if (!root.mailDiscardArmed) {
+                root.mailDiscardArmed = true
+                mailDiscardArm.restart()
+                return
+              }
+              mailDiscardArm.stop()
+              root.mailDiscardArmed = false
+              root.openLetterId = -1
+              root.cityService.discardAllMail()
+            }
+          }
+          Timer {
+            id: mailDiscardArm
+            interval: 4000
+            onTriggered: root.mailDiscardArmed = false
           }
         }
       }
