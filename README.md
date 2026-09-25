@@ -4,6 +4,8 @@ A tiny idle city builder for [Omarchy](https://omarchy.org). Zone roads and
 residential/commercial/industrial blocks, watch it grow while you work, and
 check in on it from the bar.
 
+![Charleston, population 4,275, in October of Year 393](docs/screenshot.png)
+
 ## How it works
 
 The city lives in a headless service that keeps ticking (one simulated
