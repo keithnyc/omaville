@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.keithnyc.omaville",
   "name": "Omaville",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "author": "Keith",
   "license": "MIT",
   "description": "A tiny idle city builder that lives in your bar. Zone it, grow it, watch it tick along while you work.",

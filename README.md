@@ -53,11 +53,43 @@ empties a road completely, and even a Transit Hub relieves less traffic than a
 genuinely walkable neighbourhood does — planning beats spending. Gridlock also
 slows the fire and police response, so a jammed city burns longer.
 
+## The rest of it
+
+**Services and disasters.** Power, water, fire, police, medical and schools each
+cover a radius and bill you per resident every month. Coverage is summarised
+resident-weighted, so "92% on water" means 92% of people, not 92% of tiles. Fires
+start, spread along the lots they touch, and burn until an engine reaches them —
+and engines drive on the same roads everyone else does, so a gridlocked city
+burns longer.
+
+**Residents.** People live in your houses, age on their own slower clock, take
+the jobs you zone, and occasionally write to you. Build a post office and the
+mail starts arriving: complaints, requests, thank-yous, the local news. Do what a
+resident asked and they warm to you; ignore them and they cool off. Requests live
+on the resident, not on the letter, so binning your post never cancels anything.
+
+**The Gazette.** The paper covers your city — milestones, fires, arrivals,
+departures, and the odd editorial about how you're running the place.
+
+**Dilemmas.** Every so often somebody puts a decision in front of you with no
+clean answer and a cost either way. No dilemma repeats until the rest have had a
+turn.
+
+**Neighbouring towns.** Four towns sit at the edges of the map. Connect a road to
+one and you get trade, migration and commerce out of it — and competition. A town
+meaningfully bigger than you presses on your commercial demand until you grow
+past it. They grow on their own whether you're watching or not.
+
+**Ordinances and the market.** City-wide policies you can switch on for a
+monthly cost, and a market that moves under you regardless.
+
 ## Install
 
 ```bash
-omarchy plugin add <repo-url> --enable
+omarchy plugin add https://github.com/keithnyc/omaville --enable
 ```
+
+Then add the Omaville widget to your bar from the Omarchy bar settings.
 
 ## State
 
@@ -68,6 +100,11 @@ omarchy plugin add <repo-url> --enable
 
 `omarchy-notification-send` from Omarchy itself, for milestone/budget
 notifications. No network access, no other external commands.
+
+## Development
+
+See [DEVELOPING.md](DEVELOPING.md) for the layout, the two clocks, the save
+format, and how to run the tests.
 
 ## License
 

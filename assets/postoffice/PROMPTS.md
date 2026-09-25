@@ -18,7 +18,7 @@ Composition: entire structure visible, bottom-centred on square canvas with even
 Background: genuine transparent alpha, including gaps around the pillar-box. No ground slab, no lawn, no pavement, no road, no lot border. No people, vehicles, text, words, labels, background, glow, vignette or checkerboard.
 ```
 
-Initial source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-901a0bc8-dfc8-4d9a-be8b-42f262c3e633.png`
+Initial source: `<imagegen-output>/exec-901a0bc8-dfc8-4d9a-be8b-42f262c3e633.png`
 
 The initial generation baked in a checkerboard and added a third window. The following edit produced the final source:
 
@@ -27,7 +27,7 @@ Use case: background-extraction
 Edit this post-office sprite for production. Remove the entire white and gray checkerboard backdrop and replace it with genuine transparent RGBA alpha: every background pixel alpha=0, including gaps between the building, steps, planters and pillar-box. Do not render a transparency pattern. Preserve the building camera, silhouette, colors, roof, doorway, red pillar-box and crisp pixel-art finish exactly. One small correction: remove the extra window and its windowbox on the right side wall, replacing that area with matching red brick; retain the two front windows flanking the entrance. No other redesign, no ground slab, no text, no glow, no added shadows. Whole building visible on a transparent square canvas.
 ```
 
-Final source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-5e303500-6103-4a18-9e27-00c242004888.png`
+Final source: `<imagegen-output>/exec-5e303500-6103-4a18-9e27-00c242004888.png`
 
 ## envelope.png
 
@@ -44,15 +44,15 @@ Composition: envelope centred with even transparent padding, whole envelope visi
 Strictly no text, lettering, sparkles, glow, shadow, motion lines, scenery, backdrop or checkerboard. Animation and sparkles are added separately by the game.
 ```
 
-Source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-9e75bfb0-6b3f-4303-963c-f9b9381e0df1.png`
+Source: `<imagegen-output>/exec-9e75bfb0-6b3f-4303-963c-f9b9381e0df1.png`
 
 ## Export commands
 
 Run from the omarchy-help directory. Alpha cleanup removes very faint edge noise before trimming; generated alpha is otherwise preserved.
 
 ```bash
-magick '/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-5e303500-6103-4a18-9e27-00c242004888.png' -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 224x224 -gravity south -background none -extent 256x244 -gravity north -extent 256x256 -strip -define png:color-type=6 omaville/assets/postoffice/post-office.png
-magick '/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-9e75bfb0-6b3f-4303-963c-f9b9381e0df1.png' -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 112x112 -gravity center -background none -extent 128x128 -strip -define png:color-type=6 omaville/assets/postoffice/envelope.png
+magick '<imagegen-output>/exec-5e303500-6103-4a18-9e27-00c242004888.png' -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 224x224 -gravity south -background none -extent 256x244 -gravity north -extent 256x256 -strip -define png:color-type=6 omaville/assets/postoffice/post-office.png
+magick '<imagegen-output>/exec-9e75bfb0-6b3f-4303-963c-f9b9381e0df1.png' -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 112x112 -gravity center -background none -extent 128x128 -strip -define png:color-type=6 omaville/assets/postoffice/envelope.png
 ```
 
 ## Asset checks

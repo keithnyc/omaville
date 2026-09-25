@@ -3,3 +3,7 @@ __pycache__/
 .qmllint.ini
 .env
 .env.*
+
+# Internal working notes, not published.
+HANDOFF.md
+ART_DIRECTION.md

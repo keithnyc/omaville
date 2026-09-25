@@ -50,8 +50,8 @@ Final local format normalization, preserving aspect ratio:
 magick INPUT.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 174x174 -gravity center -background none -extent 256x240 -gravity south -extent 256x256 -strip -define png:color-type=6 assets/decorations/flowers.png
 ```
 
-Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-4cabd619-a1ee-4c4d-84a6-a63d7073c271.png`.
-Transparency-finished source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-f3fe5cac-0f88-4e0f-94d9-6c3741f793ee.png`.
+Generation source: `<imagegen-output>/exec-4cabd619-a1ee-4c4d-84a6-a63d7073c271.png`.
+Transparency-finished source: `<imagegen-output>/exec-f3fe5cac-0f88-4e0f-94d9-6c3741f793ee.png`.
 
 ## Four additional decorations — September 7
 
@@ -69,7 +69,7 @@ Exact generation prompt:
 
 Use case: stylized-concept. Production Omaville city-builder decoration sprite. Reference image is STYLE AND CAMERA ONLY. Match its elevated near-overhead orthographic camera, warm crisp detailed 32-bit pixel art, and tiny contact shadow. Single isolated object on genuine transparent RGBA alpha with even padding, no ground slab, no grass, no path, no border, no checkerboard, no text, no living people. Readable at 32px with clean chunky color clusters. Square canvas; complete compact subject sits comfortably inside frame, horizontally centered, slightly below center with generous transparent margins. Subject: A small circular stone fountain — pale warm limestone basin with a low rim, a simple central tier, and clear turquoise water with a modest spout and a few ripples. Civic and tidy rather than ornate. Compact and clearly round.
 
-Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-f12cecf6-4796-45e6-a41e-be5cd1e1d539.png`.
+Generation source: `<imagegen-output>/exec-f12cecf6-4796-45e6-a41e-be5cd1e1d539.png`.
 
 ### statue.png
 
@@ -77,7 +77,7 @@ Exact generation prompt:
 
 Use case: stylized-concept. Production Omaville city-builder decoration sprite. Reference image is STYLE AND CAMERA ONLY. Match its elevated near-overhead orthographic camera, warm crisp detailed 32-bit pixel art, and tiny contact shadow. Single isolated object on genuine transparent RGBA alpha with even padding, no ground slab, no grass, no path, no border, no checkerboard, no text, no living people. Readable at 32px with clean chunky color clusters. Square canvas; complete compact subject sits comfortably inside frame, horizontally centered, slightly below center with generous transparent margins. Subject: A modest bronze statue of a standing figure on a square pale stone plinth, weathered green-blue patina against warm stone, no face detail needed at this size. Reads as a small civic monument, not a landmark. Taller than it is wide. The figure is clearly a bronze sculpture, not a living person.
 
-Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-2fd49ce7-c5f2-412b-b314-58114fae08ae.png`.
+Generation source: `<imagegen-output>/exec-2fd49ce7-c5f2-412b-b314-58114fae08ae.png`.
 
 ### hedge.png
 
@@ -85,7 +85,7 @@ Exact generation prompt:
 
 Use case: stylized-concept. Production Omaville city-builder decoration sprite. Reference image is STYLE AND CAMERA ONLY. Match its elevated near-overhead orthographic camera, warm crisp detailed 32-bit pixel art, and tiny contact shadow. Single isolated object on genuine transparent RGBA alpha with even padding, no ground slab, no grass, no path, no border, no checkerboard, no text, no living people. Readable at 32px with clean chunky color clusters. Square canvas; complete compact subject sits comfortably inside frame, horizontally centered, slightly below center with generous transparent margins. Subject: A neat rectangular clipped hedge block in deep green with olive sunlit highlights along its top edge, low and wide, with a suggestion of dense foliage texture. Deliberately plain and repeatable — meant to be placed in runs along a boundary, so it should look right sitting beside a copy of itself on either side. Straight horizontal long axis and square clipped ends, no pot, no flowers.
 
-Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-1e8e089f-de0b-4d65-9e98-7ff8ea8361b9.png`.
+Generation source: `<imagegen-output>/exec-1e8e089f-de0b-4d65-9e98-7ff8ea8361b9.png`.
 
 ### bench.png
 
@@ -93,13 +93,13 @@ Exact generation prompt:
 
 Use case: stylized-concept. Production Omaville city-builder decoration sprite. Reference image is STYLE AND CAMERA ONLY. Match its elevated near-overhead orthographic camera, warm crisp detailed 32-bit pixel art, and tiny contact shadow. Single isolated object on genuine transparent RGBA alpha with even padding, no ground slab, no grass, no path, no border, no checkerboard, no text, no living people. Readable at 32px with clean chunky color clusters. Square canvas; complete compact subject sits comfortably inside frame, horizontally centered, slightly below center with generous transparent margins. Subject: A warm timber park bench with dark iron legs, angled to face lower-left, with a small cast-iron lamp post beside it and a scatter of pale gravel under both. Quiet street furniture. Wider than it is tall. Lamp post modest and short so combined silhouette stays wide. Gravel is only a few isolated pale pebbles, NOT a solid ground patch or slab.
 
-Generation source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-277effa8-66ea-4965-9980-1e47f1c1ad40.png`.
+Generation source: `<imagegen-output>/exec-277effa8-66ea-4965-9980-1e47f1c1ad40.png`.
 
 The initial bench draft had an opaque checkerboard. Exact transparency finishing prompt:
 
 Use case: background-extraction. Remove the entire white and grey CHECKERBOARD background from this production sprite. Deliver actual transparent RGBA alpha, every background pixel alpha=0, not a depicted transparency pattern. Preserve the warm timber bench, dark iron legs, small lamp and scattered individual pale gravel stones exactly in their current design, camera, colors and crisp pixel-art finish. Transparent holes between bench slats and under armrests. Keep only tiny contact shadows at feet, no broad grey shadow or ground patch, no backdrop, no text. Complete isolated sprite centered with even padding on square transparent canvas.
 
-Final transparent source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-eee897bf-794e-4129-9b7c-8b362f38c386.png`.
+Final transparent source: `<imagegen-output>/exec-eee897bf-794e-4129-9b7c-8b362f38c386.png`.
 
 ## Promenade structures — September 7
 
@@ -111,12 +111,12 @@ Exact generation prompt:
 
 Use case: stylized-concept. Production Omaville sprite, warm crisp detailed 32-bit pixel art, elevated near-overhead orthographic camera matching reference fountain. Reference is CAMERA, FINISH AND SCALE ONLY. Genuine transparent RGBA alpha, no backdrop or checkerboard, no text, people, ground slab, grass, path or outer border, tiny contact shadow only. Clear forms readable at 32px. An octagonal Victorian cast-iron bandstand, ornamental columns, scalloped roof with finial, low balustrade and three steps up, painted dark green and cream. Deliberate public garden centerpiece. Complete isolated structure including its own raised stage but no surrounding ground. Square canvas with generous even padding, horizontally centered and slightly below center, comfortably inside tile.
 
-Source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-a8b31d7e-fff3-4d9c-9689-08912bb63573.png`.
+Source: `<imagegen-output>/exec-a8b31d7e-fff3-4d9c-9689-08912bb63573.png`.
 
 Export command (from omaville):
 
 ```bash
-magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-a8b31d7e-fff3-4d9c-9689-08912bb63573.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 200x200 -gravity center -background none -extent 256x240 -gravity south -extent 256x256 -strip -define png:color-type=6 assets/decorations/bandstand.png
+magick <imagegen-output>/exec-a8b31d7e-fff3-4d9c-9689-08912bb63573.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 200x200 -gravity center -background none -extent 256x240 -gravity south -extent 256x256 -strip -define png:color-type=6 assets/decorations/bandstand.png
 ```
 
 ### arbour.png
@@ -125,12 +125,12 @@ Exact generation prompt:
 
 Use case: stylized-concept. Production Omaville sprite, warm crisp detailed 32-bit pixel art, elevated near-overhead orthographic camera matching reference fountain. Reference is CAMERA, FINISH AND SCALE ONLY. Genuine transparent RGBA alpha, no backdrop or checkerboard, no text, people, ground slab, grass, path or outer border, tiny contact shadow only. Clear forms readable at 32px. A timber pergola arbour: a short run of posts with open cross-beams, climbing wisteria and roses over the top, a bench clearly visible beneath. Low and wide, soft green foliage and lavender flowers doing half the work. Complete isolated structure with transparent floor and gaps. Square canvas with generous even padding, horizontally centered and slightly below center, comfortably inside tile.
 
-Source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-3201030f-f439-4529-8182-b737e7b1f43a.png`.
+Source: `<imagegen-output>/exec-3201030f-f439-4529-8182-b737e7b1f43a.png`.
 
 Export command (from omaville):
 
 ```bash
-magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-3201030f-f439-4529-8182-b737e7b1f43a.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 200x200 -gravity center -background none -extent 256x240 -gravity south -extent 256x256 -strip -define png:color-type=6 assets/decorations/arbour.png
+magick <imagegen-output>/exec-3201030f-f439-4529-8182-b737e7b1f43a.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize 200x200 -gravity center -background none -extent 256x240 -gravity south -extent 256x256 -strip -define png:color-type=6 assets/decorations/arbour.png
 ```
 
 ### footbridge.png
@@ -139,16 +139,16 @@ Exact generation prompt:
 
 Use case: stylized-concept. Production Omaville sprite, warm crisp detailed 32-bit pixel art, elevated near-overhead orthographic camera matching reference fountain. Reference is CAMERA, FINISH AND SCALE ONLY. Genuine transparent RGBA alpha, no backdrop or checkerboard, no text, people, ground slab, grass, path or outer border, tiny contact shadow only. Clear forms readable at 32px. Tileable horizontal TIMBER FOOTBRIDGE segment on square canvas. CRITICAL GEOMETRY: flat straight plank deck runs horizontally from EXACT LEFT IMAGE EDGE to EXACT RIGHT IMAGE EDGE at same height. NOT diagonal, NOT perspective-vanishing, NOT arched, NO end caps or end posts. Deck and continuous light handrails above and below continue past both image edges, like a cropped middle section of a longer bridge. This must join seamlessly with an identical copy on either side. Near-overhead view looking down onto planks, slight front thickness matching elevated reference camera, but horizontal axis aligned to image x. Deck occupies middle 40 percent of canvas height; slim handrails along the two long sides. Entire space above and below bridge transparent. Warm timber planks across narrow deck, simple repeating rail posts. No bank, water, shore, ground, road markings or vehicles. Square 256x256 target.
 
-Source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-30753ac8-6397-4458-a7ca-13830742c1c2.png`.
+Source: `<imagegen-output>/exec-30753ac8-6397-4458-a7ca-13830742c1c2.png`.
 
 Exact transparency finishing prompt:
 
 Use case: background-extraction. Remove ONLY the entire white and gray checkerboard backdrop from this horizontal footbridge sprite, including gaps under handrails. Genuine transparent RGBA alpha. Preserve pixel art, timber colors and exact straight horizontal geometry. Deck and rails MUST continue to BOTH left and right image edges without any transparent side padding, same y levels at both edges. Keep square canvas, no reframing, no perspective changes, no arch, no end posts. Transparent above and below bridge. No water, ground, text or backdrop.
 
-Transparent source: `/home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-763e78eb-dac2-4881-b31b-e75841e95ef3.png`.
+Transparent source: `<imagegen-output>/exec-763e78eb-dac2-4881-b31b-e75841e95ef3.png`.
 
 Export command (from omaville):
 
 ```bash
-magick /home/keith/.codex/generated_images/01a06da5-f528-7f60-9899-17d3d2253752/exec-763e78eb-dac2-4881-b31b-e75841e95ef3.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize '256x144!' -gravity center -background none -extent 256x256 -strip -define png:color-type=6 assets/paths/footbridge.png
+magick <imagegen-output>/exec-763e78eb-dac2-4881-b31b-e75841e95ef3.png -channel A -threshold 5% +channel -trim +repage -filter Lanczos -resize '256x144!' -gravity center -background none -extent 256x256 -strip -define png:color-type=6 assets/paths/footbridge.png
 ```
