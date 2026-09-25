@@ -1,113 +1,104 @@
 # Omaville
 
-A tiny idle city builder for [Omarchy](https://omarchy.org). Zone roads and
-residential/commercial/industrial blocks, watch it grow while you work, and
-check in on it from the bar.
+**A tiny city that grows in your Omarchy bar while you get on with your day.**
+
+Zone a few roads, drop some houses, and go back to work. Omaville keeps ticking
+in the background — a month every fifteen seconds — so by your next coffee there
+are shops on the corner, somebody has written you a letter about the traffic, and
+the local paper has opinions about how you're running the place.
+
+Click the bar icon whenever you want to look in. Close it and the city carries on
+without you.
 
 ![Charleston, population 4,275, in October of Year 393](docs/screenshot.png)
 
-## How it works
-
-The city lives in a headless service that keeps ticking (one simulated
-minute per active shell minute) whether or not the panel is open — a machine
-that sleeps doesn't lose progress, but the city doesn't secretly keep
-growing while suspended either. Each tick: zoned tiles next to a road grow
-one density level if there's demand and the city is happy, tax income comes
-in, upkeep goes out, and population/happiness are recalculated.
-
-The city is taxed on residents *and* on business: commercial jobs at 80% of a
-resident's rate, industrial at 50%. Because the staffed departments are billed
-per resident, a low-tax city earns more from shops than from housing, and a
-high-tax one the other way round — so the tax slider decides what kind of city
-pays best, not just how much.
-
-Building tiers need more than population: a **civic level** rises while your
-schools actually reach people and stay funded, and falls when either lapses.
-An elementary system supports tier 2; only a university system supports tier 3.
-It gates what you can build, never what already stands — but let the schools
-slide and the top tier locks again.
-
-There is a long goal: hold a surplus budget, full service coverage, flowing
-traffic, contented residents and no debt for 24 straight months and the city
-is self-sustaining. The streak resets the moment any of it lapses. Track it
-under City Goal in the menu.
-
-Click the bar icon to open the city panel. Pick a tool (Road, Res, Com, Ind,
-Park, Clear) and click or drag on the grid to build. Roads are required —
-zones can grow within two orthogonal steps of one, via open land, other zones,
-parks, or decorations (not across water or service buildings). Population milestones and
-budget crises show up as desktop notifications.
-
-Roads also carry traffic. Every built lot generates trips, spread across the
-road tiles that serve it, and a road only carries so many; a jammed road stops
-its lots growing and makes the city miserable. Three things fix it, and only
-one costs money: zone shops among the houses so fewer trips start at all, lay
-a connected grid so the same trips spread over more streets, or widen a street
-into an Avenue ($20 to widen, 2.5x the capacity, more upkeep). The Traffic
-overlay shows which roads are at their limit, and cars visibly crawl where a
-road is over capacity.
-
-When planning runs out, you can buy your way down: a Bus Depot / Tram Line /
-Transit Hub ($130, then upgrades) takes a share of the car trips around it off
-the road, billed monthly per resident like the other departments. Carpool,
-telecommuting and road-toll ordinances cut trips city-wide. None of them ever
-empties a road completely, and even a Transit Hub relieves less traffic than a
-genuinely walkable neighbourhood does — planning beats spending. Gridlock also
-slows the fire and police response, so a jammed city burns longer.
-
-## The rest of it
-
-**Services and disasters.** Power, water, fire, police, medical and schools each
-cover a radius and bill you per resident every month. Coverage is summarised
-resident-weighted, so "92% on water" means 92% of people, not 92% of tiles. Fires
-start, spread along the lots they touch, and burn until an engine reaches them —
-and engines drive on the same roads everyone else does, so a gridlocked city
-burns longer.
-
-**Residents.** People live in your houses, age on their own slower clock, take
-the jobs you zone, and occasionally write to you. Build a post office and the
-mail starts arriving: complaints, requests, thank-yous, the local news. Do what a
-resident asked and they warm to you; ignore them and they cool off. Requests live
-on the resident, not on the letter, so binning your post never cancels anything.
-
-**The Gazette.** The paper covers your city — milestones, fires, arrivals,
-departures, and the odd editorial about how you're running the place.
-
-**Dilemmas.** Every so often somebody puts a decision in front of you with no
-clean answer and a cost either way. No dilemma repeats until the rest have had a
-turn.
-
-**Neighbouring towns.** Four towns sit at the edges of the map. Connect a road to
-one and you get trade, migration and commerce out of it — and competition. A town
-meaningfully bigger than you presses on your commercial demand until you grow
-past it. They grow on their own whether you're watching or not.
-
-**Ordinances and the market.** City-wide policies you can switch on for a
-monthly cost, and a market that moves under you regardless.
-
-## Install
+## Get it
 
 ```bash
 omarchy plugin add https://github.com/keithnyc/omaville --enable
 ```
 
-Then add the Omaville widget to your bar from the Omarchy bar settings.
+Then add the Omaville widget to your bar in the Omarchy bar settings, click it,
+and lay a road. Everything grows from there.
 
-## State
+## What's in it
 
-- `~/.local/state/omarchy/omaville-state.json` — the whole city (safe to
-  delete to start over)
+- 🏙️ **A city that plays itself while you work.** Zoned lots beside a road grow
+  on their own when there's demand and people are happy. You plan; the city
+  builds.
+- 🎨 **Pixel art, three tiers deep.** Every family — houses, shops, factories,
+  schools, stations — has its own look at every level, with at least two
+  variants each and eight at the top tier, so no street repeats itself.
+- 🚦 **Traffic that's a real puzzle.** Roads carry only so many trips, and the
+  three fixes are ranked on purpose: zone shops near homes so fewer trips
+  happen, lay a proper grid so they spread out, or pay to widen a street.
+  Planning always beats spending.
+- 🚌 **Buses, trams and transit hubs** for when planning runs out, plus 13
+  city-wide ordinances — carpool, telecommuting, road tolls and the rest. Every
+  one of them costs you something; none is a free win.
+- 🔌 **Power, water, fire, police, medical and schools**, each covering a radius
+  and billing you monthly per resident served — so services scale with your city
+  instead of being a one-off purchase.
+- 🔥 **Fires that spread and crime waves that settle in.** Engines drive the same
+  streets everyone else does, so a gridlocked city burns longer. That's the
+  whole design: every system reaches into the others.
+- 💌 **Residents with names, jobs and opinions.** They age on their own slower
+  clock, ask you for things you can actually go and build, warm to you when you
+  deliver, and get a memorial statue if you were close.
+- 📰 **The Charleston Gazette**, or whatever your city ends up called — covering
+  milestones, fires, arrivals, departures and the occasional editorial at your
+  expense.
+- 🤔 **Dilemmas with no clean answer**, 46 of them, and none repeats until the
+  rest have had a turn.
+- 🏘️ **Four neighbouring towns** that grow whether you're watching or not.
+  Connect a road for trade, migration and commerce — and for a rival big enough
+  to squeeze your shops until you outgrow them.
+- 💰 **An economy with a bottom to it.** Taxes on homes *and* business, municipal
+  loans, department funding sliders, elections every four years that you can
+  lose without losing the city.
+- 🎯 **A long goal.** Surplus budget, full coverage, flowing traffic, contented
+  residents, no debt — hold all of it for 24 straight months and your city is
+  self-sustaining. The streak resets the moment any of it slips.
+- 🪟 **Detach it into a real window** when you want to sit and play properly,
+  then send it back to the bar.
+- 🔒 **No network, no telemetry, no accounts.** One JSON file on your disk.
+
+## A few things that make it tick
+
+**The tax slider is a choice, not a dial.** Business is taxed too — commercial
+jobs at 80% of a resident's rate, industrial at 50% — while your staffed
+departments bill per resident. So a low-tax city earns more from shops than from
+housing, and a high-tax one the other way round. Same slider, different city.
+
+**Schools gate your skyline.** A *civic level* rises while your schools actually
+reach people and stay funded, and falls when either lapses. Elementary supports
+tier 2; only a university supports tier 3. It gates what you can build, never
+what already stands — but let the schools slide and the top tier locks again.
+
+**It doesn't cheat while you're away.** The simulation runs on the shell's clock
+and stops when you go idle, so a suspended laptop loses nothing and a city you
+haven't touched in a week hasn't secretly grown into a metropolis either.
+
+**Requests belong to people, not to paperwork.** A resident's request lives on
+the resident, so you can bin your entire mailbox without cancelling a single
+thing anybody asked for.
+
+## Where your city lives
+
+`~/.local/state/omarchy/omaville-state.json` — the whole thing, one file. Safe to
+delete if you'd like to start over, safe to copy if you'd like to keep one.
 
 ## Dependencies
 
-`omarchy-notification-send` from Omarchy itself, for milestone/budget
-notifications. No network access, no other external commands.
+`omarchy-notification-send`, from Omarchy itself, for milestone and budget
+notifications. No network access and no other external commands.
 
 ## Development
 
 See [DEVELOPING.md](DEVELOPING.md) for the layout, the two clocks, the save
-format, and how to run the tests.
+format, and how to run the tests — there are 45 of them plus a QtQuick suite, and
+`tools/run-tests.sh` runs the lot.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Have fun with it.
