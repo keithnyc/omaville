@@ -86,10 +86,12 @@ assert.ok(texture <= baseline * JUMP,
 const slack = texture < baseline * 0.8
   ? `  (recorded ${(baseline / 1e6).toFixed(1)}MB — worth lowering)` : '';
 
-// Full-resolution originals are kept — they are the only copy of the artwork
-// at that size — but they are held out of the loader's way in sources/ and
-// drafts/ directories. Found by walking rather than by a list of directories,
-// so the next batch's originals are covered wherever they are put.
+// Full-resolution originals are archived outside the repository: they are
+// several megabytes each, nothing loads them, and carrying them made the clone
+// three times the size of the game. If any do turn up in the tree — a sources/
+// or drafts/ directory beside the art, which is where they used to live — they
+// still must not be the copies that ship. Found by walking rather than by a
+// list of directories, so the next batch is covered wherever it is put.
 {
   const held = [];
   const walk = dir => {
@@ -101,7 +103,6 @@ const slack = texture < baseline * 0.8
     }
   };
   walk('assets');
-  assert.ok(held.length > 0, 'the originals are still kept somewhere');
   for (const file of held) {
     assert.ok(!referenced.has(file), `${file} is an original and must not be the one that ships`);
     // And they must be genuinely bigger than what ships, or they are not
